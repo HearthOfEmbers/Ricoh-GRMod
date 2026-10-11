@@ -3,17 +3,39 @@
 #
 #   ./build.sh dev       -> dist/grmod-dev   (Linux, headless, for development and tests)
 #   ./build.sh windows   -> dist/GRMod.exe   (Windows x64, single file, no console)
-#   ./build.sh all       -> both
+#   ./build.sh mac       -> dist/GR Mod.app and dist/GRMod-mac.zip
+#                           (macOS 11 or later, Intel and Apple silicon in one)
+#   ./build.sh all       -> all three
 #
 # The version comes from $VERSION, else from ../package.json, else 0.0.0.
-# Everything is pure Go: no C compiler and no Windows machine are needed.
+# Everything is pure Go: no C compiler, no Windows machine and no Mac are
+# needed. The Mac bundle is signed ad hoc when rcodesign
+# (https://github.com/indygreg/apple-platform-rs) is on the PATH or in
+# $RCODESIGN; it is not signed with a Developer ID nor notarised.
 set -euo pipefail
 cd "$(dirname "$0")"
 
+# ------------------------------------------------------------ Go version
+# Always build with the Go release named in go.mod ("toolchain go1.24.7"),
+# whatever Go is installed: the go command fetches that release when needed.
+# This keeps the binaries identical across machines and keeps the macOS
+# Apple silicon build runnable on macOS 11 (Go 1.25 and later require macOS 12
+# or 13). The macOS Intel build uses Go 1.20 instead (see build_mac).
+go_toolchain="$(sed -n 's/^toolchain[[:space:]]\{1,\}\(go[0-9.]*\)[[:space:]]*$/\1/p' go.mod)"
+if [ -z "$go_toolchain" ]; then
+  echo "build.sh: no toolchain line in go.mod" >&2; exit 2
+fi
+export GOTOOLCHAIN="$go_toolchain"
+go_actual="$(go env GOVERSION)"
+if [ "$go_actual" != "$go_toolchain" ]; then
+  echo "build.sh: need $go_toolchain, got $go_actual" >&2; exit 2
+fi
+echo "go:      $go_actual"
+
 target="${1:-}"
 case "$target" in
-  dev|windows|all) ;;
-  *) echo "usage: $0 dev|windows|all" >&2; exit 2 ;;
+  dev|windows|mac|all) ;;
+  *) echo "usage: $0 dev|windows|mac|all" >&2; exit 2 ;;
 esac
 
 # ---------------------------------------------------------------- version
@@ -88,8 +110,123 @@ build_windows() {
   fi
 }
 
+# write_info_plist FILE writes the bundle's Info.plist.
+write_info_plist() {
+  cat > "$1" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>zh_CN</string>
+	<key>CFBundleDisplayName</key>
+	<string>GR Mod</string>
+	<key>CFBundleExecutable</key>
+	<string>GRMod</string>
+	<key>CFBundleIconFile</key>
+	<string>GRMod</string>
+	<key>CFBundleIdentifier</key>
+	<string>io.github.maxwooow.grmod</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>GR Mod</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>${version}</string>
+	<key>CFBundleVersion</key>
+	<string>${version}</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.photography</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>10.13</string>
+	<key>LSMinimumSystemVersionByArchitecture</key>
+	<dict>
+		<key>arm64</key>
+		<string>11.0</string>
+		<key>x86_64</key>
+		<string>10.13</string>
+	</dict>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSHumanReadableCopyright</key>
+	<string>GR Mod · GPL-2.0-only</string>
+	<key>NSRemovableVolumesUsageDescription</key>
+	<string>GR Mod 需要读写存储卡，才能写入固件和关机画面。GR Mod reads and writes the memory card to install firmware and power-off images.</string>
+	<key>NSDesktopFolderUsageDescription</key>
+	<string>GR Mod 会把文件导出到你选择的文件夹。GR Mod exports files to the folder you choose.</string>
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>GR Mod 会把文件导出到你选择的文件夹。GR Mod exports files to the folder you choose.</string>
+	<key>NSDownloadsFolderUsageDescription</key>
+	<string>GR Mod 会把文件导出到你选择的文件夹。GR Mod exports files to the folder you choose.</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>GR Mod 用系统对话框让你选择导出文件夹。GR Mod uses the system dialog to let you choose an export folder.</string>
+</dict>
+</plist>
+PLIST
+}
+
+build_mac() {
+  local app="dist/GR Mod.app" tmp="dist/.mac"
+  rm -rf "$tmp" "$app" dist/GRMod-mac.zip
+  mkdir -p "$tmp" "$app/Contents/MacOS" "$app/Contents/Resources"
+  # Apple silicon: the current toolchain (macOS 11 is the first system for those Macs anyway).
+  GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -trimpath \
+    -ldflags "-s -w -X main.version=${version}" \
+    -o "$tmp/GRMod-arm64" .
+  # Intel: Go 1.20, the last release whose programs run on macOS 10.13 and 10.14, with its own
+  # module file (go.legacy.mod: an older golang.org/x/sys). Any Mac that runs 10.12 can upgrade to
+  # 10.13, so this reaches every Intel Mac that can still run current software.
+  local legacy_go="${MAC_INTEL_TOOLCHAIN:-go1.20.14}"
+  if [ "$(GOTOOLCHAIN="$legacy_go" go env GOVERSION)" != "$legacy_go" ]; then
+    echo "build.sh: need $legacy_go for the macOS Intel build" >&2; exit 2
+  fi
+  GOTOOLCHAIN="$legacy_go" GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -modfile=go.legacy.mod \
+    -ldflags "-s -w -X main.version=${version}" \
+    -o "$tmp/GRMod-amd64" .
+  # One executable for Intel and Apple silicon.
+  go tool makefat "$app/Contents/MacOS/GRMod" "$tmp/GRMod-amd64" "$tmp/GRMod-arm64"
+  chmod 755 "$app/Contents/MacOS/GRMod"
+  rm -rf "$tmp"
+  go run ./tools/genicon -out "" -icns "$app/Contents/Resources/GRMod.icns" >/dev/null
+  write_info_plist "$app/Contents/Info.plist"
+  printf 'APPL????' > "$app/Contents/PkgInfo"
+
+  local rcodesign="${RCODESIGN:-$(command -v rcodesign || true)}"
+  if [ -n "$rcodesign" ] && [ -x "$rcodesign" ]; then
+    if ! out="$("$rcodesign" sign "$app" 2>&1)"; then
+      echo "$out" >&2
+      echo "build.sh: signing failed" >&2
+      exit 1
+    fi
+    echo "signed:  ad hoc (rcodesign)"
+  else
+    echo "signed:  WARNING: rcodesign not found, the bundle is NOT signed;" >&2
+    echo "         Apple silicon Macs refuse unsigned bundles as \"damaged\"" >&2
+  fi
+  go run ./tools/zipapp -out dist/GRMod-mac.zip "$app" >/dev/null
+  echo "built:   dist/GR Mod.app, dist/GRMod-mac.zip ($(wc -c < dist/GRMod-mac.zip | tr -d ' ') bytes, version ${version})"
+  if command -v sha256sum >/dev/null 2>&1; then
+    echo "sha256:  $(sha256sum dist/GRMod-mac.zip | cut -d' ' -f1)"
+  fi
+  # Disk image: needs mkfs.hfsplus (hfsprogs), hfsplus and dmg (mozilla/libdmg-hfsplus) and the
+  # Python packages ds_store and mac_alias; see tools/mkdmg/mkdmg.py. Skipped when they are missing.
+  local dmg="dist/GRMod-${version}-mac.dmg"
+  if { [ -n "${HFSPLUS:-}" ] || command -v hfsplus >/dev/null 2>&1; } && { [ -n "${DMG:-}" ] || command -v dmg >/dev/null 2>&1; }; then
+    python3 tools/mkdmg/mkdmg.py "$app" "$dmg" --volname "GR Mod ${version}" >/dev/null
+    echo "built:   $dmg ($(wc -c < "$dmg" | tr -d ' ') bytes)"
+    if command -v sha256sum >/dev/null 2>&1; then echo "sha256:  $(sha256sum "$dmg" | cut -d' ' -f1)"; fi
+  else
+    echo "dmg:     skipped (hfsplus / dmg not found, see tools/mkdmg/mkdmg.py)"
+  fi
+}
+
 case "$target" in
   dev)     build_dev ;;
   windows) build_windows ;;
-  all)     build_dev; build_windows ;;
+  mac)     build_mac ;;
+  all)     build_dev; build_windows; build_mac ;;
 esac
