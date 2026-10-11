@@ -5,6 +5,7 @@
  */
 import { FirmwareError } from '../types';
 import { NATIVE } from './native';
+import type { NativeModule } from './native';
 
 export interface LinkedModule {
   code: Uint8Array;
@@ -13,7 +14,11 @@ export interface LinkedModule {
 }
 
 export function linkNative(name: keyof typeof NATIVE, count: number, origin: number, bindings: Readonly<Record<string, number>>): LinkedModule {
-  const mod = NATIVE[name];
+  return linkModule(NATIVE[name], name, count, origin, bindings);
+}
+
+/** `linkNative` for any pre-compiled module (e.g. `slotparams-native.ts`). */
+export function linkModule(mod: NativeModule, name: string, count: number, origin: number, bindings: Readonly<Record<string, number>>): LinkedModule {
   const variant = mod.variants[count];
   if (!variant) throw new FirmwareError('too-many-ratios', `no ${name} module for a count of ${count}`);
   if (origin % 4 !== 0) throw new FirmwareError('internal', 'unaligned module address');

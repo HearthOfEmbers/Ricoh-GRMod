@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /**
  * Added Image Control slots (styles 34, 35, ...): up to six more looks in the camera's list, each
- * with its own matrix, tone curves and post-curve ("second") matrix. Tested on a GR IV HDF as
- * GR Mod test firmware 023 (four slots).
+ * with its own matrix, tone curves, post-curve ("second") matrix and adjustment parameters. Tested
+ * on a GR IV HDF as GR Mod test firmwares 023..034 (four slots).
  *
  * What a style is made of in 1.11, per variant of the camera (three variants, 34 styles each):
  *  - a tone record (21 words, table 0x55053780): word 1 the colour matrix, word 2 the array of
@@ -22,13 +22,18 @@
  * Everything else that knows the style numbers is extended for the new ones: menu order and
  * counts, names (text 846, ...), icons (768, ...), the ADJ list's own icon lookup, the shooting
  * overlay, RAW development and the look-visibility check (hidden on the GR IV Monochrome).
- * The adjustable parameters (saturation, contrast, ...) of the new styles are Cinema Yellow's:
- * the firmware keeps parameters per factory style only, so all getters, setters and defaults,
- * and the live-view parameter generator, read the new styles as Cinema Yellow (18). Changing a
- * parameter on one of them changes it on Cinema Yellow and the other new styles.
+ * The adjustable parameters (saturation, contrast, grain, ...): the firmware keeps them per
+ * factory style only, and whatever reads them for the selected look (live-view generator,
+ * development, the camera model behind the parameter screen) takes the new styles as Cinema
+ * Yellow (18). Each new style still has its own values: Cinema Yellow's fields hold the values of
+ * the look selected in a set, the others wait in a table of a native module saved with the
+ * settings (see `installOwnParameters`). They start at the neutral values, which the parameter
+ * screen also shows as their defaults. Tested on a GR IV HDF as test firmwares 026..034.
  */
-import { assembleWords, branchWord, movImmediate, movWord } from './arm';
-import { ICON_CATALOG, LOOKUP_BOUNDS, Patch, TEXT_CATALOG, concat, expectWord, u16le, u32le, utf16z } from './build';
+import { assembleWords, branchTarget, branchWord, movImmediate, movWord } from './arm';
+import { BASE, ICON_CATALOG, LOOKUP_BOUNDS, OFFICIAL_RTOS_LENGTH, Patch, TEXT_CATALOG, concat, expectWord, u16le, u32le, utf16z } from './build';
+import { linkModule } from './native-link';
+import { SLOT_PARAMETERS, SLOT_PARAMS_MODULE } from './slotparams-native';
 import { FirmwareError } from '../types';
 
 export const MAX_EXTRA_SLOTS = 6;
@@ -345,28 +350,165 @@ export function installExtraSlots(p: Patch, iconbin: Uint8Array, slots: readonly
   }
   hook(p, 0x53373bc0, 0xe241100b, `sub ip,r1,#${EXTRA_FIRST_STYLE};cmp ip,#${count - 1};bhi native;add r0,ip,#21;bx lr;native:sub r1,r1,#11;b #0x53373bc4`, 'added slots: RAW development look');
 
-  installSharedParameters(p, count);
+  installOwnParameters(p, count);
   installPreviewMapping(p, count);
+  installChangeFunctors(p, count);
+  installLookChecks(p, count);
   return concat(parts);
 }
 
-// -------------------------------------------------------------- parameters shared with Cinema Yellow
+// -------------------------------------------------------------- own parameters
 
 const SETTERS = [0x533ad4e0, 0x533adce0, 0x533ae4e0, 0x533af100, 0x533afd20, 0x533b0940, 0x533b1560, 0x533b2180, 0x533b28e0, 0x533b2b5c, 0x533b2d18, 0x533b2ed4, 0x533b3044, 0x533b3200, 0x533b34dc, 0x533b387c, 0x533b3c1c, 0x533b3fbc, 0x533b4bdc, 0x533b51c0, 0x533b5704, 0x533b5c48, 0x533b618c];
 const GETTERS = [0x533b7130, 0x533b7818, 0x533b7f00, 0x533b8928, 0x533b9350, 0x533b9d78, 0x533ba7a0, 0x533bb1c8, 0x533bb858, 0x533bbab8, 0x533bbc78, 0x533bbe30, 0x533bbfa8, 0x533bc148, 0x533bc438, 0x533bc758, 0x533bca78, 0x533bcdb8, 0x533bd7e0, 0x533bdcf0, 0x533be188, 0x533be620, 0x533beab8];
 const DEFAULTS = [0x533bf710, 0x533c01bc, 0x533c0c68, 0x533c1c14, 0x533c2bc0, 0x533c3b6c, 0x533c4b18, 0x533c5ac4, 0x533c6494, 0x533c68d4, 0x533c6c34, 0x533c6f90, 0x533c71dc, 0x533c753c, 0x533c79ec, 0x533c8298, 0x533c8b44, 0x533c93f0, 0x533ca39c, 0x533cab78, 0x533cb244, 0x533cb910, 0x533cbfdc];
+/** "Style of set" setters: photo standard, custom 1..3, then movie. */
+const STYLE_SETTERS = [0x532b6f80, 0x532b7110, 0x532b72a0, 0x532b7430, 0x53300aa0, 0x53300c34, 0x53300dc8, 0x53300f5c];
+/**
+ * The values an added slot starts from and shows as its default on the parameter screen ("0"):
+ * the middle of the -4..+4 scales, parameter 8 off (what Standard, which lacks it, gets), grain
+ * off with Cinema Yellow's strength and size (those two have no neutral position). In the order of
+ * `SLOT_PARAMETERS`; the same table is in slot_params.c.
+ */
+const NEUTRAL = [4, 4, 4, 4, 4, 4, 4, 0, 4, 4, 0, 1, 1];
+/** Settings save / load (power off / start), made hookable by the scaffold of `build.ts`. */
+const SETTINGS_SAVE = 0x533e1c04;
+const SETTINGS_LOAD = 0x533e17cc;
+/** Literal: end of the start-up zero fill. 44 unused bytes up to the heap (0x55837300) follow it. */
+const ZERO_FILL_END = 0x53000460;
+const SLOT_STATE = 0x558372e0;
 
-/** The per-parameter getters, setters and defaults (and two direct readers) take new styles as 18. */
-function installSharedParameters(p: Patch, count: number): void {
+/**
+ * Own adjustment parameters for every added slot (tools/slotparams/slot_params.c): the firmware
+ * keeps parameters per factory style in the user settings, and everything that reads them for the
+ * selected look takes the added styles as Cinema Yellow (18). So per photo/movie set (8) Cinema
+ * Yellow's fields belong to one owner, the added look selected in that set or else Cinema Yellow;
+ * the other owners' values are kept by the module in a table saved as its own record (HTData 12).
+ * Getters and setters of the 13 parameters Cinema Yellow has, and the 8 "style of set" setters,
+ * go through the module; settings load and save also load and save the table. The other 10
+ * parameters, and two direct readers, still take the added styles as 18. Developed as test
+ * firmwares 026..034.
+ */
+function installOwnParameters(p: Patch, count: number): void {
   const normalize = (at: number, reg: string, original: number, tail: string): void => {
     // The flags are set again by every native entry before use; no callee-saved register, LR or SP changes.
     hook(p, at, original, `sub ip,${reg},#${EXTRA_FIRST_STYLE};cmp ip,#${count - 1};movls ${reg},#${CY};${tail};b #${at + 4}`, 'added slots: parameters of Cinema Yellow');
   };
-  for (const at of [...SETTERS, ...GETTERS]) normalize(at, 'r3', 0xe1a0c00d, 'mov ip,sp');
-  for (const at of DEFAULTS) normalize(at, 'r1', 0xe1a0c00d, 'mov ip,sp');
+  const own = new Set(SLOT_PARAMETERS);
+  for (let i = 0; i < 23; i++) {
+    if (own.has(i)) continue;
+    normalize(SETTERS[i], 'r3', 0xe1a0c00d, 'mov ip,sp');
+    normalize(GETTERS[i], 'r3', 0xe1a0c00d, 'mov ip,sp');
+    normalize(DEFAULTS[i], 'r1', 0xe1a0c00d, 'mov ip,sp');
+  }
+  // The parameter screen marks each slider's default with the default getter's value (r1 = look).
+  SLOT_PARAMETERS.forEach((i, j) => {
+    early(p, DEFAULTS[i], `mov r0,#${NEUTRAL[j]}`, count, 'added slots: neutral parameter default');
+  });
   normalize(0x533cc5b4, 'r2', 0xe242200d, 'sub r2,r2,#13');
   // The controller's direct custom-set getter: its freshly returned style, locally.
   normalize(0x533b6d6c, 'r0', 0xe1a06000, 'mov r6,r0');
+
+  expectWord(p, ZERO_FILL_END, 0x558372d4);
+  const priorSave = branchTarget(SETTINGS_SAVE, p.word(SETTINGS_SAVE));
+  const priorLoad = branchTarget(SETTINGS_LOAD, p.word(SETTINGS_LOAD));
+  if (priorSave < BASE + OFFICIAL_RTOS_LENGTH || priorLoad < BASE + OFFICIAL_RTOS_LENGTH) fail('internal', 'the settings save/load scaffold is not installed');
+  for (const at of [...SLOT_PARAMETERS.map((i) => GETTERS[i]), ...SLOT_PARAMETERS.map((i) => SETTERS[i]), ...STYLE_SETTERS]) expectWord(p, at, 0xe1a0c00d);
+  const origin = p.next(16);
+  const mod = linkModule(SLOT_PARAMS_MODULE, 'slot parameters', count, origin, {
+    prior_native_save: priorSave, prior_native_load: priorLoad, storage_singleton: 0x53a81480, store_write: 0x53a7e518,
+    store_read: 0x53a7e434, store_size: 0x53a7e208, heap_alloc: 0x538e09b0, sp_gap: SLOT_STATE, settings_object: 0x55084dd8,
+  });
+  if (p.append(mod.code, 16) !== origin) fail('internal', 'module address changed');
+  SLOT_PARAMETERS.forEach((i, j) => {
+    p.setWord(GETTERS[i], branchWord(GETTERS[i], mod.symbols[`sp_get_stub_${j}`]), 'added slots: own parameters (getter)');
+    p.setWord(SETTERS[i], branchWord(SETTERS[i], mod.symbols[`sp_set_stub_${j}`]), 'added slots: own parameters (setter)');
+  });
+  STYLE_SETTERS.forEach((at, k) => p.setWord(at, branchWord(at, mod.symbols[`sp_style_stub_${k}`]), 'added slots: own parameters (look of a set changes)'));
+  p.setWord(SETTINGS_SAVE, branchWord(SETTINGS_SAVE, mod.symbols.sp_save), 'settings save, then the added slots\' parameters');
+  p.setWord(SETTINGS_LOAD, branchWord(SETTINGS_LOAD, mod.symbols.sp_load), 'settings load, then the added slots\' parameters');
+  // The module keeps its state pointer in the 44 bytes between the end of the zero fill and the
+  // heap; they are cleared at every start from now on.
+  p.setWord(ZERO_FILL_END, 0x55837300, 'start-up zero fill also clears the 44 unused bytes before the heap');
+}
+
+/**
+ * The change functors of Cinema Yellow's fields (one per parameter and set, 0x532776EC..): a setter
+ * registers one; it copies the field to the record the getters read and, when Cinema Yellow is the
+ * set's look, gives the value to the camera model the parameter screen and the shooting read.
+ * They test the look by loading the style in one of five forms, each followed by the comparison
+ * with 18; those loads take the added styles as 18. Without this the model keeps the old value for
+ * an added look and its parameter screen snaps back (test 030).
+ */
+const FUNCTOR_FIELDS = [
+  [0x15b, 0x207, 0x2b3, 0x35f, 0x51d, 0x599, 0x615, 0x691], [0x165, 0x211, 0x2bd, 0x369, 0x526, 0x5a2, 0x61e, 0x69a],
+  [0x173, 0x21f, 0x2cb, 0x377, 0x532, 0x5ae, 0x62a, 0x6a6], [0x180, 0x22c, 0x2d8, 0x384, 0x53e, 0x5ba, 0x636, 0x6b2],
+  [0x18d, 0x239, 0x2e5, 0x391, 0x54a, 0x5c6, 0x642, 0x6be], [0x19a, 0x246, 0x2f2, 0x39e, 0x556, 0x5d2, 0x64e, 0x6ca],
+  [0x1a7, 0x253, 0x2ff, 0x3ab, 0x562, 0x5de, 0x65a, 0x6d6], [0x1b0, 0x25c, 0x308, 0x3b4, 0x56a, 0x5e6, 0x662, 0x6de],
+  [0x1d8, 0x284, 0x330, 0x3dc, 0x58f, 0x60b, 0x687, 0x703], [0x1e4, 0x290, 0x33c, 0x3e8], [0x1fb, 0x2a7, 0x353, 0x3ff],
+  [0x1fc, 0x2a8, 0x354, 0x400], [0x1fd, 0x2a9, 0x355, 0x401],
+];
+const FUNCTOR_AREA = [0x53270000, 0x532a0000] as const;
+const FUNCTOR_LOADS: Readonly<Record<number, 'half' | 'byte' | 'word'>> = {
+  0xe19030b3: 'half', // ldrh r3,[r0,r3] after movw r3,#0xc3e (photo standard set)
+  0xe5d03c40: 'byte', 0xe5d03c41: 'byte', 0xe5d03c42: 'byte', // ldrb r3,[r0,#0xc40..2] (photo custom sets)
+  0xe1d430b0: 'half', // ldrh r3,[r4] (movie)
+  0xe5943000: 'word', // ldr r3,[r4] (movie custom sets 1, 2)
+  0xe5d43004: 'byte', // ldrb r3,[r4,#4] (movie custom set 3)
+};
+const FUNCTOR_NEXT: Readonly<Record<string, readonly number[]>> = { half: [0xe3530c12], byte: [0xe3530012], word: [0xe3a02001, 0xe3a02002] };
+
+function installChangeFunctors(p: Patch, count: number): void {
+  const F = EXTRA_FIRST_STYLE;
+  const map = {
+    half: `sub r3,r3,#${F << 8};cmp r3,#${count << 8};andlo r3,r3,#0xff;orrlo r3,r3,#${CY << 8};addhs r3,r3,#${F << 8}`,
+    byte: `sub r3,r3,#${F};cmp r3,#${count};movlo r3,#${CY};addhs r3,r3,#${F}`,
+    word: 'push {r2};' + [8, 16, 24].map((sh) => `mov r2,r3,lsr #${sh};and r2,r2,#0xff;sub r2,r2,#${F};cmp r2,#${count};biclo r3,r3,#${0xff * 2 ** sh};orrlo r3,r3,#${CY * 2 ** sh};`).join('') + 'pop {r2}',
+  };
+  const sites: number[] = [];
+  for (const row of FUNCTOR_FIELDS) for (const field of row) {
+    const starts: number[] = [];
+    for (let a = FUNCTOR_AREA[0]; a < FUNCTOR_AREA[1]; a += 4) if (p.word(a) === ((0xe5d03000 | field) >>> 0)) starts.push(a);
+    if (starts.length !== 1) fail('unexpected-layout', `change functor of field 0x${field.toString(16)}: ${starts.length} candidates`);
+    const found: number[] = [];
+    for (let a = starts[0], k = 0; k < 30; k++, a += 4) {
+      const w = p.word(a);
+      if (FUNCTOR_LOADS[w] && !(w === 0xe19030b3 && p.word(a - 4) !== MOVW_C3E)) found.push(a);
+      if (w >>> 24 === 0xea) break;
+    }
+    if (found.length !== 1) fail('unexpected-layout', `change functor of field 0x${field.toString(16)}: ${found.length} style loads`);
+    if (!FUNCTOR_NEXT[FUNCTOR_LOADS[p.word(found[0])]].includes(p.word(found[0] + 4))) fail('unexpected-layout', `change functor of field 0x${field.toString(16)}: unexpected comparison`);
+    sites.push(found[0]);
+  }
+  if (sites.length !== 88) fail('unexpected-layout', `${sites.length} change functors, expected 88`);
+  for (const at of sites) {
+    const w = p.word(at);
+    const code = p.append((a) => [w, ...assembleWords(`${map[FUNCTOR_LOADS[w]]};b #${at + 4}`, a + 4)], 4);
+    p.setWord(at, branchWord(at, code), 'added slots: change functor of Cinema Yellow');
+  }
+}
+
+/**
+ * Looks shown as their own, not as Standard or with Standard's parameter list:
+ *  - the parameter screens pick their list of parameters from the look (0x531C6B1C shooting,
+ *    0x531A57FC RAW development: 11..30 -> a list, anything else -> list 0 without grain); the
+ *    added looks get Cinema Yellow's (test 032);
+ *  - the main menu's Image Control row asks 0x5329CF30 (photo) / 0x5329D154 (movie) for the
+ *    look, which answers 0..30 and Standard for anything else; the added looks are answered as
+ *    themselves, the icon lookup knows them (test 033);
+ *  - whether a picture goes through the digital-filter step (grain, Clarity, the setting before
+ *    it) is decided from the look by 0x537150FC with a chain of compares that includes Cinema
+ *    Yellow; the added looks are tested as 18, only in the local register (test 033). Composes
+ *    with soft focus, which changes two later instructions of that function.
+ */
+function installLookChecks(p: Patch, count: number): void {
+  const n = count - 1;
+  hook(p, 0x531c6b1c, 0xe1a0c00d, `sub ip,r1,#${EXTRA_FIRST_STYLE};cmp ip,#${n};movls r1,#${CY};mov ip,sp;b #0x531c6b20`, 'added slots: parameter list of Cinema Yellow');
+  hook(p, 0x531a57fc, 0xe241100b, `sub ip,r1,#${EXTRA_FIRST_STYLE};cmp ip,#${n};movls r1,#${CY};sub r1,r1,#11;b #0x531a5800`, 'added slots: RAW development parameter list of Cinema Yellow');
+  for (const [at, field, done, rest] of [[0x5329cf6c, 0x153, 0x5329cf64, 0x5329cf70], [0x5329d190, 0x515, 0x5329d188, 0x5329d194]] as const) {
+    hook(p, at, (0xe5d03000 | field) >>> 0, `ldrb r3,[r0,#${field}];sub ip,r3,#${EXTRA_FIRST_STYLE};cmp ip,#${n};movls r0,r3;bls #${done};b #${rest}`, 'added slots: menu Image Control row');
+  }
+  hook(p, 0x537150fc, 0xe5d1379c, `ldrb r3,[r1,#0x79c];sub r2,r3,#${EXTRA_FIRST_STYLE};cmp r2,#${n};movls r3,#${CY};b #0x53715100`, 'added slots: digital-filter step (grain) as Cinema Yellow');
 }
 
 /**

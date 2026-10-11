@@ -2,8 +2,9 @@
 /**
  * Added Image Control slots (`src/fw/aspect/slots.ts`) and the post-curve matrix fit. The firmware
  * part needs the official firmware in testdata/private (skipped without it). What the new code
- * does when it runs (MultiAxial, ColorMatrix, the live-view parameter generator) was checked in an
- * emulator; the hooks are those of test firmware 023, which ran on a GR IV HDF.
+ * does when it runs (MultiAxial, ColorMatrix, the live-view parameter generator, the own-parameter
+ * module and the look checks) was checked in an emulator on builds of this code with 1, 4 and 6
+ * slots; the hooks are those of test firmwares 023..034, which ran on a GR IV HDF.
  */
 import { describe, expect, it } from 'vitest';
 import { existsSync, readFileSync } from 'node:fs';
@@ -83,6 +84,31 @@ describe.skipIf(!have)('added slots: firmware files', () => {
       const dec = new fw.Firmware(b.file).decoded;
       const rtos = fw.sectionsOf(dec).find((x) => x.name === 'RTOS')!;
       expect(fw.readExtraSlotCount(dec.subarray(rtos.offset, rtos.offset + rtos.size))).toBe(n);
+    }
+  }, 120_000);
+
+  it('installs the own-parameter module for every slot count', async () => {
+    const eng = await Engine.open(raw());
+    const word = (b: Uint8Array, a: number): number => new DataView(b.buffer, b.byteOffset).getUint32(a - 0x53000000, true);
+    const target = (b: Uint8Array, a: number): number => {
+      let off = word(b, a) & 0xffffff;
+      if (off & 0x800000) off -= 0x1000000;
+      return a + 8 + off * 4;
+    };
+    for (const n of [1, 3, 6]) {
+      const b = await eng.buildFirmware([], [], [], { extraSlots: Array.from({ length: n }, (_, k) => slotSpec(eng, k)) });
+      const d = new fw.Firmware(b.file).decoded;
+      const sec = fw.sectionsOf(d).find((x) => x.name === 'RTOS')!;
+      const r = d.subarray(sec.offset, sec.offset + sec.size);
+      expect(word(r, 0x53000460)).toBe(0x55837300); // the module's state pointer is cleared at start
+      // settings load/save, the 13 getters and setters and the 8 "style of set" setters go into the module
+      const end = 0x53000000 + 0x13d2ac0;
+      for (const at of [0x533e17cc, 0x533e1c04, 0x533b7130, 0x533ad4e0, 0x533be620, 0x533b5c48, 0x532b6f80, 0x53300f5c]) {
+        expect(word(r, at) >>> 24).toBe(0xea);
+        expect(target(r, at)).toBeGreaterThanOrEqual(end);
+      }
+      const sp = target(r, 0x533e17cc);
+      expect(target(r, 0x533e1c04) - sp).toBeLessThan(0x1000);
     }
   }, 120_000);
 

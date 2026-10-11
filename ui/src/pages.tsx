@@ -208,7 +208,7 @@ function ExtrasHead() {
         </div>
       </div>
       <div className="extras-count"><Segmented value={String(n)} onChange={(v) => setExtraCount(Number(v))} options={options} /></div>
-      {n > 0 && <p className="muted small extras-note">{t('extraShared')}</p>}
+      {n > 0 && <p className="muted small extras-note">{t('extraNote')}</p>}
     </div>
   );
 }
