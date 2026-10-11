@@ -28,13 +28,14 @@ const CC24 = [[115, 82, 68], [194, 150, 130], [98, 122, 157], [87, 108, 67], [13
   [56, 61, 150], [70, 148, 73], [175, 54, 60], [231, 199, 31], [187, 86, 149], [8, 133, 161], [243, 243, 242], [200, 200, 200], [160, 160, 160], [122, 122, 121], [85, 85, 85], [52, 52, 52]];
 
 function Swatches({ params }: { params?: color.SlotParams }) {
+  const gr3x = useStore(s => s.info?.family === 'gr3x');
   const out = useMemo(() => {
     if (!params) return null;
     const inp = new Float64Array(CC24.length * 3);
     CC24.forEach((c, i) => { inp[i * 3] = c[0] / 255; inp[i * 3 + 1] = c[1] / 255; inp[i * 3 + 2] = c[2] / 255; });
-    const o = color.previewSlot(params, inp);
+    const o = gr3x ? color.GR3X_CAMERA.slotApply(params, inp) : color.previewSlot(params, inp);
     return CC24.map((_, i) => `rgb(${Math.round(o[i * 3] * 255)},${Math.round(o[i * 3 + 1] * 255)},${Math.round(o[i * 3 + 2] * 255)})`);
-  }, [params]);
+  }, [params, gr3x]);
   return (
     <div className="swatches" aria-hidden>
       {CC24.map((c, i) => {
@@ -48,8 +49,9 @@ function Swatches({ params }: { params?: color.SlotParams }) {
 /** The sample photograph with the original on the left of a draggable divider and the preset on the right. */
 function PhotoCompare({ params }: { params?: color.SlotParams }) {
   const photo = usePhoto();
+  const gr3x = useStore(s => s.info?.family === 'gr3x');
   const halo = useStore((s) => { const x = s.extras.find((e) => e.key === s.activeSlot); return x?.halation?.on && x.halation.preview ? x.halation : undefined; });
-  const base = useMemo(() => (photo && params ? applySlot(params, photo) : null), [photo, params]);
+  const base = useMemo(() => (photo && params ? applySlot(params, photo, gr3x) : null), [photo, params, gr3x]);
   // The added slot's halation at the level chosen for the preview, as the camera computes it.
   const after = useMemo(() => {
     if (!base || !halo) return base;
@@ -123,6 +125,9 @@ function Compare({ photo, after, label }: { photo: ImageData | null; after: Imag
 /** The one preview of the page: it shows whichever slot is active and fills the space the window leaves. */
 /** The preview; `below` (with its height in `belowH`) goes under the picture, which leaves room for it. */
 function PreviewPane({ below, belowH = 0 }: { below?: ReactNode; belowH?: number }) {
+  const gr3x = useStore(s => s.info?.family === 'gr3x');
+  const slotOptions = useStore(s => s.info?.slots ?? []);
+  const slots = useStore(s => s.slots);
   const mode = useStore((s) => s.previewMode);
   const active = useStore((s) => s.activeSlot);
   const params = useStore((s) => slotOf(s.activeSlot, s)?.preset?.result?.params);
@@ -149,9 +154,11 @@ function PreviewPane({ below, belowH = 0 }: { below?: ReactNode; belowH?: number
   return (
     <DropZone className="pane" accept={isImage} onFiles={(f) => { void loadPreviewFile(f[0]); }}>
       <div className="pane-head">
+        {gr3x ? <select data-tour="ic-tabs" aria-label={t('navIC')} value={active} onChange={e => setActiveSlot(e.target.value as SlotId)}>{slotOptions.map(s => <option key={s.id} value={s.id}>{slots[s.id].names.en || s.defaultName}</option>)}</select> : <>
         {overflow && <button className="btn ghost icon-only seg-arrow" title={t('prevSlot')} aria-label={t('prevSlot')} disabled={at === 0} onClick={() => step(-1)}>{Ico.left}</button>}
         <div className="seg-scroll" ref={tabsRef} onWheel={wheel}><Segmented tour="ic-tabs" value={tabs.some((x) => x.value === active) ? active : 'CY'} onChange={setActiveSlot} options={tabs} /></div>
         {overflow && <button className="btn ghost icon-only seg-arrow" title={t('nextSlot')} aria-label={t('nextSlot')} disabled={at === tabs.length - 1} onClick={() => step(1)}>{Ico.right}</button>}
+        </>}
         <span className="grow" />
         <Segmented tour="ic-mode" value={mode} onChange={setPreviewMode} options={[{ value: 'photo', label: t('previewPhoto') }, { value: 'swatch', label: t('previewSwatch') }]} />
       </div>
@@ -169,6 +176,7 @@ function SlotCard({ id }: { id: SlotId }) {
   const lang = useStore((s) => s.lang);
   const active = useStore((s) => s.activeSlot === id);
   const off = info.slots.find((x) => x.id === id)!;
+  const gr3x = info.family === 'gr3x';
   const name = slot.names[lang] ?? '';
   const cap = off.names[lang].capacity;
   const problem = nameProblem(info, id, lang, name);
@@ -182,20 +190,21 @@ function SlotCard({ id }: { id: SlotId }) {
           <div className="card-title" data-tour={first ? 'ic-name' : undefined}>
             <input className={`title-input ${problem ? 'bad' : ''}`} value={name} placeholder={off.names[lang].text} spellCheck={false} aria-label={t('name')} onChange={(e) => setName(id, lang, e.target.value)} />
             <div className="sub">
-              <span className="ellipsis">{t(('slot' + id) as Key)}</span>
+              <span className="ellipsis">{gr3x ? off.defaultName : t(('slot' + id) as Key)}</span>
               <span className={`count ${problem ? 'bad' : ''}`}>{problem || `${name.length || off.names[lang].text.length}/${cap}`}</span>
             </div>
           </div>
         </div>
         <div className="props">
           <Prop label={t('preset')} tour={first ? 'ic-preset' : undefined}>
-            {!p && <FileButton className="btn dashed fill" accept=".xmp,.cube" onFiles={(f) => { void loadPresetFile(id, f[0]); }}>{Ico.plus}<span>{t('dropPreset')}</span></FileButton>}
+            {!p && <FileButton className="btn dashed fill" accept={gr3x ? ".cube" : ".xmp,.cube"} onFiles={(f) => { void loadPresetFile(id, f[0]); }}>{Ico.plus}<span>{t(gr3x ? 'gr3xCubeDrop' : 'dropPreset')}</span></FileButton>}
             {p && (
               <div className="preset">
                 <div className={`file-chip ${p.error ? 'bad' : ''}`}>
-                  <FileButton className="file-main" accept=".xmp,.cube" title={t('replace')} onFiles={(f) => { void loadPresetFile(id, f[0]); }}>{Ico.file}<span className="ellipsis">{p.result?.title || p.fileName}</span></FileButton>
+                  <FileButton className="file-main" accept={gr3x ? ".cube" : ".xmp,.cube"} title={t('replace')} onFiles={(f) => { void loadPresetFile(id, f[0]); }}>{Ico.file}<span className="ellipsis">{p.result?.title || p.fileName}</span></FileButton>
                   <button className="file-x" title={t('remove')} aria-label={t('remove')} onClick={() => removePreset(id)}>{Ico.x}</button>
                 </div>
+                {gr3x && p.result && <p className="small muted">{t('gr3xFit', { mean: p.result.meanDE.toFixed(1), p95: p.result.p95DE.toFixed(1) })}{p.result.p95DE > 6 && <><br />{t('gr3xFitPoor')}</>}</p>}
                 {(p.busy || p.error) && (
                   <div className="chips">
                     {p.busy && <span className="chip muted"><span className="spinner small" />{t('converting')}</span>}
@@ -342,6 +351,7 @@ function FeatureSwitches({ mono, boxRef, from }: { mono: boolean; boxRef?: (el: 
   const soft = useStore((s) => s.soft);
   const date = useStore((s) => s.dateStamp);
   const looks = useStore((s) => s.monoUnlock);
+  const gr3x = useStore(s => s.info?.family === 'gr3x');
   const own = useRef<HTMLDivElement | null>(null);
   // Moved to the other column: glide from where it was (FLIP). Rectangles are in window pixels,
   // the transform is in the zoomed interface's pixels.
@@ -357,9 +367,10 @@ function FeatureSwitches({ mono, boxRef, from }: { mono: boolean; boxRef?: (el: 
   }, [from]);
   return (
     <div className="card extras" data-tour="ic-soft" ref={(el) => { own.current = el; boxRef?.(el); }}>
-      <FeatureRow icon={Ico.soft} title={t('navSoft')} sub={t('softAdjSub')} on={soft} onChange={setSoft} />
-      <FeatureRow icon={Ico.date} title={t('navDate')} sub={t('dateSub')} on={date} onChange={setDateStamp} />
-      {!mono && <FeatureRow icon={Ico.mono} title={t('navMono')} sub={t('monoSub')} on={looks} onChange={setMonoUnlock} />}
+      <FeatureRow icon={Ico.soft} title={t('navSoft')} sub={t(gr3x ? 'gr3xSoftSub' : 'softAdjSub')} on={soft} onChange={setSoft} />
+      {!gr3x && <FeatureRow icon={Ico.date} title={t('navDate')} sub={t('dateSub')} on={date} onChange={setDateStamp} />}
+      {gr3x && <p className="small muted">{t('gr3xFilmHint')}<br />{t('gr3xFixedLooks')}</p>}
+      {!mono && !gr3x && <FeatureRow icon={Ico.mono} title={t(gr3x ? 'gr3xReplicaTitle' : 'navMono')} sub={t(gr3x ? 'gr3xReplicaSub' : 'monoSub')} on={looks} onChange={setMonoUnlock} />}
     </div>
   );
 }
@@ -371,6 +382,8 @@ type Place = 'left' | 'right';
  * the preview on the right, and back when there is room again.
  */
 function IcBody() {
+  const slots = useStore(s => s.info!.slots);
+  const gr3x = useStore((s) => s.info?.family === 'gr3x');
   const cardsRef = useRef<HTMLDivElement>(null);
   const boxRef = useRef<HTMLDivElement | null>(null);
   const from = useRef<DOMRect | null>(null);
@@ -409,12 +422,16 @@ function IcBody() {
   const extras = useStore((s) => s.extras);
   return (
     <div className="ic" data-tour-page="ic">
-      <div className="cards" ref={cardsRef}>
+      {gr3x
+        ? <div className="cards" ref={cardsRef}>{slots.map((slot) => <SlotCard key={slot.id} id={slot.id} />)}{place === 'left' && switches}</div>
+        : (
+        <div className="cards" ref={cardsRef}>
         <SlotCard id="CY" /><SlotCard id="CG" />
         <ExtrasHead />
         {extras.map((x, i) => <ExtraSlotCard key={x.key} x={x} index={i} />)}
         {place === 'left' && switches}
       </div>
+        )}
       <PreviewPane below={place === 'right' ? switches : undefined} belowH={belowH} />
     </div>
   );
@@ -432,8 +449,8 @@ export function ImageControlPage() {
         {info && (
           <div className="head-right" data-tour="ic-stock">
             {info.bridge
-              ? <span className="chip warn">{Ico.bridge}<span className="ellipsis">{fwName || 'fwdc248b.bin'} · {t('fwBridgeValue')}</span></span>
-              : <span className="chip ok">{Ico.check}<span className="ellipsis">{fwName || 'fwdc248b.bin'} · {info.version}</span></span>}
+              ? <span className="chip warn">{Ico.bridge}<span className="ellipsis">{fwName || info.filename} · {t('fwBridgeValue')}</span></span>
+              : <span className="chip ok">{Ico.check}<span className="ellipsis">{fwName || info.filename} · {info.version}</span></span>}
             <Menu items={[
               { label: t('writeStock'), run: () => { void outputFirmware({ kind: 'card' }, true); } },
               { label: t('exportStock'), run: () => { void outputFirmware({ kind: 'folder' }, true); } },
@@ -442,7 +459,7 @@ export function ImageControlPage() {
         )}
       </header>
       {!info && <FirmwareHero />}
-      {info && model !== 'MONO' && <IcBody />}
+      {info?.capabilities.presets && model !== 'MONO' && <IcBody />}
       {info && model === 'MONO' && <div className="mono-ic" data-tour-page="ic"><p className="muted">{t('monoNoSlots')}</p><FeatureSwitches mono /></div>}
     </DropZone>
   );
@@ -455,6 +472,7 @@ const COMMON_RATIOS = ['65:24', '2.39:1', '2:1', '5:4', '7:6', '4:5'];
 const size = (s: [number, number]): string => `${s[0]}×${s[1]}`;
 
 function RatioRow({ r, active, tour }: { r: RatioItem; active: boolean; tour?: string }) {
+  const locked = useStore(s => s.info?.family === 'gr3x');
   const problem = ratioProblem(r);
   const p = r.preview;
   const busy = !!r.ratio.trim() && !p;
@@ -462,17 +480,17 @@ function RatioRow({ r, active, tour }: { r: RatioItem; active: boolean; tour?: s
     <div className={`ratio-row ${active ? 'on' : ''}`} data-tour={tour} onPointerDownCapture={() => setActiveRatio(r.id)} onFocusCapture={() => setActiveRatio(r.id)}>
       <RatioIcon pixels={p?.icon} width={48} />
       <input
-        className={`input ratio-in ${p?.problem ? 'bad' : ''}`} value={r.ratio} maxLength={16} spellCheck={false} placeholder={t('ratioPlaceholder')} aria-label={t('navRatio')}
+        className={`input ratio-in ${p?.problem ? 'bad' : ''}`} value={r.ratio} readOnly={locked} maxLength={16} spellCheck={false} placeholder={t('ratioPlaceholder')} aria-label={t('navRatio')}
         autoFocus={!r.ratio} onChange={(e) => setRatio(r.id, { ratio: e.target.value.replace(/[^0-9:.：/xX×]/g, '').replace(/[：/xX×]/g, ':') })}
       />
       <input
-        className={`input ratio-name ${problem && !p?.problem ? 'bad' : ''}`} value={r.name} maxLength={24} spellCheck={false} placeholder={p?.label || t('name')} aria-label={t('name')}
+        className={`input ratio-name ${problem && !p?.problem ? 'bad' : ''}`} value={r.name} readOnly={locked} maxLength={24} spellCheck={false} placeholder={p?.label || t('name')} aria-label={t('name')}
         onChange={(e) => setRatio(r.id, { name: e.target.value })}
       />
       <span className={`ratio-size ${problem ? 'bad' : ''}`} title={problem || undefined}>
         {busy ? <span className="spinner small" /> : problem ? <span className="ellipsis">{problem}</span> : p?.sizes ? size(p.sizes[0]) : ''}
       </span>
-      <button className="btn ghost icon-only ratio-x" title={t('remove')} aria-label={t('remove')} onClick={() => removeRatio(r.id)}>{Ico.x}</button>
+      <button disabled={locked} className="btn ghost icon-only ratio-x" title={t('remove')} aria-label={t('remove')} onClick={() => removeRatio(r.id)}>{Ico.x}</button>
     </div>
   );
 }
@@ -516,6 +534,7 @@ function RatioPane({ r }: { r?: RatioItem }) {
         </div>
         <div className={`chips ratio-out ${p?.sizes ? 'sizes' : ''}`}>
           {p?.sizes && p.sizes.map((s, i) => <span key={i} className="chip"><b>{labels[i]}</b>{size(s)}</span>)}
+          {p?.status === 'planning-only' && <span className="chip warn">{t('gr3xError')} {p.errorPercent?.toFixed(4)}%</span>}
           {p?.problem && <span className="chip bad">{r ? ratioProblem(r) : ''}</span>}
           {p?.problem && r && (p.nearest || []).map((n) => <button key={n} className="btn small" onClick={() => setRatio(r.id, { ratio: n })}>{n}</button>)}
         </div>
@@ -536,18 +555,23 @@ export function RatioPage() {
       <header className="page-head">
         <span className="page-icon">{Ico.ratio}</span>
         <h1>{t('navRatio')}</h1>
-        {info && <div className="head-right"><span className="chip">{ratios.filter((r) => r.ratio.trim()).length}/{MAX_CUSTOM_RATIOS}</span></div>}
+        {info && <div className="head-right"><span className="chip">{info.family === 'gr3x' ? 'ADJ9 · T4' : `${ratios.filter(r => r.ratio.trim()).length}/${MAX_CUSTOM_RATIOS}`}</span></div>}
       </header>
       {!info && <FirmwareHero />}
+      {info?.family === 'gr3x' && <div className="gr3x-notice" role="status">
+        <b>{t('gr3xPreview')}</b><p>{t('gr3xIntro')}</p><p>{t('gr3xOperation')}</p>
+        <button className="btn small" onClick={() => { void outputFirmware({ kind: 'folder' }, true); }}>{t('exportStock')}</button>
+        <button className="btn small" onClick={() => { void outputFirmware({ kind: 'card' }, true); }}>{t('writeStock')}</button>
+      </div>}
       {info && (
         <div className="ratio" data-tour-page="ratio">
           <div className="ratio-list">
             <div className="ratio-factory" data-tour="ratio-factory">
               <span className="muted small">{t('ratioFactory')}</span>
-              {FACTORY_RATIOS.map((f) => <span key={f} className="chip muted">{f}</span>)}
+              {(info.factoryRatios || FACTORY_RATIOS).map((f) => <span key={f} className="chip muted">{f}</span>)}
             </div>
             {ratios.map((r, i) => <RatioRow key={r.id} r={r} active={r.id === active?.id} tour={i === 0 ? 'ratio-row' : undefined} />)}
-            {!full && (
+            {!full && info.family !== 'gr3x' && (
               <div className="ratio-add">
                 <button className="btn dashed fill" data-tour="ratio-add" onClick={() => addRatio()}>{Ico.plus}<span>{t('ratioAdd')}</span></button>
                 <div className="chips" data-tour="ratio-common">
@@ -647,6 +671,7 @@ export function WallpaperPage() {
       </header>
       {!info && <FirmwareHero />}
       {info && <FactoryEntryCard />}
+      {info?.family === 'gr3x' && <p className="small muted">{t('gr3xWallHint')}</p>}
       {info && (
         <div className="wall-fit" ref={ref} data-tour-page="wall">
           {fit.tile > 0 && (
@@ -686,6 +711,7 @@ function FactoryEntryCard() {
         <div className="soft-text">
           <b>{t('navScript')}</b>
           <span className="muted small">{t('scriptHint')}</span>
+          {info.family === 'gr3x' && <span className="muted small">{t('gr3xScriptHint')}</span>}
           <div className="chips entry-chips">
             {info.factoryEntry.files.map((f) => <span key={f.name} className="chip file tiny">{Ico.file}{f.name}</span>)}
             {onCard && <span className="chip ok tiny">{Ico.check}{t('entryOnCard')}</span>}
