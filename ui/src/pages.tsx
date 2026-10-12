@@ -10,7 +10,7 @@ import type { Crop } from './pixels';
 import { onUiScale, uiScale } from './fit';
 import { applySlot } from './preview';
 import {
-  addFactoryWall, addRatio, addWallFiles, loadFirmwareFile, loadIconImage, loadPresetFile, loadPreviewFile, moveWall, nameProblem, openCrop, outputFirmware, previewPhoto, removePreset, removeWall,
+  addFactoryWall, addRatio, addWallFiles, askForOfficial, bridgeLoaded, loadFirmwareFile, outputEntry, loadIconImage, loadPresetFile, loadPreviewFile, moveWall, nameProblem, openCrop, outputFirmware, previewPhoto, removePreset, removeWall,
   ratioName, ratioProblem, removeRatio, setActiveRatio, setActiveSlot, setCrop, setIcon, setName, setPreviewMode, setRatio, setRatioBackdrop, useStore, wallBitmap,
   setSoft,
   setDateStamp,
@@ -194,7 +194,7 @@ function SlotCard({ id }: { id: SlotId }) {
   );
 }
 
-/** How many slots are added (0 to MAX_EXTRA_SLOTS), with what they share with Cinema (Yellow). */
+/** How many slots are added (0 to MAX_EXTRA_SLOTS). */
 function ExtrasHead() {
   const n = useStore((s) => s.extras.length);
   const options = Array.from({ length: MAX_EXTRA_SLOTS + 1 }, (_, i) => ({ value: String(i), label: String(i) }));
@@ -208,7 +208,6 @@ function ExtrasHead() {
         </div>
       </div>
       <div className="extras-count"><Segmented value={String(n)} onChange={(v) => setExtraCount(Number(v))} options={options} /></div>
-      {n > 0 && <p className="muted small extras-note">{t('extraNote')}</p>}
     </div>
   );
 }
@@ -595,6 +594,7 @@ export function WallpaperPage() {
         {info && wall.length > 0 && <div className="head-right"><span className="chip">{wall.length}/9</span></div>}
       </header>
       {!info && <FirmwareHero />}
+      {info && <FactoryEntryCard />}
       {info && (
         <div className="wall-fit" ref={ref} data-tour-page="wall">
           {fit.tile > 0 && (
@@ -615,26 +615,36 @@ export function WallpaperPage() {
 }
 
 // ---------------------------------------------------------------- switching Script on
-export function ScriptPage() {
+/**
+ * The files that open the camera's factory menu, where Script is switched on once so that the
+ * power-off images take effect. Only the power-off images need it, so it sits on their page.
+ */
+function FactoryEntryCard() {
   const info = useStore((s) => s.info);
   const onCard = useStore((s) => s.entryOnCard);
+  const busy = useStore((s) => !!s.busy);
+  const hasCard = useStore((s) => s.volumes.some((v) => v.id === s.volumeId));
+  const bridge = useStore((s) => bridgeLoaded(s));
+  if (!info) return null;
+  const run = (kind: 'card' | 'folder'): void => { if (bridge) askForOfficial(); else void outputEntry({ kind }); };
   return (
-    <DropZone className="page" accept={isFirmware} onFiles={(f) => { void loadFirmwareFile(f[0]); }}>
-      <header className="page-head">
-        <span className="page-icon">{Ico.tool}</span>
-        <h1>{t('navScript')}</h1>
-      </header>
-      {!info && <FirmwareHero />}
-      {info && (
-        <div className="guide" data-tour-page="script" data-tour="script-hint">
-          <p className="guide-line">{t('scriptHint')}</p>
-          <div className="chips">
-            {info.factoryEntry.files.map((f) => <span key={f.name} className="chip file">{Ico.file}{f.name}</span>)}
-            {onCard && <span className="chip ok">{Ico.check}{t('entryOnCard')}</span>}
+    <div className="card entry-card" data-tour="wall-entry">
+      <div className="entry-row">
+        <span className="page-icon soft-ico">{Ico.tool}</span>
+        <div className="soft-text">
+          <b>{t('navScript')}</b>
+          <span className="muted small">{t('scriptHint')}</span>
+          <div className="chips entry-chips">
+            {info.factoryEntry.files.map((f) => <span key={f.name} className="chip file tiny">{Ico.file}{f.name}</span>)}
+            {onCard && <span className="chip ok tiny">{Ico.check}{t('entryOnCard')}</span>}
           </div>
         </div>
-      )}
-    </DropZone>
+        <div className="entry-actions">
+          <button className="btn ghost icon-only" disabled={busy} title={t('exportFolder')} aria-label={t('exportFolder')} onClick={() => run('folder')}>{Ico.folder}</button>
+          <button className="btn" data-tour="wall-entry-write" disabled={busy || (!hasCard && !bridge)} onClick={() => run('card')}>{t('writeCard')}</button>
+        </div>
+      </div>
+    </div>
   );
 }
 

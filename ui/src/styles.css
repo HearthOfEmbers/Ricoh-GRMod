@@ -401,7 +401,6 @@ button.fw-rel:disabled { cursor: default; }
 .extras-head { padding: 8px 14px; }
 .extras-row { display: flex; align-items: center; gap: 12px; }
 .extras-row .soft-text { flex: 1; min-width: 0; }
-.extras-note { margin: 8px 0 2px; line-height: 1.5; }
 .extra-x { flex: none; align-self: flex-start; }
 .extra-problem { margin-top: 6px; }
 .extras-row .soft-ico { width: 32px; height: 32px; flex: none; }
@@ -410,3 +409,12 @@ button.fw-rel:disabled { cursor: default; }
 .extras-count .seg button { flex: 1; padding: 0 6px; }
 .pane-head > .seg { flex: none; }
 .pane-head .seg button, .extras-count .seg button { white-space: nowrap; }
+
+/* factory-menu entry, on the power-off image page */
+.entry-card { padding: 10px 14px; margin-bottom: 14px; max-width: 900px; }
+.entry-row { display: flex; align-items: center; gap: 12px; }
+.entry-row .soft-ico { width: 32px; height: 32px; flex: none; }
+.entry-row .soft-text { gap: 3px; }
+.entry-row .soft-text .small { line-height: 1.45; }
+.entry-chips { margin-top: 3px; }
+.entry-actions { display: flex; align-items: center; gap: 6px; flex: none; }
