@@ -418,3 +418,6 @@ button.fw-rel:disabled { cursor: default; }
 .entry-row .soft-text .small { line-height: 1.45; }
 .entry-chips { margin-top: 3px; }
 .entry-actions { display: flex; align-items: center; gap: 6px; flex: none; }
+.seg-arrow { flex: none; width: 26px; height: 28px; padding: 0; justify-content: center; }
+.seg-arrow svg { width: 16px; height: 16px; }
+.seg-arrow:disabled { opacity: 0.35; }

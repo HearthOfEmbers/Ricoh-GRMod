@@ -123,10 +123,27 @@ function PreviewPane({ below, belowH = 0 }: { below?: ReactNode; belowH?: number
   const tabs = [{ value: 'CY', label: t('slotCY') }, { value: 'CG', label: t('slotCG') }, ...extras.map((x, i) => ({ value: x.key, label: extraLabels.split('\u0000')[i] }))];
   const tabsRef = useRef<HTMLDivElement>(null);
   useEffect(() => { tabsRef.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }, [active]);
+  // With many added slots in a narrow window the tabs do not all fit: arrows step through them.
+  const [overflow, setOverflow] = useState(false);
+  useEffect(() => {
+    const el = tabsRef.current;
+    if (!el) return;
+    const check = (): void => setOverflow(el.scrollWidth > el.clientWidth + 1);
+    check();
+    const ro = new ResizeObserver(check);
+    ro.observe(el);
+    if (el.firstElementChild) ro.observe(el.firstElementChild);
+    return () => ro.disconnect();
+  }, [tabs.length]);
+  const at = Math.max(0, tabs.findIndex((x) => x.value === active));
+  const step = (d: number): void => { const n = tabs[at + d]; if (n) setActiveSlot(n.value); };
+  const wheel = (e: React.WheelEvent<HTMLDivElement>): void => { if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) e.currentTarget.scrollLeft += e.deltaY; };
   return (
     <DropZone className="pane" accept={isImage} onFiles={(f) => { void loadPreviewFile(f[0]); }}>
       <div className="pane-head">
-        <div className="seg-scroll" ref={tabsRef}><Segmented tour="ic-tabs" value={tabs.some((x) => x.value === active) ? active : 'CY'} onChange={setActiveSlot} options={tabs} /></div>
+        {overflow && <button className="btn ghost icon-only seg-arrow" title={t('prevSlot')} aria-label={t('prevSlot')} disabled={at === 0} onClick={() => step(-1)}>{Ico.left}</button>}
+        <div className="seg-scroll" ref={tabsRef} onWheel={wheel}><Segmented tour="ic-tabs" value={tabs.some((x) => x.value === active) ? active : 'CY'} onChange={setActiveSlot} options={tabs} /></div>
+        {overflow && <button className="btn ghost icon-only seg-arrow" title={t('nextSlot')} aria-label={t('nextSlot')} disabled={at === tabs.length - 1} onClick={() => step(1)}>{Ico.right}</button>}
         <span className="grow" />
         <Segmented tour="ic-mode" value={mode} onChange={setPreviewMode} options={[{ value: 'photo', label: t('previewPhoto') }, { value: 'swatch', label: t('previewSwatch') }]} />
       </div>
