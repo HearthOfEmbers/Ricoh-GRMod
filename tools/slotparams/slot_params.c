@@ -83,10 +83,31 @@ static const uint32_t native_getters[NP] = {
     0x533bb858, 0x533bcdb8, 0x533bd7e0, 0x533bdcf0, 0x533be188, 0x533be620,
 };
 
+/* In-camera RAW development (RawDevelopmentModel): per custom base (0..3, the photo sets) and
+ * look it keeps 18 bytes of parameters and two of grain; the added looks are patched to use
+ * Cinema Yellow's (look 9). Like the settings fields, those bytes belong to one owner per base,
+ * the others' values wait here (see sp_raw_*). */
+#define RAW_BASES 4u
+#define RAW_CY 9u
+#define RAW_FIRST 21u
+#define RAW_LOOK 0x9du            /* + base: the base's look */
+#define RAW_ROWS 0xa1u            /* + base * 0x17a + look * 0x12: 18 bytes */
+#define RAW_BASE_STRIDE 0x17au
+#define RAW_ROW 0x12u
+#define RAW_GRAIN 0x71au          /* + (base * 21 + look) * 2: strength, size */
+#define RAW_VALUES (RAW_ROW + 2u)
+
+typedef struct {
+    uint8_t *model;
+    uint8_t own[RAW_BASES];
+    uint8_t v[RAW_BASES][OWNERS][RAW_VALUES];
+} Raw;
+
 typedef struct {
     uint32_t magic, loaded, dirty, last_write;
     uint8_t t[OWNERS][COMBOS][NP];
     uint32_t rec[REC_WORDS];
+    Raw raw;
 } State;
 
 static State *state(void) {
@@ -209,6 +230,70 @@ uint32_t sp_style_set(void *obj, uint32_t style, uint32_t c, uint32_t entry) {
         if (from != to) move_owner(s, (int)c, from, to);
     }
     return r;
+}
+
+/* ---- RAW development ------------------------------------------------------------------- */
+/* Where parameter j sits in a look's 18 bytes (11..12: the two grain bytes, after them). */
+static const uint8_t RAW_POS[NP] = {0, 1, 2, 3, 4, 5, 6, 8, 14, 15, 16, RAW_ROW, RAW_ROW + 1};
+
+static int raw_owner(uint32_t look) {
+    if (look == RAW_CY) return 0;
+    if (look >= RAW_FIRST && look < RAW_FIRST + SLOT_COUNT) return (int)(look - RAW_FIRST + 1);
+    return -1;
+}
+
+/* Cinema Yellow's bytes of a base: its row and its grain pair. */
+static volatile uint8_t *raw_row(uint8_t *m, uint32_t b) { return m + RAW_ROWS + b * RAW_BASE_STRIDE + RAW_CY * RAW_ROW; }
+static volatile uint8_t *raw_grain(uint8_t *m, uint32_t b) { return m + RAW_GRAIN + (b * 21u + RAW_CY) * 2u; }
+
+static void raw_save(State *s, uint32_t b, int o) {
+    volatile uint8_t *row = raw_row(s->raw.model, b), *g = raw_grain(s->raw.model, b);
+    volatile uint8_t *v = s->raw.v[b][o];
+    for (uint32_t i = 0; i < RAW_ROW; i++) v[i] = row[i];
+    v[RAW_ROW] = g[0]; v[RAW_ROW + 1] = g[1];
+}
+
+static void raw_restore(State *s, uint32_t b, int o) {
+    volatile uint8_t *row = raw_row(s->raw.model, b), *g = raw_grain(s->raw.model, b);
+    volatile uint8_t *v = s->raw.v[b][o];
+    for (uint32_t i = 0; i < RAW_ROW; i++) row[i] = v[i];
+    g[0] = v[RAW_ROW]; g[1] = v[RAW_ROW + 1];
+}
+
+/* After the model has filled every look from the settings (opening a RAW file): Cinema Yellow's
+ * bytes of base b hold the values of the look that owns the settings fields of photo set b; every
+ * other owner gets its own saved values (the same the shooting uses). */
+void sp_raw_init(uint8_t *model) {
+    State *s = state();
+    if (!s || !s->loaded || !model) return;
+    s->raw.model = model;
+    for (uint32_t b = 0; b < RAW_BASES; b++) {
+        int own = owner((int)b);
+        s->raw.own[b] = (uint8_t)own;
+        for (int o = 0; o < (int)OWNERS && o <= SLOT_COUNT; o++) {
+            if (o == own) continue;
+            volatile uint8_t *v = s->raw.v[b][o];
+            for (uint32_t i = 0; i < RAW_VALUES; i++) v[i] = 0;
+            uint32_t style = o == 0 ? CY : FIRST + (uint32_t)o - 1;
+            for (uint32_t j = 0; j < NP; j++) v[RAW_POS[j]] = (uint8_t)route_get(j, 0, b, style);
+        }
+    }
+}
+
+/* Cinema Yellow's bytes of base b now belong to `look` (Cinema Yellow or an added look). */
+void sp_raw_own(uint8_t *model, uint32_t b, uint32_t look) {
+    State *s = state();
+    int o = raw_owner(look);
+    if (!s || !s->loaded || !model || model != s->raw.model || b >= RAW_BASES || o < 0) return;
+    if (s->raw.own[b] == (uint8_t)o) return;
+    raw_save(s, b, s->raw.own[b]);
+    raw_restore(s, b, o);
+    s->raw.own[b] = (uint8_t)o;
+}
+
+/* Before the model applies a base's look (every change of look goes through it). */
+void sp_raw_sync(uint8_t *model) {
+    for (uint32_t b = 0; b < RAW_BASES; b++) sp_raw_own(model, b, model ? model[RAW_LOOK + b] : 0);
 }
 
 /* ---- the record --------------------------------------------------------------------------- */

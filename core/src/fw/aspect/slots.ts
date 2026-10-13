@@ -350,11 +350,11 @@ export function installExtraSlots(p: Patch, iconbin: Uint8Array, slots: readonly
   }
   hook(p, 0x53373bc0, 0xe241100b, `sub ip,r1,#${EXTRA_FIRST_STYLE};cmp ip,#${count - 1};bhi native;add r0,ip,#21;bx lr;native:sub r1,r1,#11;b #0x53373bc4`, 'added slots: RAW development look');
 
-  installOwnParameters(p, count);
+  const module = installOwnParameters(p, count);
   installPreviewMapping(p, count);
   installChangeFunctors(p, count);
   installLookChecks(p, count);
-  installRawDevelopment(p, count);
+  installRawDevelopment(p, count, module);
   installPictureInfo(p, count);
   return concat(parts);
 }
@@ -391,7 +391,7 @@ const SLOT_STATE = 0x558372e0;
  * parameters, and two direct readers, still take the added styles as 18. Developed as test
  * firmwares 026..034.
  */
-function installOwnParameters(p: Patch, count: number): void {
+function installOwnParameters(p: Patch, count: number): Record<string, number> {
   const normalize = (at: number, reg: string, original: number, tail: string): void => {
     // The flags are set again by every native entry before use; no callee-saved register, LR or SP changes.
     hook(p, at, original, `sub ip,${reg},#${EXTRA_FIRST_STYLE};cmp ip,#${count - 1};movls ${reg},#${CY};${tail};b #${at + 4}`, 'added slots: parameters of Cinema Yellow');
@@ -432,6 +432,7 @@ function installOwnParameters(p: Patch, count: number): void {
   // The module keeps its state pointer in the 44 bytes between the end of the zero fill and the
   // heap; they are cleared at every start from now on.
   p.setWord(ZERO_FILL_END, 0x55837300, 'start-up zero fill also clears the 44 unused bytes before the heap');
+  return mod.symbols;
 }
 
 /**
@@ -592,15 +593,19 @@ const RAW_LOOK_LOAD = 0xe5d3209d;
 const RAW_LOOK_SITES = 72;
 
 /**
- * In-camera RAW development keeps its own copy of the parameters: per custom base (4) and look
- * (0..20) 18 bytes, and a table (0x53DBB8F0) of which parameters each look has. Every function
- * that reads or writes them first turns the look into a row with a loop over 1..20, so an added
- * look (21, ...) got row 0, whose parameters are all "absent": the parameter screen showed -4
- * everywhere and developing stopped the camera (reported on 0.7.0). The added looks now use
- * Cinema Yellow's row, as the shooting side does with Cinema Yellow's fields; the look itself
- * (name, icon, the style given to development) stays the added one.
+ * In-camera RAW development keeps its own copy of the parameters: per custom base (4, the photo
+ * sets) and look (0..20) 18 bytes, two bytes of grain, and a table (0x53DBB8F0) of which
+ * parameters each look has. Every function that reads or writes them first turns the look into a
+ * row with a loop over 1..20, so an added look (21, ...) got row 0, whose parameters are all
+ * "absent": the parameter screen showed -4 everywhere and developing stopped the camera (reported
+ * on 0.7.0). The added looks now use Cinema Yellow's row, as the shooting side does with Cinema
+ * Yellow's fields; the look itself (name, icon, the style given to development) stays the added
+ * one. And as there, the row belongs to one owner per base, the others' values are kept by the
+ * slot-parameter module (`sp_raw_*` in slot_params.c): when a RAW file is opened every added look
+ * gets its own saved values; before the model applies a look (every change of look goes through
+ * 0x53374360) the row is handed to it; the parameters a RAW file was shot with go to its look.
  */
-function installRawDevelopment(p: Patch, count: number): void {
+function installRawDevelopment(p: Patch, count: number, module: Record<string, number>): void {
   const map = (r: string): string => `sub ${r},${r},#${RAW_FIRST_EXTRA};cmp ${r},#${count};movlo ${r},#${RAW_CY};addhs ${r},${r},#${RAW_FIRST_EXTRA}`;
   const sites: number[] = [];
   for (let at = RAW_MODEL[0]; at < RAW_MODEL[1]; at += 4) {
@@ -620,8 +625,12 @@ function installRawDevelopment(p: Patch, count: number): void {
     const code = p.append((a) => [RAW_LOOK_LOAD, ...assembleWords(`${map('r2')};b #${at + 4}`, a + 4)], 4);
     p.setWord(at, branchWord(at, code), 'added slots: RAW development parameters of Cinema Yellow');
   }
-  // Opening a RAW file copies the parameters it was shot with into the row of its look.
-  hook(p, 0x53374e98, 0xe3500000, `${map('r0')};cmp r0,#0;b #0x53374e9c`, 'added slots: RAW development parameters as shot');
+  // Opening a RAW file: the model has filled every look from the settings (0x53373D04, r4 the model).
+  hook(p, 0x53374e24, 0xe5d42064, `push {r0-r3,ip,lr};mov r0,r4;bl #${module.sp_raw_init};pop {r0-r3,ip,lr};ldrb r2,[r4,#0x64];b #0x53374e28`, 'added slots: own RAW development parameters');
+  // Then it copies the parameters the file was shot with into the row of its look (base 0).
+  hook(p, 0x53374e98, 0xe3500000, `push {r0-r3,ip,lr};mov r2,r0;mov r1,#0;mov r0,r4;bl #${module.sp_raw_own};pop {r0-r3,ip,lr};${map('r0')};cmp r0,#0;b #0x53374e9c`, 'added slots: RAW development parameters as shot');
+  // Applying a look: the row goes to the looks now selected.
+  hook(p, 0x53374360, 0xe1a0c00d, `push {r0-r4,lr};bl #${module.sp_raw_sync};pop {r0-r4,lr};mov ip,sp;b #0x53374364`, 'added slots: own RAW development parameters');
 }
 
 // -------------------------------------------------------------- picture information

@@ -38,7 +38,7 @@ GETTERS = [0x533b7130, 0x533b7818, 0x533b7f00, 0x533b8928, 0x533b9350, 0x533b9d7
            0x533bd7e0, 0x533bdcf0, 0x533be188, 0x533be620, 0x533beab8]
 PARAMS = [0, 1, 2, 3, 4, 5, 6, 8, 17, 18, 19, 20, 21]
 STYLE_SETTERS = [0x532b6f80, 0x532b7110, 0x532b72a0, 0x532b7430, 0x53300aa0, 0x53300c34, 0x53300dc8, 0x53300f5c]
-EXPORTS = (['sp_load', 'sp_save'] + [f'sp_get_stub_{j}' for j in range(len(PARAMS))]
+EXPORTS = (['sp_load', 'sp_save', 'sp_raw_init', 'sp_raw_own', 'sp_raw_sync'] + [f'sp_get_stub_{j}' for j in range(len(PARAMS))]
            + [f'sp_set_stub_{j}' for j in range(len(PARAMS))] + [f'sp_style_stub_{k}' for k in range(len(STYLE_SETTERS))])
 
 
