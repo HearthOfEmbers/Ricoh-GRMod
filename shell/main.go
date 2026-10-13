@@ -38,6 +38,8 @@ type config struct {
 	devtools    bool
 	worker      bool
 	showVersion bool
+	afterUpdate int
+	updatedFrom string
 }
 
 // workerFlag marks the child process that hosts the WebView2 window; see
@@ -57,6 +59,8 @@ func parseFlags(args []string, errOut io.Writer) (config, error) {
 	fs.BoolVar(&c.devtools, "devtools", false, "Windows: enable the developer tools and the context menu of the WebView2 window")
 	fs.BoolVar(&c.worker, workerFlag, false, "internal: host the WebView2 window in this process")
 	fs.BoolVar(&c.showVersion, "version", false, "print the version and exit")
+	fs.IntVar(&c.afterUpdate, afterUpdateFlag, 0, "internal: started by an update; wait for this `pid` to end first")
+	fs.StringVar(&c.updatedFrom, updatedFromFlag, "", "internal: the `version` the update replaced")
 	if err := fs.Parse(args); err != nil {
 		return c, err
 	}
@@ -102,11 +106,26 @@ func run(args []string) int {
 		fmt.Println(strings.TrimSpace("grmod " + version))
 		return 0
 	}
+	target := updateTarget()
+	afterUpdate(cfg.afterUpdate, target)
 	a, err := newApp(cfg)
 	if err != nil {
 		fatalMessage("GR Mod cannot start: " + err.Error())
 		return 1
 	}
 	defer a.close()
-	return runPlatform(a)
+	a.target = target
+	code := runPlatform(a)
+	if a.restart.pending() && target != nil {
+		a.shutdown()
+		next := relaunchArgs(os.Args[1:], os.Getpid(), version)
+		if err := target.Relaunch(next); err != nil {
+			a.log.Printf("update: cannot start the new program: %v", err)
+			fatalMessage("GR Mod has been updated, but the new version could not be started: " + err.Error() + "\n\nPlease start GR Mod again.")
+			return 1
+		}
+		a.log.Printf("update: started the new program")
+		return 0
+	}
+	return code
 }

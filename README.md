@@ -4,7 +4,7 @@ A small desktop tool for the Ricoh GR IV / GR IV HDF (firmware 1.11). Not a Rico
 
 - `core/`  platform-independent TypeScript: firmware container codec and patcher with built-in self-check (`src/fw`), added aspect ratios (`src/fw/aspect`), preset conversion from .xmp Look profiles and .cube LUTs (`src/color`), exact-length baseline JPEG encoder (`src/jpeg`), start-up script generator and simulator (`src/wallpaper`), memory-card layout planning (`src/card`), and the `Engine` facade (`src/app`).
 - `ui/`    React UI (Vite). Talks to the platform through `src/host.ts` only.
-- `shell/` desktop shell in Go for Windows and macOS (a WebView2 window on Windows, a Chromium "app" window on macOS, plus a local HTTP API for drives and files, and for fetching the official firmware from Ricoh's site). See `shell/README.md`.
+- `shell/` desktop shell in Go for Windows and macOS (a WebView2 window on Windows, a Chromium "app" window on macOS, plus a local HTTP API for drives and files, and for fetching the official firmware from Ricoh's site and updates of GR Mod itself). See `shell/README.md`.
 
 Build: `npm install && npm -w ui run build && (cd shell && ./build.sh windows)` → `shell/dist/GRMod.exe`; `./build.sh mac` → `shell/dist/GR Mod.app` and `shell/dist/GRMod-mac.zip` (Intel Macs with macOS 10.13 or later, Apple silicon with macOS 11 or later), plus `GRMod-<version>-mac.dmg` when the disk image tools are installed.
 
@@ -52,6 +52,17 @@ Every imported preset (.cube / .xmp) is fitted as a colour matrix, three tone cu
 `core/src/fw/aspect/slots.ts` adds up to six looks (styles 34..39) after Cinema (Green), each with its own matrix, curves, second matrix, ASCII name (text 846..) and icon (768..). A new look's records are complete copies of Cinema Yellow's with its own colour data and Standard's multi-axis blocks; the four style tables are copied with the new styles appended to each camera variant's row, and everything else that knows the style numbers (menu order and counts, names, icons, the ADJ list's own icon lookup, the shooting overlay, RAW development, look visibility, the live-view parameter generator) is extended. Tried on a GR IV HDF as test firmwares 022..034 (022 copied incomplete multi-axis records and the camera stopped on the first ADJ highlight of a new slot).
 
 Adjustable parameters: the firmware keeps them per factory style, and whatever reads them for the selected look takes the new styles as Cinema Yellow (18). Each new look still has its own values, kept per photo/movie set and across power-off: Cinema Yellow's fields hold the values of the look selected in a set, the other looks' values wait in a table of a native module (`tools/slotparams/slot_params.c`, pre-compiled per slot count by `gen_slotparams.py` into `slotparams-native.ts`) saved as its own record (HTData 12) after the settings. The module takes over the 13 getters and setters of Cinema Yellow's parameters and the 8 "style of set" setters, and chains to the settings load/save. The 88 change functors of those fields (which give the value to the camera model behind the parameter screen), the parameter screens' list choice (grain), the main menu's Image Control row and the digital-filter step (grain, Clarity) take the new looks as Cinema Yellow as well. New looks start at the neutral values, which the parameter screen also shows as their defaults. U1–U3 share the table; a settings reset does not reset it.
+
+## Updates
+
+The program can update itself (`shell/internal/update`, UI in `ui/src/updates.tsx`). At start (switchable off in the dialog) and from "Check for updates" in the ? menu it reads `update.json` and `update.json.sig` from `https://github.com/Maxwooow/Ricoh-GRMod/releases/latest/download/` (`GRMOD_UPDATE_SOURCE` replaces that address for tests). The manifest is accepted only if its Ed25519 signature verifies with the public key in `shell/updates.go`; the package (Windows: `GRMod-x.y.z.exe`, macOS: `GRMod-x.y.z-mac.zip`) only if its size and SHA-256 match the manifest. Windows renames the running `GRMod.exe` to `GRMod.exe.old` and puts the new one in its place; macOS moves the running `GR Mod.app` to `.GR Mod.app.old` and the unpacked new bundle into its place. The shell then closes its window, starts the new program with `--after-update=PID`, which waits for the old one to end and removes the `.old` copy. An app that macOS runs translocated (never moved out of the download folder) or a folder that cannot be written is not replaced; the dialog offers the download page instead.
+
+Publishing a release: build, then
+
+    go run ./tools/updatesign -key PRIVATE.key -version X.Y.Z -notes-zh "…" -notes-en "…" \
+        -windows dist/GRMod.exe -mac dist/GRMod-mac.zip -out dist/release
+
+(in `shell/`) and upload everything in `dist/release` (plus the .dmg for new users) to the GitHub release `vX.Y.Z`, which must be the latest release. The private key is not in the repository.
 
 ## The UI
 

@@ -5,3 +5,6 @@ core/testdata/private
 shell/web
 scratch
 __pycache__/
+
+# Update signing keys never go into the repository
+*.key

@@ -20,6 +20,7 @@ import (
 	"grmod/shell/internal/logfile"
 	"grmod/shell/internal/platform"
 	"grmod/shell/internal/server"
+	"grmod/shell/internal/update"
 )
 
 // app is one running instance: data directory, log, and (once started) the
@@ -38,12 +39,16 @@ type app struct {
 	url   string
 	srv   *server.Server
 	http  *http.Server
+
+	// target is the installed program, for updates (nil: cannot update).
+	target  update.Target
+	restart *restarter
 }
 
 // newApp prepares the data directory, the log and the UI files. It does not
 // open any socket yet.
 func newApp(cfg config) (*app, error) {
-	a := &app{cfg: cfg}
+	a := &app{cfg: cfg, restart: newRestarter()}
 
 	dir := cfg.dataDir
 	if dir == "" {
@@ -128,6 +133,9 @@ func (a *app) start(host platform.Host) error {
 		Host:         host,
 		SidecarDir:   sidecarDir(a.cfg.sidecarDir),
 		FirmwareSite: firmwareSite,
+		Update:       updateOptions(a.target),
+		UpdatedFrom:  a.cfg.updatedFrom,
+		Restart:      a.restart.request,
 		Log:          a.log,
 	})
 	if err != nil {

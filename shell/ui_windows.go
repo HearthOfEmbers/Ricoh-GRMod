@@ -123,6 +123,13 @@ func runWebviewWorker(a *app) (code int) {
 	// From here on the window exists: tell the supervisor it may leave.
 	fmt.Fprintln(os.Stdout, readyLine)
 
+	// An installed update closes the window; main then starts the new program.
+	go func() {
+		<-a.restart.requested()
+		a.log.Printf("webview: closing the window for the update")
+		w.Dispatch(func() { w.Terminate() })
+	}()
+
 	w.Navigate(a.url)
 	w.Run() // returns when the window has been closed
 	a.srv.SetChromeHandler(func(server.ChromeColors) {})
@@ -145,6 +152,7 @@ func runBrowser(a *app) int {
 	heartbeat.Restart()
 
 	opened := false
+	var edgeCmd *exec.Cmd
 	if edge := findEdge(os.Getenv, isFile); edge != "" {
 		cmd := exec.Command(edge, edgeArgs(a.url, filepath.Join(a.dataDir, "edge"))...)
 		if err := cmd.Start(); err != nil {
@@ -153,6 +161,7 @@ func runBrowser(a *app) int {
 			a.log.Printf("browser: started Microsoft Edge in app mode")
 			go cmd.Wait()
 			opened = true
+			edgeCmd = cmd
 		}
 	} else {
 		a.log.Printf("browser: Microsoft Edge not found")
@@ -170,8 +179,22 @@ func runBrowser(a *app) int {
 		}
 	}
 
-	_ = heartbeat.Wait(context.Background(), heartbeatIdle, heartbeatNever, heartbeatPoll)
-	if heartbeat.Seen() {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		select {
+		case <-a.restart.requested():
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	_ = heartbeat.Wait(ctx, heartbeatIdle, heartbeatNever, heartbeatPoll)
+	if a.restart.pending() {
+		a.log.Printf("browser: closing for the update")
+		if edgeCmd != nil && edgeCmd.Process != nil {
+			_ = edgeCmd.Process.Kill()
+		}
+	} else if heartbeat.Seen() {
 		a.log.Printf("browser: the page stopped sending heartbeats")
 	} else {
 		a.log.Printf("browser: no page ever connected")

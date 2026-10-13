@@ -17,6 +17,7 @@ import (
 	"github.com/ncruces/zenity"
 
 	"grmod/shell/internal/platform"
+	"grmod/shell/internal/update"
 )
 
 // runPlatform shows the UI on macOS.
@@ -44,6 +45,17 @@ func runPlatform(a *app) int {
 	// at any moment still closes it.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()
+	// An installed update ends this run like a request to quit; main then
+	// starts the new program.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() {
+		select {
+		case <-a.restart.requested():
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
 
 	profile := filepath.Join(a.dataDir, "browser")
 	var browser *exec.Cmd
@@ -78,6 +90,8 @@ func runPlatform(a *app) int {
 
 	_ = heartbeat.Wait(ctx, macHeartbeatIdle, heartbeatNever, heartbeatPoll)
 	switch {
+	case a.restart.pending():
+		a.log.Printf("closing for the update")
 	case ctx.Err() != nil:
 		a.log.Printf("received a signal to quit")
 	case heartbeat.Seen():
@@ -99,6 +113,11 @@ func runPlatform(a *app) int {
 			if pid := profileOwner(profile, browserExe); pid > 0 {
 				a.log.Printf("browser: quitting the instance that took over the window (pid %d)", pid)
 				_ = syscall.Kill(pid, syscall.SIGTERM)
+				if a.restart.pending() {
+					// The new program opens a window with the same profile;
+					// it must not hand it to this browser on its way out.
+					update.WaitExit(pid, 5*time.Second)
+				}
 			}
 		default:
 			_ = browser.Process.Signal(syscall.SIGTERM)

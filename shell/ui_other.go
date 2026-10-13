@@ -24,8 +24,12 @@ func runPlatform(a *app) int {
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
-	sig := <-stop
-	a.log.Printf("received %v", sig)
+	select {
+	case sig := <-stop:
+		a.log.Printf("received %v", sig)
+	case <-a.restart.requested():
+		a.log.Printf("closing for the update")
+	}
 	a.shutdown()
 	return 0
 }

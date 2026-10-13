@@ -63,7 +63,9 @@ type cachedRelease struct {
 	when time.Time
 }
 
-func newFirmwareSource(opt Options) *firmwareSource {
+// outgoingClient is the HTTP client for requests to the internet: through
+// the system's proxy when the host knows it.
+func outgoingClient(opt Options) *http.Client {
 	proxy := http.ProxyFromEnvironment
 	if p, ok := opt.Host.(proxyChooser); ok {
 		proxy = p.Proxy
@@ -76,8 +78,12 @@ func newFirmwareSource(opt Options) *firmwareSource {
 		IdleConnTimeout:       60 * time.Second,
 		ForceAttemptHTTP2:     true,
 	}
+	return &http.Client{Transport: transport}
+}
+
+func newFirmwareSource(opt Options) *firmwareSource {
 	return &firmwareSource{
-		client: ricoh.Client{Base: opt.FirmwareSite, HTTP: &http.Client{Transport: transport}},
+		client: ricoh.Client{Base: opt.FirmwareSite, HTTP: outgoingClient(opt)},
 		cached: map[string]cachedRelease{},
 	}
 }

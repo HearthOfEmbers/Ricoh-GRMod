@@ -5,7 +5,7 @@ A small desktop shell for the GR Mod web UI, written in pure Go (no cgo).
 - Serves the UI (HTML/JS built elsewhere) from files embedded in the executable.
 - On Windows it shows the UI in a native WebView2 window, falling back to Microsoft Edge in app mode and then to the default browser.
 - On macOS it opens the UI as an "app" window of a Chromium-based browser (Chrome, Edge, Brave, Chromium, Vivaldi) with a profile of its own, or in the default browser, and stops after the window is closed. The bundle is an agent (`LSUIElement`), so it has no Dock icon of its own.
-- Gives the page a local HTTP API for what a web page cannot do: listing removable drives, reading and writing files on a memory card, a native folder picker, a key/value store, fetching the official firmware from Ricoh's site.
+- Gives the page a local HTTP API for what a web page cannot do: listing removable drives, reading and writing files on a memory card, a native folder picker, a key/value store, fetching the official firmware from Ricoh's site, updating itself.
 - On Linux the same program runs headless, so the API can be developed against and tested without Windows.
 
 ## Build
@@ -46,7 +46,7 @@ GOOS=darwin GOARCH=arm64 go vet ./...           # the macOS build compiles and v
 | `--devtools` | Windows: enable the developer tools and the context menu in the WebView2 window. |
 | `--version` | Print the version and exit. |
 
-The development build prints one line, `LISTEN http://127.0.0.1:<port>/ TOKEN <token>`, and serves until it gets SIGINT or SIGTERM. Its volumes are the directories in `GRMOD_DEV_VOLUMES` (separated like `PATH`), and its folder picker "picks" `GRMOD_DEV_PICK`. `GRMOD_FIRMWARE_SITE` replaces the address of Ricoh's site (a local stand-in for tests), and the addresses the page asks to show in a browser are appended to the file named by `GRMOD_DEV_OPENED`. Neither variable is read by the Windows build.
+The development build prints one line, `LISTEN http://127.0.0.1:<port>/ TOKEN <token>`, and serves until it gets SIGINT or SIGTERM. Its volumes are the directories in `GRMOD_DEV_VOLUMES` (separated like `PATH`), and its folder picker "picks" `GRMOD_DEV_PICK`. `GRMOD_FIRMWARE_SITE` replaces the address of Ricoh's site (a local stand-in for tests), and the addresses the page asks to show in a browser are appended to the file named by `GRMOD_DEV_OPENED`. Neither variable is read by the Windows build. `GRMOD_UPDATE_SOURCE` (all builds) replaces the address the updater reads releases from; a release found there still needs the project's signature.
 
 Data directory contents: `log.txt` (rotated to `log.txt.1` above 1 MB; requests, paths and errors, never file contents or the token), `crash.txt` (trace of a Go runtime crash, normally empty), `port`, `store/`, and the browser profiles: `webview/` and `edge/` on Windows, `browser/` on macOS.
 
@@ -99,8 +99,9 @@ Errors are `{"error":{"code":"…","message":"…"}}`:
 | `exists` | 409 | Destination exists (`overwrite=0`, move), or a file is where a directory is needed |
 | `invalid` | 400 | Malformed request, wrong kind of file (a directory where a file is needed, …), cross-volume move, bad store key |
 | `invalid` | 405 / 409 / 501 | Wrong HTTP method / a folder dialog is already open / eject not implemented on this platform |
-| `busy` | 409 | A firmware download is already running |
-| `network` | 502 | Ricoh's site could not be reached, or what it sent was not what was expected |
+| `busy` | 409 | A firmware or update download is already running |
+| `network` | 502 | Ricoh's site or the release site could not be reached, or what it sent was not what was expected (also an update manifest whose signature does not verify) |
+| `mismatch` | 502 | A downloaded update does not match its signed manifest (it is discarded) |
 | `too-large` | 413 | More than 256 MiB (file read, file write, store value) or a JSON body over 1 MiB |
 | `io` | 500 | The operating system reported an error (medium write-protected, disk full, volume in use, …) |
 | `cancelled` | 499 | The upload broke off |
@@ -112,6 +113,7 @@ Details worth knowing:
 - **volumes**: removable drives, plus fixed drives on a USB, SD or MMC bus. With `all=1` also other fixed drives, marked `"removable":false`. The system drive and the drive that holds the data directory are never listed.
 - **store** keys match `^[a-z0-9][a-z0-9._-]{0,63}$`. Values are files named exactly like the key in `<data dir>/store/`. Because of that, keys that Windows would not treat as plain file names are refused on every platform: keys ending in a dot and the device names (`nul`, `con`, `aux`, `prn`, `com0`–`com9`, `lpt0`–`lpt9`, with or without an extension).
 - **firmware**: the page names a model and nothing else; the shell reads Ricoh's list of firmware downloads (`/english/support/download_digital.html`), follows the model's row to its page and takes the version, the release date and the link to the archive from there (`internal/ricoh`). Every request, including redirects, has to stay on `www.ricoh-imaging.co.jp` over HTTPS; the archive must be a zip holding exactly one `fwdc*.bin`, which is what the answer carries. Nothing is written to disk by the shell (the page keeps the file in the store). A release that does not name the model (the list has one row for the GR IV and the GR IV HDF) is not offered for it. Answers of the site are remembered for ten minutes. One download at a time; it stops when the page drops the request. Outgoing requests use the proxy from the usual environment variables, else, on Windows, the user's system proxy settings (a set-up script is not evaluated).
+- **update**: `GET /api/update/check` reads the release manifest and its signature (see the main README, "Updates") and answers the current and latest version, the notes, the size and whether this copy can replace itself (`canInstall`, else `reason`: `translocated`, `read-only`, `no-package`, `unsupported`), and once after an update `updatedFrom`. `POST /api/update/download` fetches and verifies the package and stages it next to the program; `GET /api/update/progress` reports the bytes; `POST /api/update/install` swaps the program and, after answering, closes the window and starts the new program. `POST /api/update/page` opens the release page.
 - **eject** (Windows) locks the volume, dismounts it and asks the drive to eject the medium. It fails with `io` and changes nothing if any file on the volume is still open. Only volumes of the default listing can be ejected.
 
 ## Security rules
@@ -120,7 +122,7 @@ Details worth knowing:
 - Every request must have `Host: 127.0.0.1:<port>` or `localhost:<port>` (this also covers the UI files and `/host.js`).
 - Every `/api/` request must carry the token; an `Origin` header, if present, must be `http://127.0.0.1:<port>` or `http://localhost:<port>`. No CORS headers are ever sent.
 - `/host.js` is refused when the browser says the request does not come from the page itself (`Sec-Fetch-Site` other than `same-origin`/`none`), and all responses carry `Cross-Origin-Resource-Policy: same-origin`, so another site cannot include the script to read the token.
-- The only outgoing connections are those of the firmware endpoints, to Ricoh's site, and they are made only when the page asks. The page cannot make the shell fetch or open any other address.
+- The only outgoing connections are those of the firmware endpoints, to Ricoh's site, and of the update endpoints, to the release site (GitHub); both are made only when the page asks. The page cannot make the shell fetch or open any other address. An update is installed only when its manifest carries the project's Ed25519 signature and the package matches it.
 - File access is confined to *allowed roots*, evaluated anew for every request: the roots of the volumes currently listed (with `all=1`), plus the folders returned by the folder picker during this run.
 - Paths are cleaned and checked before use (`internal/pathguard`):
   - must be absolute; `.` and `..` are resolved, `..` above the volume root is refused;
@@ -168,6 +170,7 @@ Nothing Windows-specific can be executed on the Linux build machine. Things to v
 9. Eject: afterwards Explorer shows the reader as empty or the drive as gone; with a file from the card open in another program it fails and the card stays usable.
 10. Paths: `\\?\E:\x`, `E:\x.`, `E:\x:stream`, `E:\..\..\Windows` and a junction on an NTFS volume pointing to `C:\Windows` are all refused with 403.
 11. Online firmware: the dialog shows version 1.11 with its date and size, the download ends with the firmware open (compare with a manual download: SHA-256 `a2f664df…5655f`), "cancel" during the download stops it, and the licence line opens Ricoh's page in the default browser. Repeat with a system proxy switched on (Settings > Network > Proxy), and offline (a message and "retry", no hang).
+12. Update: with a signed test release served locally (`set GRMOD_UPDATE_SOURCE=http://127.0.0.1:8000/` before starting), "Check for updates" offers it, "Update and restart" closes the window and a new one opens within a few seconds showing the new version and "Updated to …"; `GRMod.exe.old` is gone afterwards and `localStorage` is kept (same port). Also from a read-only folder (the dialog offers the download page instead) and in Edge app mode (`--browser`: the old Edge window closes).
 
 ## Checking the macOS build on a real Mac
 
@@ -181,3 +184,4 @@ Nothing macOS-specific can be executed on the Linux build machine either. Things
 6. Reveal: the Finder opens with the file selected, and opens a folder.
 7. Eject: the card disappears from the Finder; with a file from the card open in another program it fails and the card stays mounted.
 8. Online firmware works, also with a system proxy (System Settings › Network › Proxies) and offline.
+9. Update (with `GRMOD_UPDATE_SOURCE` pointing at a signed test release, started as `open "/Applications/GR Mod.app" --env GRMOD_UPDATE_SOURCE=…` or from Terminal): the old window closes, the new version opens without the "Open Anyway" step, `.GR Mod.app.old` disappears from /Applications. Started from the Downloads folder without moving it first, the dialog explains why it cannot update (translocation) and offers the download page.

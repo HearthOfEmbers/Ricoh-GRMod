@@ -421,3 +421,21 @@ button.fw-rel:disabled { cursor: default; }
 .seg-arrow { flex: none; width: 26px; height: 28px; padding: 0; justify-content: center; }
 .seg-arrow svg { width: 16px; height: 16px; }
 .seg-arrow:disabled { opacity: 0.35; }
+
+/* ---- updates of GR Mod itself */
+.upd-pill { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 8px 0 6px; border: 0; border-radius: 10px; background: var(--blue-bg); color: var(--blue); font-size: 11.5px; font-weight: 500; }
+.upd-pill:hover { background: var(--blue); color: #fff; }
+.upd-pill svg { width: 12px; height: 12px; }
+.dialog.update { width: 460px; }
+.upd-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 2px 0 12px; }
+.upd-ver { display: inline-flex; align-items: center; gap: 6px; font-size: 15px; }
+.upd-ver small { color: var(--muted); font-size: 13px; }
+.upd-ver svg { width: 14px; height: 14px; color: var(--faint); }
+.upd-ver b { color: var(--blue); }
+.upd-notes { max-height: 160px; overflow: auto; margin: 0 0 12px; padding: 10px 12px; border-radius: 8px; background: var(--chip); font-size: 13.5px; line-height: 1.55; white-space: pre-wrap; user-select: text; }
+.upd-note { margin: 0 0 14px; }
+.upd-latest { margin: 0 0 16px; font-size: 13.5px; color: var(--muted); }
+.upd-progress { display: grid; gap: 6px; margin: 0 0 14px; }
+.upd-bar { height: 4px; border-radius: 2px; background: var(--chip); overflow: hidden; }
+.upd-bar i { display: block; height: 100%; background: var(--blue); transition: width 0.25s linear; }
+.upd-auto { display: inline-flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--muted); cursor: pointer; }

@@ -50,6 +50,16 @@ type Options struct {
 	// real one.
 	FirmwareSite string
 
+	// Update configures the updater; nil disables the update endpoints'
+	// downloads (a check then reports "unsupported").
+	Update *UpdateOptions
+	// UpdatedFrom is the version this run was updated from, reported once to
+	// the page; empty normally.
+	UpdatedFrom string
+	// Restart is called (on its own goroutine) after an update has been
+	// installed: the shell closes its window and starts the new program.
+	Restart func()
+
 	// Flavor is the path syntax; nil selects the native one.
 	Flavor pathguard.Flavor
 	// MaxBytes overrides DefaultMaxBytes (used by tests).
@@ -71,6 +81,7 @@ type Server struct {
 	hostJS    []byte
 	chrome    chromeHandler
 	firmware  *firmwareSource
+	upd       *updateState
 	routes    map[string]route
 
 	pickedMu sync.Mutex
@@ -122,6 +133,7 @@ func New(opt Options) (*Server, error) {
 		origins:   map[string]bool{},
 		heartbeat: NewHeartbeat(opt.Now),
 		firmware:  newFirmwareSource(opt),
+		upd:       newUpdateState(opt),
 		rename:    renameFile,
 	}
 	port := strconv.Itoa(opt.Port)
@@ -159,6 +171,12 @@ func New(opt Options) (*Server, error) {
 		"/api/firmware/download": {http.MethodPost, s.handleFirmwareDownload},
 		"/api/firmware/progress": {http.MethodGet, s.handleFirmwareProgress},
 		"/api/firmware/page":     {http.MethodPost, s.handleFirmwarePage},
+
+		"/api/update/check":    {http.MethodGet, s.handleUpdateCheck},
+		"/api/update/download": {http.MethodPost, s.handleUpdateDownload},
+		"/api/update/progress": {http.MethodGet, s.handleUpdateProgress},
+		"/api/update/install":  {http.MethodPost, s.handleUpdateInstall},
+		"/api/update/page":     {http.MethodPost, s.handleUpdatePage},
 	}
 	return s, nil
 }

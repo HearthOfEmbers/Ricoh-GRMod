@@ -9,6 +9,17 @@ export interface ParkedFailure { path: string; error: string }
 /** The firmware update Ricoh's site currently offers for a model. `page` is the model's download page there. */
 export interface FirmwareRelease { model: string; name: string; applies: string; version: string; date: string; page: string; file: string; size: number }
 
+/** What GET /api/update/check reports. */
+export interface UpdateInfo {
+  current: string; latest?: string; available: boolean; date?: string; notes?: Record<string, string>; page?: string; size: number;
+  /** false: this copy cannot replace itself; `reason` says why (no-package, translocated, read-only, unsupported). */
+  canInstall: boolean; reason?: string;
+  /** Set once, in the first run after an update: the version it replaced. */
+  updatedFrom?: string;
+  /** The latest version has already been downloaded and checked. */
+  ready: boolean;
+}
+
 export class HostError extends Error {
   code: string;
   constructor(code: string, message: string) { super(message); this.code = code; }
@@ -90,6 +101,13 @@ export const host = {
   async firmwareProgress(): Promise<{ active: boolean; received: number; total: number }> { return (await call('GET', '/api/firmware/progress')).json(); },
   /** Show the model's download page (with Ricoh's licence terms) in the browser. */
   async firmwarePage(model: string): Promise<void> { try { await post('/api/firmware/page', { model }); } catch { /* no browser */ } },
+  // ---- updates of GR Mod itself (see shell/internal/update)
+  async updateCheck(): Promise<UpdateInfo> { return (await call('GET', '/api/update/check')).json(); },
+  async updateDownload(signal?: AbortSignal): Promise<void> { await call('POST', '/api/update/download', '{}', true, signal); },
+  async updateProgress(): Promise<{ active: boolean; received: number; total: number }> { return (await call('GET', '/api/update/progress')).json(); },
+  /** Replaces the program and restarts it; the window closes shortly after this returns. */
+  async updateInstall(): Promise<void> { await call('POST', '/api/update/install', '{}'); },
+  async updatePage(): Promise<void> { try { await post('/api/update/page', {}); } catch { /* no browser */ } },
   /** A file the user may keep next to the program (e.g. `preview.jpg`); null when there is none. */
   async sidecar(name: string): Promise<Uint8Array | null> {
     try { return new Uint8Array(await (await call('GET', '/api/sidecar/' + name)).arrayBuffer()); }
