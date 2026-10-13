@@ -354,6 +354,8 @@ export function installExtraSlots(p: Patch, iconbin: Uint8Array, slots: readonly
   installPreviewMapping(p, count);
   installChangeFunctors(p, count);
   installLookChecks(p, count);
+  installRawDevelopment(p, count);
+  installPictureInfo(p, count);
   return concat(parts);
 }
 
@@ -576,6 +578,121 @@ function installPreviewMapping(p: Patch, count: number): void {
     const code = p.append((a) => [GENERATOR_WORD.word, ...assembleWords(`push {r2};${byte(8)}${byte(16)}${byte(24)}pop {r2};b #${at + 4}`, a + 4)], 4);
     p.setWord(at, branchWord(at, code), 'added slots: live-view parameters of Cinema Yellow');
   }
+}
+
+// -------------------------------------------------------------- RAW development
+
+/** RAW development's number of Cinema Yellow (its numbering: 0 = as shot, 1..20 the factory looks). */
+const RAW_CY = 9;
+const RAW_FIRST_EXTRA = 21;
+/** The functions of RawDevelopmentModel.cpp that read or write a look's parameters. */
+const RAW_MODEL = [0x5336c000, 0x53373400] as const;
+/** `ldrb r2,[r3,#0x9d]` (the look of the selected custom base), always followed by `cmp r2,#0`. */
+const RAW_LOOK_LOAD = 0xe5d3209d;
+const RAW_LOOK_SITES = 72;
+
+/**
+ * In-camera RAW development keeps its own copy of the parameters: per custom base (4) and look
+ * (0..20) 18 bytes, and a table (0x53DBB8F0) of which parameters each look has. Every function
+ * that reads or writes them first turns the look into a row with a loop over 1..20, so an added
+ * look (21, ...) got row 0, whose parameters are all "absent": the parameter screen showed -4
+ * everywhere and developing stopped the camera (reported on 0.7.0). The added looks now use
+ * Cinema Yellow's row, as the shooting side does with Cinema Yellow's fields; the look itself
+ * (name, icon, the style given to development) stays the added one.
+ */
+function installRawDevelopment(p: Patch, count: number): void {
+  const map = (r: string): string => `sub ${r},${r},#${RAW_FIRST_EXTRA};cmp ${r},#${count};movlo ${r},#${RAW_CY};addhs ${r},${r},#${RAW_FIRST_EXTRA}`;
+  const sites: number[] = [];
+  for (let at = RAW_MODEL[0]; at < RAW_MODEL[1]; at += 4) {
+    if (p.word(at) !== RAW_LOOK_LOAD) continue;
+    // Only the loads that pick a row: the loaded look is compared with r3 by the 1..20 loop.
+    let row = false;
+    for (let k = 1; k < 30 && !row; k++) {
+      if (p.word(at + 4 * k) !== 0xe1520003) continue; // cmp r2,r3
+      for (let j = 1; j < 6; j++) if (p.word(at + 4 * (k + j)) === 0xe3530015) row = true; // cmp r3,#21
+    }
+    if (!row) continue;
+    if (p.word(at + 4) !== 0xe3520000) fail('unexpected-layout', `RAW development: load at 0x${at.toString(16)} is not followed by cmp r2,#0`);
+    sites.push(at);
+  }
+  if (sites.length !== RAW_LOOK_SITES) fail('unexpected-layout', `RAW development: ${sites.length} look loads, expected ${RAW_LOOK_SITES}`);
+  for (const at of sites) {
+    const code = p.append((a) => [RAW_LOOK_LOAD, ...assembleWords(`${map('r2')};b #${at + 4}`, a + 4)], 4);
+    p.setWord(at, branchWord(at, code), 'added slots: RAW development parameters of Cinema Yellow');
+  }
+  // Opening a RAW file copies the parameters it was shot with into the row of its look.
+  hook(p, 0x53374e98, 0xe3500000, `${map('r0')};cmp r0,#0;b #0x53374e9c`, 'added slots: RAW development parameters as shot');
+}
+
+// -------------------------------------------------------------- picture information
+
+/**
+ * The picture's look as written in the maker note (Pentax "ImageTone"): 0x100.. and 0x8100..
+ * for the factory looks; the added ones get 0x8110, 0x8111, ... (before, anything unknown was
+ * written as 0x100, Standard).
+ */
+export const EXTRA_TONE_CODE = 0x8110;
+/** Playback's own numbering of the looks (0x53DBDA18: 1..20); the added ones are 21, ... */
+const PLAY_FIRST_EXTRA = 21;
+/** Static init of the "looks that have parameter X" lists the maker note writers consult. */
+const PARAM_LISTS = [0x537e0e94, 0x537e117c] as const;
+const LIST_ASSIGN = 0x537da700;
+const PARAM_LISTS_CALLS = 18;
+const PARAM_LISTS_WITH_CY = 7;
+
+/**
+ * Pictures shot with an added look:
+ *  - the maker note names the look (0x537DE474 looked it up in a list of the factory looks and
+ *    wrote Standard otherwise), and has the parameters of Cinema Yellow (each parameter's writer
+ *    looks the style up in a list of the looks that have it; the added looks join every list
+ *    Cinema Yellow is in);
+ *  - reading it back: the record of a RAW file for development (0x537D5748) and playback's
+ *    information (0x537D899C, then 0x533A3804 to a style) know the new codes, so the playback
+ *    information shows the slot's icon (through the overlay hook) and Cinema Yellow's
+ *    parameters (0x533A75AC picks them by style), and RAW development starts from the look the
+ *    picture was shot with. A code of a slot that is no longer installed reads as Standard, as
+ *    before.
+ */
+function installPictureInfo(p: Patch, count: number): void {
+  const n = count - 1;
+  // Writer: r1 the maker note, r2 the frame record; tail-calls 0x537E7148(note, 0, code).
+  hook(p, 0x537de474, 0xe30f3198, `ldrb ip,[r2,#0x79c];sub ip,ip,#${EXTRA_FIRST_STYLE};cmp ip,#${n};bhi native;mov r0,r1;mov r1,#0;movw r2,#${EXTRA_TONE_CODE};add r2,r2,ip;b #0x537e7148;native:movw r3,#0xf198;b #0x537de478`, 'added slots: maker note look');
+  // Parameter lists: the ones with Cinema Yellow get the added styles appended (new copies).
+  const calls: number[] = [];
+  for (let at = PARAM_LISTS[0]; at < PARAM_LISTS[1]; at += 4) if (p.word(at) === branchWord(at, LIST_ASSIGN, 14, true) || p.word(at) === branchWord(at, LIST_ASSIGN)) calls.push(at);
+  if (calls.length !== PARAM_LISTS_CALLS) fail('unexpected-layout', `maker note parameter lists: ${calls.length} lists, expected ${PARAM_LISTS_CALLS}`);
+  let extended = 0;
+  for (const call of calls) {
+    let lo = 0, hi = 0, add = 0;
+    for (let k = 1; k < 14; k++) {
+      const at = call - 4 * k;
+      const w = p.word(at);
+      if (!lo && ((w & 0xfff0f000) >>> 0) === 0xe3001000) lo = at; // movw r1,#
+      if (!hi && ((w & 0xfff0f000) >>> 0) === 0xe3401000) hi = at; // movt r1,#
+      if (!add && ((w & 0xfffff000) >>> 0) === 0xe2812000) add = at; // add r2,r1,#
+    }
+    if (!lo || !hi || !add) fail('unexpected-layout', `maker note parameter list at 0x${call.toString(16)}`);
+    const list = (movImmediate(p.word(lo)) | (movImmediate(p.word(hi)) << 16)) >>> 0;
+    const length = p.word(add) & 0xff;
+    if ((p.word(add) & 0xf00) !== 0) fail('unexpected-layout', `maker note parameter list at 0x${call.toString(16)}: length`);
+    const styles = p.readMapped(list, length);
+    if (styles.some((s) => s >= EXTRA_FIRST_STYLE)) fail('unexpected-layout', 'maker note parameter list already has added styles');
+    if (!styles.includes(CY)) continue;
+    const grown = concat([styles, Uint8Array.from({ length: count }, (_, i) => EXTRA_FIRST_STYLE + i)]);
+    const at = p.append(grown, 4);
+    p.setWord(lo, movWord(1, at & 65535), 'added slots: maker note parameters of Cinema Yellow');
+    p.setWord(hi, movWord(1, at >>> 16, true), 'added slots: maker note parameters of Cinema Yellow');
+    p.setWord(add, assembleWords(`add r2,r1,#${grown.length}`, add)[0], 'added slots: maker note parameters of Cinema Yellow');
+    extended++;
+  }
+  if (extended !== PARAM_LISTS_WITH_CY) fail('unexpected-layout', `maker note parameter lists: ${extended} with Cinema Yellow, expected ${PARAM_LISTS_WITH_CY}`);
+  // Readers: RAW development's record, then playback's numbering and its style.
+  hook(p, 0x537d575c, 0xe300310a, `sub r3,r0,#${EXTRA_TONE_CODE & 0xff00};sub r3,r3,#${EXTRA_TONE_CODE & 0xff};cmp r3,#${n};bhi native;add r3,r3,#${EXTRA_FIRST_STYLE};b #0x537d57ac;native:movw r3,#0x10a;b #0x537d5760`, 'added slots: look of a RAW file');
+  hook(p, 0x537d89b0, 0xe3003109, `sub r3,r0,#${EXTRA_TONE_CODE & 0xff00};sub r3,r3,#${EXTRA_TONE_CODE & 0xff};cmp r3,#${n};bhi native;add r2,r3,#${PLAY_FIRST_EXTRA};b #0x537d8a00;native:movw r3,#0x109;b #0x537d89b4`, 'added slots: playback look');
+  // 0x533A3804: r0 = number - 1, r4 = where the style goes (may be null).
+  hook(p, 0x533a3824, 0xe3500013, `sub r3,r0,#${PLAY_FIRST_EXTRA - 1};cmp r3,#${n};bhi native;cmp r4,#0;beq #0x533a3854;add r3,r3,#${EXTRA_FIRST_STYLE};strb r3,[r4];b #0x533a3844;native:cmp r0,#0x13;b #0x533a3828`, 'added slots: playback look');
+  // Playback information's parameters: r3 = style - 8, the added looks as Cinema Yellow (10).
+  hook(p, 0x533a7628, 0xe3530016, `cmp r3,#${EXTRA_FIRST_STYLE - 8};blo native;cmp r3,#${EXTRA_FIRST_STYLE - 8 + count};movlo r3,#${CY - 8};native:cmp r3,#0x16;b #0x533a762c`, 'added slots: playback parameters of Cinema Yellow');
 }
 
 // -------------------------------------------------------------- reading them back
