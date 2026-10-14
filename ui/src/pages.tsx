@@ -314,7 +314,7 @@ function HalationProp({ x }: { x: ExtraSlot }) {
             </>
           )}
         </div>
-        <span className="muted small halo-note">{t(h.on ? 'haloNote' : 'halationSub')}</span>
+        <span className="muted small halo-note">{t('halationSub')}</span>
       </div>
     </Prop>
   );

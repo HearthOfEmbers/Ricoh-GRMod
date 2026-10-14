@@ -33,6 +33,7 @@ export const TOURS: Record<TourId, Step[]> = {
     step('export', 'OvExport', 'top'),
     step('write', 'OvWrite', 'top'),
     step('help', 'OvHelp'),
+    step('version', 'OvVersion'),
   ],
   ic: [
     step('ic-stock', 'IcStock', 'bottom'),

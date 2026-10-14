@@ -212,11 +212,16 @@ export function halationScale(native: Uint8Array): Uint8Array {
   return render(400, 60, marks, base);
 }
 
-/** The name of the parameter, per camera language (21; see build.ts). */
+/**
+ * The name of the parameter, per row of the text catalog (21; see build.ts): 0 Japanese, 1 English,
+ * 2 French, 3 German, 4 Spanish, 5 Portuguese, 6 Italian, 7 Dutch, 8 Danish, 9 Swedish, 10 Finnish,
+ * 11 Polish, 12 Czech, 13 Hungarian, 14 Turkish, 15 Greek, 16 Russian, 17 Korean, 18 Traditional
+ * Chinese, 19 Simplified Chinese, 20 Thai (as the rows hold "OK" / "Toning").
+ */
 export const HALATION_NAMES: readonly string[] = [
-  'Halation', 'Halation', 'Halation', 'Halation', 'Halation', 'Halation', 'Halation', 'Halation', 'Halation',
-  'ハレーション', '할레이션', 'Halation', 'Halation', 'Halation', 'Halation', '光晕', 'Halation', 'Halation', 'Halation',
-  '光暈', 'Halation',
+  'ハレーション', 'Halation', 'Halation', 'Halation', 'Halation', 'Halation', 'Halation', 'Halation', 'Halation',
+  'Halation', 'Halation', 'Halation', 'Halation', 'Halation', 'Halation', 'Halation', 'Ореол', '할레이션', '光暈',
+  '光晕', 'Halation',
 ];
 
 // -------------------------------------------------------------------------------- preview

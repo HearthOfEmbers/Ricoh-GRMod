@@ -147,6 +147,16 @@ describe.skipIf(!have)('added slots: firmware files', () => {
     const icons = secs.find((x) => x.name === 'ICONBIN')!;
     const back = aspect.readExtraSlots(d.slice(rtos.offset, rtos.offset + rtos.size), d.subarray(icons.offset, icons.offset + icons.size), 3)!;
     expect(back.map((x) => x.halation)).toEqual([true, undefined, true]);
+    // the parameter's name in the camera's languages (rows of the text catalog: 0 Japanese, 1 English, 19 Simplified Chinese)
+    const r = d.subarray(rtos.offset, rtos.offset + rtos.size);
+    const word = (va: number): number => new DataView(r.buffer, r.byteOffset).getUint32(va - 0x53000000, true);
+    const text = (row: number, id: number): string => {
+      const desc = word(word(aspect.TEXT_CATALOG + row * 4) + id * 4);
+      const units = r[desc - 0x53000000];
+      const at = word(desc + 4) - 0x53000000;
+      return String.fromCharCode(...Array.from({ length: units - 1 }, (_, i) => r[at + 2 * i] | (r[at + 2 * i + 1] << 8)));
+    };
+    expect([text(0, 852), text(1, 852), text(18, 852), text(19, 852), text(19, 339)]).toEqual(['ハレーション', 'Halation', '光暈', '光晕', '色调']);
     const other = await eng.buildFirmware([], [], [], { dateStamp: true, extraSlots: [slots[0], slots[1], { ...slots[2], halation: false }] });
     expect(other.sha256).not.toBe(b.sha256);
     expect((await eng.inspect(other.file)).verified).toBe(true);

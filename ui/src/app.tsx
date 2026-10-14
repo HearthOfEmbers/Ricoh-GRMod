@@ -41,7 +41,7 @@ function Sidebar() {
         />
       </div>
       <div className="side-foot">
-        <button className="about-link" title={t('wnTitle')} onClick={() => openWhatsNew()}>v{host.info?.version || ''}</button>
+        <button className="about-link" data-tour="version" title={t('wnTitle')} onClick={() => openWhatsNew()}>v{host.info?.version || ''}</button>
         <UpdatePill />
         <span className="grow" />
         <HelpMenu />
