@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from 'react';
-import { card, DEFAULT_HALATION, LANGS, MAX_CUSTOM_RATIOS, MAX_EXTRA_SLOTS, validateExtraSlotName, validateHalation, validateRatioName } from '@grmod/core';
-import type { CameraModel, ClarityChange, ExtraSlotSpec, FirmwareInfo, HalationSpec, FirmwareSummary, LangCode, PresetResult, RatioPreview, RatioSpec, SlotId, SlotRequest, SoftFocusRequest, SoftFocusStrength } from '@grmod/core';
+import { card, LANGS, MAX_CUSTOM_RATIOS, MAX_EXTRA_SLOTS, validateExtraSlotName, validateRatioName } from '@grmod/core';
+import type { CameraModel, ClarityChange, ExtraSlotSpec, FirmwareInfo, FirmwareSummary, LangCode, PresetResult, RatioPreview, RatioSpec, SlotId, SlotRequest, SoftFocusRequest, SoftFocusStrength } from '@grmod/core';
 import { engine, EngineError } from './engine';
 import { host, HostError, sha256Hex } from './host';
 import type { ParkedEntry, Volume } from './host';
@@ -21,8 +21,8 @@ export interface SlotState { preset?: PresetState; names: Partial<Record<LangCod
  * An added Image Control slot (style 34, 35, ... in the camera): `key` is `x-` and a random id;
  * `name` as typed (empty: the default name of its place), one name for every language.
  */
-/** An added slot's halation: on, the settings, and which level the preview shows (0 = off). */
-export interface HalationState extends HalationSpec { on: boolean; preview: 0 | 1 | 2 }
+/** An added slot's halation (the fixed CineStill 800T look): on, and which level the preview shows (0 = off). */
+export interface HalationState { on: boolean; preview: 0 | 1 | 2 }
 export interface ExtraSlot { key: string; name: string; preset?: PresetState; icon: IconState; halation?: HalationState }
 /** A factory Cinema slot (`CY`, `CG`) or the key of an added slot. */
 export type SlotKey = SlotId | string;
@@ -356,24 +356,19 @@ export function extraSpecs(s: State = state): ExtraSlotSpec[] {
   if (s.model === 'MONO') return [];
   return s.extras.map((x) => {
     const r = x.preset!.result!;
-    return { name: extraName(x, s), matrixQ13: r.matrixQ13, curves: r.curves, ...(r.postQ9 ? { postQ9: r.postQ9 } : {}), icon: x.icon.pixels!, ...(x.halation?.on ? { halation: halationSpec(x.halation) } : {}) };
+    return { name: extraName(x, s), matrixQ13: r.matrixQ13, curves: r.curves, ...(r.postQ9 ? { postQ9: r.postQ9 } : {}), icon: x.icon.pixels!, ...(x.halation?.on ? { halation: true } : {}) };
   });
 }
 
 // ------------------------------------------------------------------ halation of an added slot
-function halationSpec(h: HalationState): HalationSpec {
-  return { threshold: h.threshold, radius: h.radius, weak: h.weak, strong: h.strong, color: [h.color[0], h.color[1], h.color[2]], luminance: h.luminance };
-}
-/** A halation read from a saved project, or null when it is not one. */
+/** A halation read from a saved project (older ones also kept the settings, now fixed), or null. */
 function validHalation(v: unknown): HalationState | null {
   if (!v || typeof v !== 'object') return null;
   const h = v as Partial<HalationState>;
-  const spec = { ...DEFAULT_HALATION, ...h, color: Array.isArray(h.color) ? [h.color[0], h.color[1], h.color[2]] as [number, number, number] : DEFAULT_HALATION.color };
-  if (validateHalation(spec)) return null;
-  return { ...halationSpec(spec as HalationState), on: h.on === true, preview: h.preview === 1 || h.preview === 2 ? h.preview : 0 };
+  return { on: h.on === true, preview: h.preview === 1 || h.preview === 2 ? h.preview : 0 };
 }
 export function halationOf(x: ExtraSlot): HalationState {
-  return x.halation ?? { ...DEFAULT_HALATION, color: [...DEFAULT_HALATION.color] as [number, number, number], on: false, preview: 2 };
+  return x.halation ?? { on: false, preview: 2 };
 }
 /** Change an added slot's halation (switching it on shows the strong level in the preview). */
 export function setHalation(key: string, patch: Partial<HalationState>): void {
@@ -381,14 +376,9 @@ export function setHalation(key: string, patch: Partial<HalationState>): void {
     if (x.key !== key) return x;
     const next = { ...halationOf(x), ...patch };
     if (patch.on === true && !x.halation?.on) next.preview = 2;
-    return validateHalation(halationSpec(next)) ? x : { ...x, halation: next };
+    return { ...x, halation: next };
   }) }));
   scheduleSave();
-}
-export function resetHalation(key: string): void {
-  const x = state.extras.find((e) => e.key === key);
-  if (!x) return;
-  setHalation(key, { ...DEFAULT_HALATION, color: [...DEFAULT_HALATION.color] as [number, number, number] });
 }
 export function addExtraSlot(): void {
   if (state.extras.length >= MAX_EXTRA_SLOTS) { toast(t('extraMax', { n: MAX_EXTRA_SLOTS }), 'info'); return; }

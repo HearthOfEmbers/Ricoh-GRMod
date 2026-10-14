@@ -433,6 +433,29 @@ button.fw-rel:disabled { cursor: default; }
 .upd-ver svg { width: 14px; height: 14px; color: var(--faint); }
 .upd-ver b { color: var(--blue); }
 .upd-notes { max-height: 160px; overflow: auto; margin: 0 0 12px; padding: 10px 12px; border-radius: 8px; background: var(--chip); font-size: 13.5px; line-height: 1.55; white-space: pre-wrap; user-select: text; }
+/* what's new: release text of GR Mod */
+.dialog.whatsnew { width: 560px; max-width: calc(100vw - 48px); display: flex; flex-direction: column; max-height: calc(100vh - 64px); }
+.dialog.whatsnew h3 small { font-weight: 400; font-size: 13px; margin-left: 6px; }
+.wn-versions { display: flex; gap: 6px; overflow-x: auto; padding: 2px 0 8px; margin-bottom: 4px; scrollbar-width: thin; }
+.wn-versions button { flex: none; border: 1px solid var(--line); background: none; color: var(--muted); border-radius: 999px; padding: 4px 10px; font-size: 12.5px; display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.wn-versions button.on { background: var(--chip); color: var(--text); border-color: transparent; font-weight: 600; }
+.wn-cur { font-size: 10.5px; font-weight: 600; color: var(--blue); }
+.wn-date { margin: 0 0 6px; }
+.wn-body { flex: 1 1 auto; min-height: 120px; max-height: 52vh; overflow: auto; padding: 4px 14px 8px; margin: 0 0 10px; border-radius: 8px; background: var(--chip); user-select: text; }
+.upd-full { max-height: 260px; min-height: 0; }
+.wn-about { margin: 0 0 4px; line-height: 1.5; }
+.md { font-size: 13.5px; line-height: 1.6; }
+.md h4 { font-size: 14.5px; margin: 14px 0 4px; }
+.md h5 { font-size: 13.5px; margin: 10px 0 2px; }
+.md p { margin: 6px 0; }
+.md ul, .md ol { margin: 4px 0 6px; padding-left: 20px; }
+.md li { margin: 2px 0; }
+.md code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; padding: 1px 4px; border-radius: 4px; background: var(--bg, rgba(127,127,127,.15)); word-break: break-all; }
+.md a { color: var(--blue); text-decoration: none; }
+.md table { border-collapse: collapse; margin: 6px 0 8px; font-size: 12.5px; }
+.md th, .md td { border-bottom: 1px solid var(--line); padding: 3px 12px 3px 0; text-align: left; font-variant-numeric: tabular-nums; }
+.md th { color: var(--muted); font-weight: 600; }
+.md blockquote { margin: 6px 0; padding-left: 10px; border-left: 3px solid var(--line); color: var(--muted); }
 .upd-note { margin: 0 0 14px; }
 .upd-latest { margin: 0 0 16px; font-size: 13.5px; color: var(--muted); }
 .upd-progress { display: grid; gap: 6px; margin: 0 0 14px; }
@@ -444,10 +467,3 @@ button.fw-rel:disabled { cursor: default; }
 .halo { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .halo .chips { align-items: center; }
 .halo-note { line-height: 1.35; }
-.halo-grid { display: flex; flex-direction: column; gap: 4px; margin-top: 2px; }
-.halo-row { display: grid; grid-template-columns: 76px minmax(0, 1fr) 52px; align-items: center; gap: 8px; }
-.halo-row input[type="range"] { width: 100%; accent-color: var(--blue); }
-.halo-row input[type="color"] { width: 36px; height: 22px; padding: 0; border: 1px solid var(--line, #444); border-radius: 4px; background: none; }
-.halo-row .btn { justify-self: end; grid-column: 2 / 4; }
-.halo-row input[type="color"] + .btn { grid-column: 3; white-space: nowrap; }
-.halo-val { text-align: right; font-variant-numeric: tabular-nums; }

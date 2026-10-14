@@ -137,8 +137,7 @@ describe.skipIf(!have)('added slots: firmware files', () => {
 
   it('halation: built for the slots that have it (with the date imprint), read back, a change gives another file', async () => {
     const eng = await Engine.open(raw());
-    const h = { ...aspect.DEFAULT_HALATION, color: [255, 40, 0] as [number, number, number] };
-    const slots = [{ ...slotSpec(eng, 0), halation: h }, slotSpec(eng, 1), { ...slotSpec(eng, 2), halation: { ...h, radius: 12, strong: 150 } }];
+    const slots = [{ ...slotSpec(eng, 0), halation: true }, slotSpec(eng, 1), { ...slotSpec(eng, 2), halation: true }];
     const b = await eng.buildFirmware([], [], [], { dateStamp: true, extraSlots: slots });
     expect(Object.values(b.checks).every((v) => v === true)).toBe(true);
     expect((await eng.inspect(b.file)).verified).toBe(true);
@@ -147,15 +146,38 @@ describe.skipIf(!have)('added slots: firmware files', () => {
     const rtos = secs.find((x) => x.name === 'RTOS')!;
     const icons = secs.find((x) => x.name === 'ICONBIN')!;
     const back = aspect.readExtraSlots(d.slice(rtos.offset, rtos.offset + rtos.size), d.subarray(icons.offset, icons.offset + icons.size), 3)!;
-    expect(back[0].halation).toEqual(h);
-    expect(back[1].halation).toBeUndefined();
-    expect(back[2].halation).toEqual({ ...h, radius: 12, strong: 150 });
-    const other = await eng.buildFirmware([], [], [], { dateStamp: true, extraSlots: [slots[0], slots[1], { ...slots[2], halation: { ...h, radius: 13 } }] });
+    expect(back.map((x) => x.halation)).toEqual([true, undefined, true]);
+    const other = await eng.buildFirmware([], [], [], { dateStamp: true, extraSlots: [slots[0], slots[1], { ...slots[2], halation: false }] });
     expect(other.sha256).not.toBe(b.sha256);
     expect((await eng.inspect(other.file)).verified).toBe(true);
-    expect(aspect.validateHalation({ ...h, threshold: 255 })).toBe('threshold');
-    expect(aspect.validateHalation({ ...h, radius: 0 })).toBe('radius');
+    const none = await eng.buildFirmware([], [], [], { extraSlots: [slotSpec(eng, 0)] });
+    const plain = await eng.buildFirmware([], [], [], { extraSlots: [{ ...slotSpec(eng, 0), halation: false }] });
+    expect(plain.sha256).toBe(none.sha256);
   }, 120_000);
+
+  it('halation preview: the fixed look lifts red first and leaves dark pictures alone', () => {
+    const w = 400, h = 300;
+    const img = (light: boolean): Uint8ClampedArray => {
+      const d = new Uint8ClampedArray(w * h * 4);
+      for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+        const i = (y * w + x) * 4, on = light && Math.hypot(x - 200, y - 150) < 6;
+        d.set(on ? [255, 255, 255, 255] : [30, 30, 30, 255], i);
+      }
+      return d;
+    };
+    const dark = img(false);
+    aspect.halateRgba(dark, w, h, 2);
+    expect(Array.from(dark.slice(0, 4))).toEqual([30, 30, 30, 255]);
+    const weak = img(true), strong = img(true);
+    aspect.halateRgba(weak, w, h, 1);
+    aspect.halateRgba(strong, w, h, 2);
+    const at = (d: Uint8ClampedArray, x: number, y: number): number[] => Array.from(d.slice((y * w + x) * 4, (y * w + x) * 4 + 3));
+    const [r, g, b] = at(strong, 212, 150);
+    expect(r).toBeGreaterThan(g + 40);
+    expect(g).toBeGreaterThanOrEqual(b - 2);
+    expect(at(strong, 212, 150)[0]).toBeGreaterThan(at(weak, 212, 150)[0]);
+    expect(at(strong, 390, 10)).toEqual([30, 30, 30]);
+  });
 
   it('refuses more than six slots, bad names and bad colour data', async () => {
     const eng = await Engine.open(raw());
@@ -173,7 +195,7 @@ describe.skipIf(!have)('added slots: firmware files', () => {
     expect(await err([{ ...s, matrixQ13: [8192, 1, 0, 0, 8192, 0, 0, 0, 8192] }])).toBe('bad-color');
     expect(await err([{ ...s, postQ9: [512, 1, 0, 0, 512, 0, 0, 0, 512] }])).toBe('bad-color');
     expect(await err([{ ...s, icon: new Uint8Array(10) }])).toBe('bad-icon');
-    expect(await err([{ ...s, halation: { ...aspect.DEFAULT_HALATION, weak: 300 } }])).toBe('bad-halation');
+    expect(await err([{ ...s, halation: {} as unknown as boolean }])).toBe('bad-halation');
     expect(code(() => aspect.validateExtraSlotName('x'))).toBe('no error');
   }, 120_000);
 });

@@ -34,8 +34,7 @@ import { assembleWords, branchTarget, branchWord, movImmediate, movWord } from '
 import { BASE, ICON_CATALOG, LOOKUP_BOUNDS, OFFICIAL_RTOS_LENGTH, Patch, TEXT_CATALOG, concat, expectWord, u16le, u32le, utf16z } from './build';
 import { linkModule } from './native-link';
 import { SLOT_PARAMETERS, SLOT_PARAMS_MODULE } from './slotparams-native';
-import { HALATION_NAMES, halationIcon, halationScale, installHalationModule, readHalation, validateHalation } from './halation';
-import type { HalationSpec } from './halation';
+import { HALATION_NAMES, halationIcon, halationScale, installHalationModule, readHalation } from './halation';
 import { FirmwareError } from '../types';
 
 export const MAX_EXTRA_SLOTS = 6;
@@ -60,8 +59,8 @@ export interface ExtraSlotSpec {
   postQ9?: ArrayLike<number>;
   /** 40x40 RGBA. Fully transparent pixels stay transparent, others are made opaque. */
   icon: Uint8Array;
-  /** Halation for the slot's "Halation" levels (the slider of Cinema's Toning); absent = none. */
-  halation?: HalationSpec;
+  /** Halation (CineStill 800T, fixed look) for the slot's "Halation" levels Off / Weak / Strong (the slider of Cinema's Toning); absent or false = none. */
+  halation?: boolean;
 }
 
 /** Text of the parameter name "Halation", icon of its list entry and of its slider scale. */
@@ -269,7 +268,7 @@ export function installExtraSlots(p: Patch, iconbin: Uint8Array, slots: readonly
     if (!s.curves || s.curves.length !== 3) fail('bad-color', `added slot ${k + 1}: curves must be [R, G, B]`);
     const cBytes = s.curves.map((c) => curveBytes(k, c));
     if (s.postQ9 !== undefined) checkPost(k, s.postQ9);
-    if (s.halation !== undefined && validateHalation(s.halation)) fail('bad-halation', `added slot ${k + 1}: halation ${validateHalation(s.halation)}`);
+    if (s.halation !== undefined && typeof s.halation !== 'boolean') fail('bad-halation', `added slot ${k + 1}: halation is on or off`);
     const icon = iconBytes(k, s.icon);
 
     const matrix = p.append(mBytes, 4);
@@ -336,7 +335,7 @@ export function installExtraSlots(p: Patch, iconbin: Uint8Array, slots: readonly
   // The common input fields (grain among them) are read as for Cinema Yellow; only the local
   // dispatch register changes, the frame's style and the table index stay the new ones. With
   // halation, the frame's style and Toning (halation) level are also left for the JPEG step.
-  const halation = slots.some((s) => s.halation !== undefined);
+  const halation = slots.some((s) => s.halation === true);
   const stash = halation
     ? `push {r0,r1};ldrb r0,[r3,#0x79c];ldrb r1,[r3,#0x7a6];orr r0,r0,r1,lsl #8;orr r0,r0,#0x10000;movw r1,#${HALATION_STASH & 65535};movt r1,#${HALATION_STASH >>> 16};str r0,[r1];pop {r0,r1};`
     : '';
@@ -402,7 +401,7 @@ export function installExtraSlots(p: Patch, iconbin: Uint8Array, slots: readonly
     }
     for (const [site, r] of LOOKUP_BOUNDS) p.setWord(site, movWord(r, Math.max(HALATION_SCALE_ICON_ID, movImmediate(p.word(site)))), 'icon upper bound');
     installHalationScreens(p, count);
-    installHalationModule(p, slots.map((s) => s.halation), EXTRA_FIRST_STYLE, HALATION_STASH);
+    installHalationModule(p, slots.map((s) => s.halation === true), EXTRA_FIRST_STYLE, HALATION_STASH);
   }
   return concat(parts);
 }
@@ -835,7 +834,7 @@ export function readExtraSlots(rtos: Uint8Array, iconbin: Uint8Array, count: num
       out.push({ name, matrixQ13, curves, ...(postQ9 ? { postQ9 } : {}), icon });
     }
     const halation = readHalation(p, count);
-    if (halation) halation.forEach((h, k) => { if (h) out[k].halation = h; });
+    if (halation) halation.forEach((h, k) => { if (h) out[k].halation = true; });
     return out;
   } catch {
     return null;

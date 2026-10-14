@@ -23,6 +23,12 @@ var updateSources = []string{
 	"https://github.com/Maxwooow/Ricoh-GRMod/releases/latest/download/",
 }
 
+// releaseNotesAPI lists the published releases with their text (what's new).
+const releaseNotesAPI = "https://api.github.com/repos/Maxwooow/Ricoh-GRMod/releases?per_page=30"
+
+// envReleaseNotes replaces releaseNotesAPI together with envUpdateSource (testing).
+const envReleaseNotes = "GRMOD_RELEASE_NOTES"
+
 // envUpdateSource replaces updateSources (testing an update before it is
 // published). The signature is still required, so this cannot be used to
 // install anything not signed with the project's key.
@@ -66,11 +72,14 @@ func updateOptions(target update.Target) *server.UpdateOptions {
 	if err != nil {
 		return nil
 	}
-	sources, latest := updateSources, server.DefaultReleasePage
+	sources, latest, notes := updateSources, server.DefaultReleasePage, releaseNotesAPI
 	if s := strings.TrimSpace(os.Getenv(envUpdateSource)); s != "" {
 		sources, latest = []string{s}, ""
+		if n := strings.TrimSpace(os.Getenv(envReleaseNotes)); n != "" {
+			notes = n
+		}
 	}
-	return &server.UpdateOptions{Key: key, Sources: sources, Platform: updatePlatform(), Target: target, LatestPage: latest}
+	return &server.UpdateOptions{Key: key, Sources: sources, Platform: updatePlatform(), Target: target, LatestPage: latest, ReleaseNotes: notes}
 }
 
 // afterUpdate runs at the start of the program an update has launched: it

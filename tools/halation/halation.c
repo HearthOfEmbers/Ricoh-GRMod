@@ -5,15 +5,20 @@
  * Called at the start of JpegEncodeMacroProcess::Execute with the process configuration, like the
  * date imprint (tools/datestamp/datestamp.c), before it. The configuration lists the YCbCr 4:2:2
  * pictures the JPEG encoder is about to compress (main picture, screennail, thumbnail). When the
- * picture was developed with an added slot whose halation level ("Halation" on the parameter
- * screen, the slider of Cinema's Toning) is not off, the light of the highlights is spread around
- * them in a warm red, as on film without an anti-halation layer:
- *   1. the highlights above a threshold, averaged down by a power of two (at most ~512 wide);
- *   2. a blur of a radius relative to the picture's width (three box passes each way);
- *   3. added back in the slot's colour, scaled down where the picture is already bright so the
- *      cores stay white.
- * Every picture is done on its own, with the radius scaled to its width, so the screennail and the
- * thumbnail match the main picture.
+ * picture was developed with an added slot that has halation and its level ("Halation" on the
+ * parameter screen, the slider of Cinema's Toning) is not off, the light of the highlights spreads
+ * around them as on CineStill 800T (cinema film without its anti-halation layer): light that went
+ * through the film comes back from the base and exposes the red layer again, a little the green.
+ *   1. light: how far a pixel is above a threshold, of the brighter of Y and red, averaged down
+ *      to a picture at most 1024 wide and high;
+ *   2. spread with two widths together (a narrow fringe and a wider glow; three box passes each
+ *      way for each), relative to the picture's width;
+ *   3. the spread light times the level's gain picks, from a table, how much red, green and blue
+ *      are lifted towards white ("screen"): red first, so the glow is red, orange near strong
+ *      light, and white highlights stay white.
+ * Every picture is done on its own, with the widths scaled to it, so the screennail and the
+ * thumbnail match the main picture. The parameters (fitted to CineStill 800T pictures) and the
+ * table are made by GR Mod (halation.ts); GR Mod's preview runs the same integer steps.
  *
  * Which look and level: `stash` (written by the development step that reads the frame's record,
  * see slots.ts): bits 0..7 the style, 8..15 the level (0 off, 1 weak, 2 strong), bit 16 valid.
@@ -25,7 +30,6 @@ typedef unsigned char u8;
 typedef unsigned short u16;
 typedef unsigned int u32;
 typedef int s32;
-typedef short s16;
 
 struct picture {
   u8 format;          /* 1: YCbCr 4:2:2, Cb/Cr interleaved in their own plane */
@@ -38,16 +42,16 @@ struct picture {
   u8 tail[4];
 };
 
-/* One slot's halation (all zero: none). Written by GR Mod (halation.ts). */
-struct look {
-  u16 threshold;      /* Y above this (0..254) is light that spreads */
-  u16 escale;         /* 1024 / (255 - threshold): the light of a pixel, 0..1024 */
-  u16 radius;         /* blur radius in 1/4096 of the picture's width */
-  u16 strength[2];    /* weak, strong: 256 = 1.0 */
-  s16 ky, kcb, kcr;   /* change of Y, Cb, Cr for a glow of 1.0 on black, x256 */
+struct params {
+  u16 threshold;      /* light above this (0..254 of 255) spreads */
+  u16 escale;         /* 16384 / (255 - threshold): the light of a pixel, 0..16384 */
+  u16 narrow, wide;   /* box radius of the two spreads, in 1/4096 of the picture's width */
+  u16 mix;            /* share of the narrow spread, of 256 */
+  u16 gain[2];        /* weak, strong: table index = light * gain >> 10 */
+  u16 pad;
 };
 
-#define MAX_LOOKS 6
+#define LUT_N 4096    /* lut[0..N) red, [N..2N) green, [2N..3N) blue: lift towards white, of 255 */
 
 struct ctx {
   void *(*cache)(void);                              /* 0x538f0448 */
@@ -57,11 +61,14 @@ struct ctx {
   void (*release)(void *p);                          /* 0x538e09ec */
   const volatile u32 *stash;
   u32 first_style, count;
-  struct look looks[MAX_LOOKS];
+  u32 enabled;        /* bit k: added slot k has halation */
+  const u8 *lut;
+  struct params p;
 };
 
 #define STASH_VALID 0x10000u
-#define SMALL_MAX 512u
+#define SMALL_MAX 1024u
+#define E_MAX 16384u
 
 static int ram(const void *p) {
   u32 a = (u32)p;
@@ -110,59 +117,73 @@ static void box(u16 *v, u32 n, u32 step, u32 r, u32 recip, u16 *tmp) {
   }
 }
 
-static u8 clamp8(s32 v) { return (u8)(v < 0 ? 0 : (v > 255 ? 255 : v)); }
+/* Three box passes each way, radius from `rad` (1/4096 of the width sw). */
+static void spread(u16 *v, u32 sw, u32 sh, u32 rad, u16 *tmp) {
+  u32 r = (rad * sw + 2048) >> 12, recip, pass, x, y;
+  if (r < 1) return;
+  if (r > 200) r = 200;
+  recip = udiv(65536u, 2 * r + 1);
+  for (pass = 0; pass < 3; pass++) {
+    for (y = 0; y < sh; y++) box(v + y * sw, sw, 1, r, recip, tmp);
+    for (x = 0; x < sw; x++) box(v + x, sh, sw, r, recip, tmp);
+  }
+}
 
-static void halate(const struct ctx *k, void *cache, const struct picture *p, const struct look *L, u32 strength) {
-  u32 w = p->width, h = p->height, s = 0, q, F, sw, sh, x, y, i, r, recip, pass, kmax;
-  u16 *small, *tmp, *row;
+static s32 clamp8(s32 v) { return v < 0 ? 0 : (v > 255 ? 255 : v); }
+
+/* Lift a colour towards white by h (0..255 of 255). */
+static s32 lift(s32 v, u32 h) { return v + (s32)(((u32)(255 - v) * h * 257 + 32768) >> 16); }
+
+static void halate(const struct ctx *k, void *cache, const struct picture *p, u32 gain) {
+  const struct params *P = &k->p;
+  const u8 *lr = k->lut, *lg = k->lut + LUT_N, *lb = k->lut + 2 * LUT_N;
+  u32 w = p->width, h = p->height, s = 0, q, F, sw, sh, x, y, i, n;
+  u16 *small, *wide, *tmp, *row;
   u32 *acc;
-  if (!strength) return;
-  kmax = (u32)(L->ky < 0 ? -L->ky : L->ky);
-  if ((u32)(L->kcb < 0 ? -L->kcb : L->kcb) > kmax) kmax = (u32)(L->kcb < 0 ? -L->kcb : L->kcb);
-  if ((u32)(L->kcr < 0 ? -L->kcr : L->kcr) > kmax) kmax = (u32)(L->kcr < 0 ? -L->kcr : L->kcr);
-  while ((w >> s) > SMALL_MAX) s++;
+  while ((w >> s) > SMALL_MAX || (h >> s) > SMALL_MAX) s++;
   F = 1u << s;
   sw = (w + F - 1) >> s; sh = (h + F - 1) >> s;
-  small = (u16 *)k->alloc(sw * sh * 2);
+  n = sw * sh;
+  small = (u16 *)k->alloc(n * 2 + 8);
+  wide = (u16 *)k->alloc(n * 2 + 8);
   tmp = (u16 *)k->alloc((sw > sh ? sw : sh) * 2 + 8);
   acc = (u32 *)k->alloc(sw * 4 + 8);
   row = (u16 *)k->alloc(sw * 2 + 8);
-  if (!small || !tmp || !acc || !row) goto out;
+  if (!small || !wide || !tmp || !acc || !row) goto out;
   sync(k, cache, p, 0);
 
-  /* 1. light above the threshold (0..1024), averaged over F x F blocks; from blocks of 4 x 4 on,
-   * every other pixel of every other row is enough (a quarter of the reads of the main picture) */
+  /* 1. light above the threshold (0..16384), of the brighter of Y and red, averaged over F x F
+   * blocks; from blocks of 4 x 4 on, every other pixel of every other row is enough */
   q = s >= 2 ? 1 : 0;
   for (y = 0; y < h; y += F) {
     u32 by = y >> s, yy, ylim = y + F > h ? h : y + F;
     for (x = 0; x < sw; x++) acc[x] = 0;
     for (yy = y; yy < ylim; yy += 1u << q) {
-      const u8 *yr = p->y + yy * p->stride;
+      const u8 *yr = p->y + yy * p->stride, *cr = p->c + yy * p->stride;
       for (x = 0; x < w; x += 1u << q) {
-        s32 e = (s32)yr[x] - (s32)L->threshold;
-        if (e > 0) acc[x >> s] += (u32)e * L->escale;
+        s32 v = yr[x], red = v + ((91881 * ((s32)cr[x | 1] - 128) + 32768) >> 16), e;
+        if (red > v) v = red;
+        e = v - (s32)P->threshold;
+        if (e > 0) acc[x >> s] += (u32)e * P->escale;
       }
     }
     for (x = 0; x < sw; x++) {
       u32 v = acc[x] >> (2 * (s - q));
-      small[by * sw + x] = (u16)(v > 1024 ? 1024 : v);
+      small[by * sw + x] = (u16)(v > E_MAX ? E_MAX : v);
     }
   }
 
-  /* 2. blur: radius in small pixels */
-  r = (L->radius * sw) >> 12;
-  if (r < 1) r = 1;
-  if (r > 200) r = 200;
-  recip = udiv(65536u, 2 * r + 1);
-  for (pass = 0; pass < 3; pass++) {
-    for (y = 0; y < sh; y++) box(small + y * sw, sw, 1, r, recip, tmp);
-    for (x = 0; x < sw; x++) box(small + x, sh, sw, r, recip, tmp);
-  }
+  /* 2. the narrow and the wide spread, mixed */
+  for (i = 0; i < n; i++) wide[i] = small[i];
+  spread(small, sw, sh, P->narrow, tmp);
+  spread(wide, sw, sh, P->wide, tmp);
+  for (i = 0; i < n; i++) small[i] = (u16)((small[i] * P->mix + wide[i] * (256 - P->mix)) >> 8);
 
-  /* 3. add back, bilinear from the small picture */
+  /* 3. lift towards white by the table, bilinear from the small picture; per pair of pixels
+   * (they share Cb and Cr): to RGB, lift, back */
   for (y = 0; y < h; y++) {
     s32 fy = (s32)(((y << 8) + 128) >> s) - 128, sy0, sy1, wy;
-    u32 maxv = 0;
+    u32 maxv = 0, idx;
     u8 *yr = p->y + y * p->stride, *cr = p->c + y * p->stride;
     if (fy < 0) fy = 0;
     sy0 = fy >> 8; wy = fy & 255; sy1 = sy0 + 1;
@@ -173,25 +194,33 @@ static void halate(const struct ctx *k, void *cache, const struct picture *p, co
       row[i] = (u16)v;
       if (v > maxv) maxv = v;
     }
-    /* nothing shows where the largest change would stay below one level */
-    if ((((maxv * strength) >> 8) * kmax) >> 18 == 0) continue;
-    for (x = 0; x < w; x += 2) {
-      s32 fx = (s32)(((x << 8) + 128) >> s) - 128, sx0, sx1, wx;
-      u32 l, g, room, y0, y1;
+    idx = (maxv * gain) >> 10;
+    if (lr[idx >= LUT_N ? LUT_N - 1 : idx] == 0) continue;
+    for (x = 0; x + 1 < w; x += 2) {
+      s32 fx = (s32)(((x << 8) + 128) >> s) - 128, sx0, sx1, wx, cb, crr, j, sb = 0, sr = 0;
+      u32 l, hr, hg, hb;
       if (fx < 0) fx = 0;
       sx0 = fx >> 8; wx = fx & 255; sx1 = sx0 + 1;
       if ((u32)sx1 >= sw) sx1 = (s32)sw - 1;
       l = ((u32)row[sx0] * (u32)(256 - wx) + (u32)row[sx1] * (u32)wx) >> 8;
-      g = (l * strength) >> 8;                /* glow, 1024 = 1.0 */
-      if (!g) continue;
-      if (g > 8191) g = 8191;
-      y0 = yr[x]; y1 = x + 1 < w ? yr[x + 1] : y0;
-      /* screen-like: the glow fades out where the picture is already bright, the cores stay white */
-      yr[x] = clamp8((s32)y0 + ((((s32)g * L->ky) >> 18) * (s32)(255 - y0) >> 8));
-      if (x + 1 < w) yr[x + 1] = clamp8((s32)y1 + ((((s32)g * L->ky) >> 18) * (s32)(255 - y1) >> 8));
-      room = 255 - ((y0 + y1) >> 1);
-      cr[x] = clamp8((s32)cr[x] + ((((s32)g * L->kcb) >> 18) * (s32)room >> 8));
-      cr[x + 1] = clamp8((s32)cr[x + 1] + ((((s32)g * L->kcr) >> 18) * (s32)room >> 8));
+      idx = (l * gain) >> 10;
+      if (idx >= LUT_N) idx = LUT_N - 1;
+      hr = lr[idx];
+      if (!hr) continue;
+      hg = lg[idx]; hb = lb[idx];
+      cb = (s32)cr[x] - 128; crr = (s32)cr[x + 1] - 128;
+      for (j = 0; j < 2; j++) {
+        s32 Y = yr[x + j];
+        s32 R = clamp8(Y + ((91881 * crr + 32768) >> 16));
+        s32 G = clamp8(Y - ((22554 * cb + 46802 * crr - 32768) >> 16));
+        s32 B = clamp8(Y + ((116130 * cb + 32768) >> 16));
+        R = lift(R, hr); G = lift(G, hg); B = lift(B, hb);
+        yr[x + j] = (u8)clamp8((19595 * R + 38470 * G + 7471 * B + 32768) >> 16);
+        sb += -11059 * R - 21709 * G + 32768 * B;
+        sr += 32768 * R - 27439 * G - 5329 * B;
+      }
+      cr[x] = (u8)clamp8(128 + ((sb + 65536) >> 17));
+      cr[x + 1] = (u8)clamp8(128 + ((sr + 65536) >> 17));
     }
   }
   sync(k, cache, p, 1);
@@ -199,22 +228,22 @@ out:
   if (row) k->release(row);
   if (acc) k->release(acc);
   if (tmp) k->release(tmp);
+  if (wide) k->release(wide);
   if (small) k->release(small);
 }
 
 /* Entry: k = context, config = JpegEncodeMacroProcess configuration. */
 void halation(const struct ctx *k, u32 *config) {
-  u32 st = *k->stash, style, level, i, j, strength;
-  const struct look *L;
+  u32 st = *k->stash, style, level, i, j, gain;
   struct picture *seen[4];
   void *cache;
-  if (!(st & STASH_VALID) || !ram(config)) return;
+  if (!(st & STASH_VALID) || !ram(config) || !ram(k->lut)) return;
   style = st & 0xff; level = (st >> 8) & 0xff;
-  if (style < k->first_style || style >= k->first_style + k->count || style - k->first_style >= MAX_LOOKS) return;
+  if (style < k->first_style || style >= k->first_style + k->count || style - k->first_style >= 32) return;
+  if (!((k->enabled >> (style - k->first_style)) & 1)) return;
   if (level < 1 || level > 2) return;
-  L = &k->looks[style - k->first_style];
-  strength = L->strength[level - 1];
-  if (!strength || L->threshold > 254) return;
+  gain = k->p.gain[level - 1];
+  if (!gain || k->p.threshold > 254 || k->p.mix > 256) return;
   cache = k->cache();
   /* One picture per buffer (another entry with the same planes describes the whole sensor). */
   for (i = 0; i < 4; i++) {
@@ -224,5 +253,5 @@ void halation(const struct ctx *k, u32 *config) {
     for (j = 0; j < i; j++) if (seen[j] && seen[j]->y == p->y) break;
     if (j == i) seen[i] = p;
   }
-  for (i = 0; i < 4; i++) if (seen[i]) halate(k, cache, seen[i], L, strength);
+  for (i = 0; i < 4; i++) if (seen[i]) halate(k, cache, seen[i], gain);
 }

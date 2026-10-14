@@ -177,6 +177,8 @@ func New(opt Options) (*Server, error) {
 		"/api/update/progress": {http.MethodGet, s.handleUpdateProgress},
 		"/api/update/install":  {http.MethodPost, s.handleUpdateInstall},
 		"/api/update/page":     {http.MethodPost, s.handleUpdatePage},
+		"/api/update/state":    {http.MethodGet, s.handleUpdateState},
+		"/api/update/notes":    {http.MethodGet, s.handleUpdateNotes},
 	}
 	return s, nil
 }

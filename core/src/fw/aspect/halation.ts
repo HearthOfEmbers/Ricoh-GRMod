@@ -13,7 +13,7 @@
  * `tools/halation/halation.c` runs at the start of JpegEncodeMacroProcess::Execute (0x537034B4),
  * before the date imprint when that is installed. Which look and level the picture has is left in
  * a word by the development step that reads the frame's record (0x539113DC, see `slots.ts`). The
- * look's settings (threshold, radius, strength of Weak and Strong, colour) are set in GR Mod.
+ * look is fixed (`HALATION`, fitted to CineStill 800T); GR Mod only switches it on per slot.
  *
  * Not shown: live view (the effect is only in the JPEG, and in the camera's playback of it). RAW
  * files are not changed; a JPEG developed from one in the camera has the effect.
@@ -23,22 +23,25 @@ import { assembleWords, branchTarget, movImmediate } from './arm';
 import { Patch, u32le } from './build';
 import { HALATION_CODE, HALATION_CODE_LENGTH } from './halation-code';
 
-/** What GR Mod lets the user set for one slot. Integer units so that a file can be read back. */
-export interface HalationSpec {
-  /** Brightness (0..254 of 255) above which light spreads. */
-  threshold: number;
-  /** Size of the glow, in 1/1000 of the picture's width (1..100). */
-  radius: number;
-  /** Strength of Weak and Strong, in tenths (0..200: 0 = none, 10 = 1.0). */
-  weak: number;
-  strong: number;
-  /** Colour of the glow. */
-  color: readonly [number, number, number];
-  /** How much the glow brightens as well as tints, in percent (0..100). */
-  luminance: number;
-}
-
-export const DEFAULT_HALATION: HalationSpec = { threshold: 225, radius: 6, weak: 50, strong: 100, color: [255, 40, 0], luminance: 30 };
+/**
+ * The look of the glow, the same for every slot that has it: fitted to CineStill 800T pictures
+ * (night street lamps, platform tubes, LED boards): a saturated red fringe close to the light and a
+ * wider, fainter red glow; orange near strong light; white highlights stay white. Only light near
+ * clipping spreads, so a daylight picture shows it on lamps and specular highlights only.
+ */
+export const HALATION = {
+  /** Brightness (of the brighter of Y and red, of 255) above which light spreads. */
+  threshold: 235,
+  /** Box radius of the narrow and the wide spread, as a fraction of the picture's width (three box passes each way: about a gaussian of this sigma). */
+  narrow: 0.0035,
+  wide: 0.012,
+  /** Share of the narrow spread. */
+  mix: 0.6,
+  /** Weak and strong: how strongly the spread light lifts the colours. */
+  gain: [25, 60] as const,
+  /** Lift of red, green and blue per unit of light (red first: the red layer is exposed again from behind, a little the green). */
+  channels: [1, 0.06, 0.03] as const,
+};
 
 /** JpegEncodeMacroProcess::Execute. */
 const JPEG_EXECUTE = 0x537034b4;
@@ -47,9 +50,9 @@ const CACHE_FLUSH_FOR_READ = 0x538f04d8;
 const CACHE_CLEAN = 0x538f04c4;
 const HEAP_ALLOC = 0x538e09b0;
 const HEAP_FREE = 0x538e09ec;
-const MAX_LOOKS = 6;
-const LOOK_BYTES = 16;
-const SPEC_BYTES = 12;
+const MAX_SLOTS = 32;
+const LUT_N = 4096;
+const PARAM_BYTES = 16;
 /** Marks the context so that a built file can be read back. */
 const CTX_MAGIC = 0x4f4c4148; // 'HALO'
 
@@ -57,49 +60,31 @@ function fail(code: string, message: string): never {
   throw new FirmwareError(code, message);
 }
 
-export function validateHalation(h: HalationSpec): string | null {
-  const int = (v: number, lo: number, hi: number): boolean => Number.isInteger(v) && v >= lo && v <= hi;
-  if (!h || typeof h !== 'object') return 'missing';
-  if (!int(h.threshold, 0, 254)) return 'threshold';
-  if (!int(h.radius, 1, 100)) return 'radius';
-  if (!int(h.weak, 0, 200) || !int(h.strong, 0, 200)) return 'strength';
-  if (!Array.isArray(h.color) || h.color.length !== 3 || !h.color.every((c) => int(c, 0, 255))) return 'color';
-  if (!int(h.luminance, 0, 100)) return 'luminance';
-  return null;
-}
-
-/** The module's parameters of one look (struct look in halation.c). */
-export function lookBytes(h: HalationSpec | undefined): Uint8Array {
-  const out = new Uint8Array(LOOK_BYTES);
-  if (!h) return out;
+/** struct params in halation.c. */
+export function paramBytes(): Uint8Array {
+  const out = new Uint8Array(PARAM_BYTES);
   const v = new DataView(out.buffer);
-  const [r, g, b] = h.color.map((c) => c / 255);
-  const lum = h.luminance / 100;
-  const dy = (0.299 * r + 0.587 * g + 0.114 * b) * lum;
-  const dcb = -0.168736 * r - 0.331264 * g + 0.5 * b;
-  const dcr = 0.5 * r - 0.418688 * g - 0.081312 * b;
-  const q = (x: number): number => Math.max(-32767, Math.min(32767, Math.round(255 * x * 256)));
-  v.setUint16(0, h.threshold, true);
-  v.setUint16(2, Math.round(1024 / (255 - h.threshold)), true);
-  v.setUint16(4, Math.max(1, Math.round((h.radius * 4096) / 1000)), true);
-  v.setUint16(6, Math.round((h.weak * 256) / 10), true);
-  v.setUint16(8, Math.round((h.strong * 256) / 10), true);
-  v.setInt16(10, q(dy), true);
-  v.setInt16(12, q(dcb), true);
-  v.setInt16(14, q(dcr), true);
+  const H = HALATION;
+  v.setUint16(0, H.threshold, true);
+  v.setUint16(2, Math.round(16384 / (255 - H.threshold)), true);
+  v.setUint16(4, Math.round(H.narrow * 4096), true);
+  v.setUint16(6, Math.round(H.wide * 4096), true);
+  v.setUint16(8, Math.round(H.mix * 256), true);
+  v.setUint16(10, Math.round(H.gain[0] * 4), true);
+  v.setUint16(12, Math.round(H.gain[1] * 4), true);
   return out;
 }
 
-function specBytes(h: HalationSpec | undefined): Uint8Array {
-  const out = new Uint8Array(SPEC_BYTES);
-  if (!h) return out;
-  out.set([1, h.threshold, h.radius, h.luminance, h.weak, h.strong, h.color[0], h.color[1], h.color[2]]);
+let lutCache: Uint8Array | undefined;
+/** The table of halation.c: lift of red, green, blue (of 255) for light index i (i / 64 units). */
+export function halationLut(): Uint8Array {
+  if (lutCache) return lutCache;
+  const out = new Uint8Array(3 * LUT_N);
+  HALATION.channels.forEach((wc, c) => {
+    for (let i = 0; i < LUT_N; i++) out[c * LUT_N + i] = Math.round(255 * (1 - Math.exp(-(i / 64) * wc)));
+  });
+  lutCache = out;
   return out;
-}
-
-function specOf(b: Uint8Array): HalationSpec | undefined {
-  if (b[0] !== 1) return undefined;
-  return { threshold: b[1], radius: b[2], luminance: b[3], weak: b[4], strong: b[5], color: [b[6], b[7], b[8]] };
 }
 
 export function halationModule(): Uint8Array {
@@ -109,31 +94,23 @@ export function halationModule(): Uint8Array {
 }
 
 /**
- * Install the module at the JPEG encode step for `looks` (one entry per added slot, undefined =
- * no halation) whose styles start at `firstStyle`; `stash` is the word the development step
- * writes. Chains to the date imprint when that is installed (it runs after the halation).
+ * Install the module at the JPEG encode step for the added slots whose `enabled` entry is true
+ * (one per added slot); their styles start at `firstStyle`; `stash` is the word the development
+ * step writes. Chains to the date imprint when that is installed (it runs after the halation).
  */
-export function installHalationModule(p: Patch, looks: readonly (HalationSpec | undefined)[], firstStyle: number, stash: number): void {
-  if (looks.length < 1 || looks.length > MAX_LOOKS) fail('internal', 'halation: number of looks');
-  looks.forEach((h, k) => {
-    if (h && validateHalation(h)) fail('bad-halation', `added slot ${k + 1}: halation ${validateHalation(h)}`);
-  });
+export function installHalationModule(p: Patch, enabled: readonly boolean[], firstStyle: number, stash: number): void {
+  if (enabled.length < 1 || enabled.length > MAX_SLOTS) fail('internal', 'halation: number of slots');
   const first = p.word(JPEG_EXECUTE);
   let tail: string;
   if (first === 0xe1a0c00d) tail = `mov ip,sp;b #${JPEG_EXECUTE + 4}`;
   else if (first >>> 24 === 0xea) tail = `b #${branchTarget(JPEG_EXECUTE, first)}`;
   else fail('unexpected-layout', 'halation: unexpected JPEG encode entry');
-  const lookTable: Uint8Array[] = [];
-  const specs: Uint8Array[] = [];
-  for (let k = 0; k < MAX_LOOKS; k++) {
-    lookTable.push(lookBytes(looks[k]));
-    specs.push(specBytes(looks[k]));
-  }
+  const mask = enabled.reduce((m, on, k) => (on ? m | (1 << k) : m), 0) >>> 0;
+  const lut = p.append(halationLut(), 16);
   const ctx = p.append(new Uint8Array([
-    ...u32le([CACHE, CACHE_FLUSH_FOR_READ, CACHE_CLEAN, HEAP_ALLOC, HEAP_FREE, stash, firstStyle, looks.length]),
-    ...lookTable.flatMap((b) => [...b]),
+    ...u32le([CACHE, CACHE_FLUSH_FOR_READ, CACHE_CLEAN, HEAP_ALLOC, HEAP_FREE, stash, firstStyle, enabled.length, mask, lut]),
+    ...paramBytes(),
     ...u32le([CTX_MAGIC]),
-    ...specs.flatMap((b) => [...b]),
   ]), 16);
   const code = p.append(halationModule(), 16);
   const stub = p.append((at) => assembleWords(
@@ -146,19 +123,17 @@ export function installHalationModule(p: Patch, looks: readonly (HalationSpec | 
   p.setWord(JPEG_EXECUTE, (0xea000000 | (((stub - (JPEG_EXECUTE + 8)) >> 2) & 0xffffff)) >>> 0, 'added slots: halation at the JPEG encode step');
 }
 
-/** The halation of each added slot of a built image, or null when it has none. */
-export function readHalation(p: Patch, count: number): (HalationSpec | undefined)[] | null {
+/** Which added slots of a built image have halation, or null when none has. */
+export function readHalation(p: Patch, count: number): boolean[] | null {
   try {
     const first = p.word(JPEG_EXECUTE);
     if (first >>> 24 !== 0xea) return null;
     const stub = branchTarget(JPEG_EXECUTE, first);
     // push; ldr r1,[r1,#8]; movw r0; movt r0
     const ctx = (movImmediate(p.word(stub + 8)) | (movImmediate(p.word(stub + 12)) << 16)) >>> 0;
-    const at = ctx + 8 * 4 + MAX_LOOKS * LOOK_BYTES;
-    if (p.word(at) !== CTX_MAGIC) return null;
-    const out: (HalationSpec | undefined)[] = [];
-    for (let k = 0; k < count; k++) out.push(specOf(p.read(at + 4 + k * SPEC_BYTES, SPEC_BYTES)));
-    return out;
+    if (p.word(ctx + 10 * 4 + PARAM_BYTES) !== CTX_MAGIC) return null;
+    const mask = p.word(ctx + 8 * 4);
+    return Array.from({ length: count }, (_, k) => ((mask >>> k) & 1) === 1);
   } catch {
     return null;
   }
@@ -246,22 +221,26 @@ export const HALATION_NAMES: readonly string[] = [
 
 // -------------------------------------------------------------------------------- preview
 
+const c8 = (n: number): number => (n < 0 ? 0 : n > 255 ? 255 : n);
+/** Lift towards white by h (0..255 of 255), as `lift` in halation.c. */
+const lift = (v: number, h: number): number => v + Math.floor(((255 - v) * h * 257 + 32768) / 65536);
+
 /**
  * The module's computation (halation.c, `halate`) in TypeScript, on a YCbCr 4:2:2 picture (Y and
  * the interleaved CbCr plane, `w` bytes per row each), for GR Mod's preview. Same integer steps.
  */
-export function halateYcc(Y: Uint8Array, C: Uint8Array, w: number, h: number, look: Uint8Array, level: 1 | 2): void {
-  const v = new DataView(look.buffer, look.byteOffset, look.byteLength);
-  const threshold = v.getUint16(0, true), escale = v.getUint16(2, true), radius = v.getUint16(4, true);
-  const strength = v.getUint16(level === 1 ? 6 : 8, true);
-  const ky = v.getInt16(10, true), kcb = v.getInt16(12, true), kcr = v.getInt16(14, true);
-  if (!strength || threshold > 254) return;
-  const kmax = Math.max(Math.abs(ky), Math.abs(kcb), Math.abs(kcr));
+export function halateYcc(Y: Uint8Array, C: Uint8Array, w: number, h: number, level: 1 | 2): void {
+  const P = paramBytes();
+  const v = new DataView(P.buffer);
+  const threshold = v.getUint16(0, true), escale = v.getUint16(2, true);
+  const narrow = v.getUint16(4, true), wideR = v.getUint16(6, true), mix = v.getUint16(8, true);
+  const gain = v.getUint16(level === 1 ? 10 : 12, true);
+  const lut = halationLut();
   let s = 0;
-  while ((w >>> s) > 512) s++;
+  while ((w >>> s) > 1024 || (h >>> s) > 1024) s++;
   const F = 1 << s;
-  const sw = (w + F - 1) >>> s, sh = (h + F - 1) >>> s;
-  const small = new Uint16Array(sw * sh);
+  const sw = (w + F - 1) >>> s, sh = (h + F - 1) >>> s, n = sw * sh;
+  const small = new Uint16Array(n);
   const acc = new Uint32Array(sw);
   const q = s >= 2 ? 1 : 0;
   for (let y = 0; y < h; y += F) {
@@ -270,34 +249,44 @@ export function halateYcc(Y: Uint8Array, C: Uint8Array, w: number, h: number, lo
     for (let yy = y; yy < ylim; yy += 1 << q) {
       const row = yy * w;
       for (let x = 0; x < w; x += 1 << q) {
-        const e = Y[row + x] - threshold;
+        let val = Y[row + x];
+        const red = val + ((91881 * (C[row + (x | 1)] - 128) + 32768) >> 16);
+        if (red > val) val = red;
+        const e = val - threshold;
         if (e > 0) acc[x >>> s] += e * escale;
       }
     }
-    for (let x = 0; x < sw; x++) small[by * sw + x] = Math.min(1024, acc[x] >>> (2 * (s - q)));
+    for (let x = 0; x < sw; x++) small[by * sw + x] = Math.min(16384, acc[x] >>> (2 * (s - q)));
   }
-  let r = (radius * sw) >>> 12;
-  r = Math.max(1, Math.min(200, r));
-  const recip = Math.floor(65536 / (2 * r + 1));
   const tmp = new Uint16Array(Math.max(sw, sh));
-  const box = (off: number, n: number, step: number): void => {
-    if (n < 2) return;
-    for (let i = 0; i < n; i++) tmp[i] = small[off + i * step];
-    let sum = 0;
-    for (let j = -r; j <= r; j++) sum += tmp[j < 0 ? 0 : j >= n ? n - 1 : j];
-    for (let i = 0; i < n; i++) {
-      const out = i - r, inn = i + r + 1;
-      small[off + i * step] = Math.floor((sum * recip) / 65536);
-      sum -= tmp[out < 0 ? 0 : out];
-      sum += tmp[inn >= n ? n - 1 : inn];
+  const spread = (a: Uint16Array, rad: number): void => {
+    let r = (rad * sw + 2048) >>> 12;
+    if (r < 1) return;
+    if (r > 200) r = 200;
+    const recip = Math.floor(65536 / (2 * r + 1));
+    const box = (off: number, len: number, step: number): void => {
+      if (len < 2) return;
+      for (let i = 0; i < len; i++) tmp[i] = a[off + i * step];
+      let sum = 0;
+      for (let j = -r; j <= r; j++) sum += tmp[j < 0 ? 0 : j >= len ? len - 1 : j];
+      for (let i = 0; i < len; i++) {
+        const out = i - r, inn = i + r + 1;
+        a[off + i * step] = (sum * recip) >>> 16;
+        sum -= tmp[out < 0 ? 0 : out];
+        sum += tmp[inn >= len ? len - 1 : inn];
+      }
+    };
+    for (let pass = 0; pass < 3; pass++) {
+      for (let y = 0; y < sh; y++) box(y * sw, sw, 1);
+      for (let x = 0; x < sw; x++) box(x, sh, sw);
     }
   };
-  for (let pass = 0; pass < 3; pass++) {
-    for (let y = 0; y < sh; y++) box(y * sw, sw, 1);
-    for (let x = 0; x < sw; x++) box(x, sh, sw);
-  }
+  const wide = small.slice();
+  spread(small, narrow);
+  spread(wide, wideR);
+  for (let i = 0; i < n; i++) small[i] = (small[i] * mix + wide[i] * (256 - mix)) >>> 8;
   const rowv = new Uint32Array(sw);
-  const c8 = (n: number): number => (n < 0 ? 0 : n > 255 ? 255 : n);
+  const at = (i: number): number => (i >= LUT_N ? LUT_N - 1 : i);
   for (let y = 0; y < h; y++) {
     let fy = (((y << 8) + 128) >> s) - 128;
     if (fy < 0) fy = 0;
@@ -310,31 +299,38 @@ export function halateYcc(Y: Uint8Array, C: Uint8Array, w: number, h: number, lo
       rowv[i] = val;
       if (val > maxv) maxv = val;
     }
-    if (Math.floor((((maxv * strength) >>> 8) * kmax) / 262144) === 0) continue;
+    if (lut[at(Math.floor((maxv * gain) / 1024))] === 0) continue;
     const row = y * w;
-    for (let x = 0; x < w; x += 2) {
+    for (let x = 0; x + 1 < w; x += 2) {
       let fx = (((x << 8) + 128) >> s) - 128;
       if (fx < 0) fx = 0;
       const sx0 = fx >> 8, wx = fx & 255;
       let sx1 = sx0 + 1;
       if (sx1 >= sw) sx1 = sw - 1;
       const l = (rowv[sx0] * (256 - wx) + rowv[sx1] * wx) >>> 8;
-      let g = (l * strength) >>> 8;
-      if (!g) continue;
-      if (g > 8191) g = 8191;
-      const y0 = Y[row + x], y1 = x + 1 < w ? Y[row + x + 1] : y0;
-      const sh18 = (k: number): number => (g * k) >> 18;
-      Y[row + x] = c8(y0 + ((sh18(ky) * (255 - y0)) >> 8));
-      if (x + 1 < w) Y[row + x + 1] = c8(y1 + ((sh18(ky) * (255 - y1)) >> 8));
-      const room = 255 - ((y0 + y1) >> 1);
-      C[row + x] = c8(C[row + x] + ((sh18(kcb) * room) >> 8));
-      C[row + x + 1] = c8(C[row + x + 1] + ((sh18(kcr) * room) >> 8));
+      const idx = at(Math.floor((l * gain) / 1024));
+      const hr = lut[idx];
+      if (!hr) continue;
+      const hg = lut[LUT_N + idx], hb = lut[2 * LUT_N + idx];
+      const cb = C[row + x] - 128, cr = C[row + x + 1] - 128;
+      let sb = 0, sr = 0;
+      for (let j = 0; j < 2; j++) {
+        const y0 = Y[row + x + j];
+        const R = lift(c8(y0 + ((91881 * cr + 32768) >> 16)), hr);
+        const G = lift(c8(y0 - ((22554 * cb + 46802 * cr - 32768) >> 16)), hg);
+        const B = lift(c8(y0 + ((116130 * cb + 32768) >> 16)), hb);
+        Y[row + x + j] = c8((19595 * R + 38470 * G + 7471 * B + 32768) >> 16);
+        sb += -11059 * R - 21709 * G + 32768 * B;
+        sr += 32768 * R - 27439 * G - 5329 * B;
+      }
+      C[row + x] = c8(128 + ((sb + 65536) >> 17));
+      C[row + x + 1] = c8(128 + ((sr + 65536) >> 17));
     }
   }
 }
 
 /** Halation on an RGBA picture (sRGB, through YCbCr 4:2:2 as in the camera), in place. */
-export function halateRgba(data: Uint8ClampedArray, width: number, height: number, spec: HalationSpec, level: 1 | 2): void {
+export function halateRgba(data: Uint8ClampedArray, width: number, height: number, level: 1 | 2): void {
   const w = width & ~1;
   if (w < 2 || height < 2) return;
   const Y = new Uint8Array(w * height), C = new Uint8Array(w * height);
@@ -351,7 +347,7 @@ export function halateRgba(data: Uint8ClampedArray, width: number, height: numbe
     C[y * w + x + 1] = Math.max(0, Math.min(255, Math.round(cr / 2)));
   }
   const before = Y.slice(), cbefore = C.slice();
-  halateYcc(Y, C, w, height, lookBytes(spec), level);
+  halateYcc(Y, C, w, height, level);
   // Only the change is put back, so the rest of the picture keeps its full colour resolution.
   for (let y = 0; y < height; y++) for (let x = 0; x < w; x += 2) {
     const dcb = C[y * w + x] - cbefore[y * w + x], dcr = C[y * w + x + 1] - cbefore[y * w + x + 1];

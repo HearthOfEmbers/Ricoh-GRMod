@@ -15,7 +15,7 @@ import {
   setSoft,
   setDateStamp,
   setMonoUnlock,
-  extraName, extraNameProblem, extraProblem, halationOf, removeExtraSlot, resetHalation, setExtraCount, setExtraName, setHalation, slotOf,
+  extraName, extraNameProblem, extraProblem, halationOf, removeExtraSlot, setExtraCount, setExtraName, setHalation, slotOf,
 } from './store';
 import type { ExtraSlot, RatioItem, WallItem } from './store';
 
@@ -54,7 +54,7 @@ function PhotoCompare({ params }: { params?: color.SlotParams }) {
   const after = useMemo(() => {
     if (!base || !halo) return base;
     const out = new ImageData(new Uint8ClampedArray(base.data), base.width, base.height);
-    halateRgba(out.data, out.width, out.height, halo, halo.preview as 1 | 2);
+    halateRgba(out.data, out.width, out.height, halo.preview as 1 | 2);
     return out;
   }, [base, halo]);
   return <Compare photo={photo} after={after} label={t('preset')} />;
@@ -294,25 +294,14 @@ function ExtraSlotCard({ x, index }: { x: ExtraSlot; index: number }) {
   );
 }
 
-/** One setting of the halation: label, slider, value. */
-function HaloSlider({ label, value, min, max, step = 1, show, onChange }: { label: string; value: number; min: number; max: number; step?: number; show: (v: number) => string; onChange: (v: number) => void }) {
-  return (
-    <label className="halo-row">
-      <span className="muted small">{label}</span>
-      <input type="range" min={min} max={max} step={step} value={value} onChange={(e) => onChange(Number(e.target.value))} aria-label={label} />
-      <span className="halo-val small">{show(value)}</span>
-    </label>
-  );
-}
-
 /**
- * An added slot's halation: on / off, the level the preview shows, and its settings. In the
- * camera the level is chosen on the slot's parameter screen ("Halation": Off / Weak / Strong).
+ * An added slot's halation: on / off and the level the preview shows. The look is fixed (fitted
+ * to CineStill 800T); in the camera the level is chosen on the slot's parameter screen
+ * ("Halation": Off / Weak / Strong).
  */
 function HalationProp({ x }: { x: ExtraSlot }) {
   const h = halationOf(x);
   const k = x.key;
-  const hex = `#${h.color.map((c) => c.toString(16).padStart(2, '0')).join('')}`;
   return (
     <Prop label={t('haloLabel')}>
       <div className="halo">
@@ -326,23 +315,6 @@ function HalationProp({ x }: { x: ExtraSlot }) {
           )}
         </div>
         <span className="muted small halo-note">{t(h.on ? 'haloNote' : 'halationSub')}</span>
-        {h.on && (
-          <div className="halo-grid">
-            <HaloSlider label={t('haloWeakAmt')} min={0} max={200} step={5} value={h.weak} show={(v) => (v / 10).toFixed(1)} onChange={(weak) => setHalation(k, { weak })} />
-            <HaloSlider label={t('haloStrongAmt')} min={0} max={200} step={5} value={h.strong} show={(v) => (v / 10).toFixed(1)} onChange={(strong) => setHalation(k, { strong })} />
-            <HaloSlider label={t('haloRadius')} min={1} max={40} value={h.radius} show={(v) => `${(v / 10).toFixed(1)}%`} onChange={(radius) => setHalation(k, { radius })} />
-            <HaloSlider label={t('haloThreshold')} min={150} max={250} value={h.threshold} show={(v) => String(v)} onChange={(threshold) => setHalation(k, { threshold })} />
-            <HaloSlider label={t('haloLuma')} min={0} max={100} step={5} value={h.luminance} show={(v) => `${v}%`} onChange={(luminance) => setHalation(k, { luminance })} />
-            <label className="halo-row">
-              <span className="muted small">{t('haloColor')}</span>
-              <input type="color" value={hex} aria-label={t('haloColor')} onChange={(e) => {
-                const v = e.target.value;
-                setHalation(k, { color: [parseInt(v.slice(1, 3), 16), parseInt(v.slice(3, 5), 16), parseInt(v.slice(5, 7), 16)] });
-              }} />
-              <button type="button" className="btn ghost small" onClick={() => resetHalation(k)}>{t('haloReset')}</button>
-            </label>
-          </div>
-        )}
       </div>
     </Prop>
   );

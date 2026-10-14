@@ -9,7 +9,7 @@ import { CopiesPage } from './copies';
 import { BridgeBanner, BridgeDialog, FirmwareOnline, FirmwareRow, MODELS, modelLabel } from './firmware';
 import { CropEditor, ImageControlPage, RatioPage, WallpaperPage } from './pages';
 import { Tour, replayTour, restartTours } from './tour';
-import { UpdatePill, UpdateWatcher, checkForUpdate } from './updates';
+import { UpdatePill, UpdateWatcher, checkForUpdate, openWhatsNew } from './updates';
 import {
   askForOfficial, bridgeLoaded, backupCopies, extrasOn, canRestoreWall, copyList, deleteCopies, hasNameErrors, hasRatioErrors, ratioSpecs, revealBackups, writableCopy, writeCopy, outputFirmware, outputWallpaper, pendingChanges, refreshVolumes, restoreCardWall, selectVolume, setLang, setModel, setPage, setShowAll, useStore, wallReady,
 } from './store';
@@ -20,7 +20,6 @@ function Sidebar() {
   const page = useStore((s) => s.page);
   const model = useStore((s) => s.model);
   const lang = useStore((s) => s.lang);
-  const [about, setAbout] = useState(false);
   return (
     <aside className="sidebar">
       <nav>
@@ -42,21 +41,11 @@ function Sidebar() {
         />
       </div>
       <div className="side-foot">
-        <button className="about-link" onClick={() => setAbout(true)}>v{host.info?.version || ''}</button>
+        <button className="about-link" title={t('wnTitle')} onClick={() => openWhatsNew()}>v{host.info?.version || ''}</button>
         <UpdatePill />
         <span className="grow" />
         <HelpMenu />
       </div>
-      {about && (
-        <div className="overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) setAbout(false); }}>
-          <div className="dialog about" role="dialog" aria-modal="true">
-            <h3>GR Mod <small>v{host.info?.version}</small></h3>
-            <p>{t('aboutBody')}</p>
-            <p className="muted small">{t('aboutCredits')}</p>
-            <div className="dialog-actions"><button className="btn" onClick={() => setAbout(false)}>{t('done')}</button></div>
-          </div>
-        </div>
-      )}
     </aside>
   );
 }
