@@ -109,6 +109,8 @@ describe.skipIf(!have)('added slots: firmware files', () => {
       }
       const sp = target(r, 0x533e17cc);
       expect(target(r, 0x533e1c04) - sp).toBeLessThan(0x1000);
+      // RAW development: room in its list for the added looks (mov r0,#24+n)
+      expect(word(r, 0x5336b89c)).toBe((0xe3a00000 | (24 + n)) >>> 0);
     }
   }, 120_000);
 

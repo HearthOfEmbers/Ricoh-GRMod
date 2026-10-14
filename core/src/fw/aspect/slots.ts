@@ -679,6 +679,11 @@ function installRawDevelopment(p: Patch, count: number, module: Record<string, n
   hook(p, 0x53374e98, 0xe3500000, `push {r0-r3,ip,lr};mov r2,r0;mov r1,#0;mov r0,r4;bl #${module.sp_raw_own};pop {r0-r3,ip,lr};${map('r0')};cmp r0,#0;b #0x53374e9c`, 'added slots: RAW development parameters as shot');
   // Applying a look: the row goes to the looks now selected.
   hook(p, 0x53374360, 0xe1a0c00d, `push {r0-r4,lr};bl #${module.sp_raw_sync};pop {r0-r4,lr};mov ip,sp;b #0x53374364`, 'added slots: own RAW development parameters');
+  // The RAW development screen makes its list as long as the longest of its lists (0x531A13C8):
+  // Image Control at most 24 entries (the factory looks, the three custom sets, "as shot"). With
+  // the added looks the list is longer; the list widget then refuses the count (assertion) and the
+  // camera stops on entering Image Control (0.7.1 with 4 added slots).
+  swap(p, 0x5336b89c, 'mov r0,#24', `mov r0,#${24 + count}`, 'added slots: RAW development list capacity');
 }
 
 // -------------------------------------------------------------- picture information
@@ -776,7 +781,7 @@ function installHalationScreens(p: Patch, count: number): void {
     hook(p, at, 0xe300116f, `ldrb r1,[${ctl},#0x19c];sub r1,r1,#${EXTRA_FIRST_STYLE};cmp r1,#${n};movw r1,#${TONING_ICON};movwls r1,#${HALATION_ICON_ID};b #${at + 4}`, 'halation: list icon');
   }
   // RAW development: subtitle (r7 the table entry).
-  hook(p, 0x531a833c, 0xe1d710b2, `ldrh r1,[r7,#2];movw ip,#${TONING_TEXT};cmp r1,ip;bne done;push {r0,r2,r3,lr};${RAW_LOOK_CALLS};sub r0,r0,#${RAW};cmp r0,#${n};movwls r1,#${HALATION_TEXT_ID};pop {r0,r2,r3,lr};done:b #0x531a8340`, 'halation: name of the parameter (RAW development)');
+  hook(p, 0x531a833c, 0xe1d710b2, `ldrh r1,[r7,#2];movw ip,#${TONING_TEXT};cmp r1,ip;bne done;push {r0,r2,r3,lr};${RAW_LOOK_CALLS};sub r0,r0,#${RAW};cmp r0,#${n};movw r1,#${TONING_TEXT};movwls r1,#${HALATION_TEXT_ID};pop {r0,r2,r3,lr};done:b #0x531a8340`, 'halation: name of the parameter (RAW development)');
   // RAW development: slider scale (r3 the base kind, 8 = Cinema Yellow's).
   hook(p, 0x531a6acc, 0xe3530008, `push {r0,r1,r2,lr};${RAW_LOOK_CALLS};sub ip,r0,#${RAW};pop {r0,r1,r2,lr};ldrb r3,[r6,#0x19b];cmp ip,#${n};movwls r3,#${HALATION_SCALE_ICON_ID};bls #0x531a6ae4;cmp r3,#8;b #0x531a6ad0`, 'halation: slider scale (RAW development)');
   // RAW development: list icon.
