@@ -197,6 +197,7 @@ const (
 	ReasonTranslocated = "translocated" // macOS runs the app from a temporary read-only copy
 	ReasonReadOnly     = "read-only"    // the program's folder cannot be written
 	ReasonUnsupported  = "unsupported"  // this build cannot replace itself
+	ReasonManual       = "manual"       // the release has no signed manifest: download it by hand
 )
 
 // Updater checks for, downloads and installs updates.
@@ -214,6 +215,13 @@ type Updater struct {
 	HTTP *http.Client
 	// Target replaces the program; nil means updates can only be offered.
 	Target Target
+	// LatestPage is an address that redirects to the page of the newest
+	// release, ending in /releases/tag/<version> (GitHub's releases/latest).
+	// When no source has a manifest that verifies (a release published
+	// without update.json, as 0.7.0 was), the version in that address still
+	// says whether this copy is the newest; a newer one is then offered for
+	// download by hand only. "" disables this.
+	LatestPage string
 }
 
 // Target is the program as installed on disk.
@@ -299,7 +307,62 @@ func (u *Updater) Check(ctx context.Context) (*Info, error) {
 		}
 		return u.info(base, m), nil
 	}
+	if u.LatestPage != "" {
+		version, page, err := u.latestRelease(ctx)
+		if err == nil {
+			in := &Info{Current: u.Current, Latest: version, Page: page, Reason: ReasonManual}
+			in.Available = Newer(version, u.Current)
+			return in, nil
+		}
+		if ctx.Err() == nil {
+			last = fmt.Errorf("%v; latest release: %w", last, err)
+		}
+	}
 	return nil, last
+}
+
+// latestRelease follows LatestPage to the page of the newest release and
+// returns its version (from /releases/tag/<version>) and address. Nothing
+// is downloaded from the release page itself.
+func (u *Updater) latestRelease(ctx context.Context) (string, string, error) {
+	var found *url.URL
+	c := *u.client()
+	c.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if strings.Contains(req.URL.Path, "/releases/tag/") {
+			found = req.URL
+			return http.ErrUseLastResponse
+		}
+		if len(via) >= 10 {
+			return errors.New("too many redirects")
+		}
+		return nil
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, u.LatestPage, nil)
+	if err != nil {
+		return "", "", err
+	}
+	req.Header.Set("User-Agent", "GRMod/"+u.Current)
+	req.Header.Set("Cache-Control", "no-cache")
+	res, err := c.Do(req)
+	if err != nil {
+		return "", "", err
+	}
+	res.Body.Close()
+	if found == nil {
+		return "", "", fmt.Errorf("%s: no release found (%s)", u.LatestPage, res.Status)
+	}
+	tag, err := url.PathUnescape(found.Path[strings.LastIndex(found.Path, "/")+1:])
+	if err != nil {
+		return "", "", err
+	}
+	if _, ok := parseVersion(tag); !ok {
+		return "", "", fmt.Errorf("the newest release has an unusable version %q", tag)
+	}
+	page := ""
+	if found.Scheme == "https" {
+		page = found.String()
+	}
+	return strings.TrimPrefix(strings.TrimSpace(tag), "v"), page, nil
 }
 
 func (u *Updater) info(base *url.URL, m *Manifest) *Info {

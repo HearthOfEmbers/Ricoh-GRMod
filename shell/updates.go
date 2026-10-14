@@ -66,11 +66,11 @@ func updateOptions(target update.Target) *server.UpdateOptions {
 	if err != nil {
 		return nil
 	}
-	sources := updateSources
+	sources, latest := updateSources, server.DefaultReleasePage
 	if s := strings.TrimSpace(os.Getenv(envUpdateSource)); s != "" {
-		sources = []string{s}
+		sources, latest = []string{s}, ""
 	}
-	return &server.UpdateOptions{Key: key, Sources: sources, Platform: updatePlatform(), Target: target}
+	return &server.UpdateOptions{Key: key, Sources: sources, Platform: updatePlatform(), Target: target, LatestPage: latest}
 }
 
 // afterUpdate runs at the start of the program an update has launched: it

@@ -212,6 +212,8 @@ type UpdateOptions struct {
 	Platform string
 	// Target is the installed program; nil means updates are only offered.
 	Target update.Target
+	// LatestPage redirects to the newest release (see update.Updater).
+	LatestPage string
 }
 
 func newUpdateState(opt Options) *updateState {
@@ -225,5 +227,7 @@ func newUpdateState(opt Options) *updateState {
 		Platform: opt.Update.Platform,
 		HTTP:     outgoingClient(opt),
 		Target:   opt.Update.Target,
+
+		LatestPage: opt.Update.LatestPage,
 	}}
 }
