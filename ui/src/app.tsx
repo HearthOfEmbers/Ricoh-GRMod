@@ -85,7 +85,7 @@ function OutputBar() {
   const vol = s.volumes.find((v) => v.id === s.volumeId);
   // Image Control (with its switches) and the added ratios go into one firmware file: both pages write the same thing.
   const isIC = s.page === 'ic' || s.page === 'ratio'; const isWall = s.page === 'wall';
-  const can = !!s.info && !s.busy && (isIC ? (pendingChanges(s).length + ratioSpecs(s).length > 0 || extrasOn(s)) && !hasNameErrors(s) && !hasRatioErrors(s) : isWall && wallReady(s));
+  const can = !!s.info && !s.busy && (isIC ? (pendingChanges(s).length + ratioSpecs(s).length > 0 || extrasOn(s) || (s.model !== 'MONO' && s.extras.length > 0)) && !hasNameErrors(s) && !hasRatioErrors(s) : isWall && wallReady(s));
   const role: Key | '' = s.role === 'firmware' ? 'roleFirmware' : s.role === 'wallpaper' ? 'roleWallpaper' : s.role === 'mixed' ? 'roleMixed' : s.role === 'empty' ? 'roleEmpty' : '';
   // With the bridge firmware open the buttons stay live but offer the official download instead.
   const bridge = bridgeLoaded(s) && !s.busy;

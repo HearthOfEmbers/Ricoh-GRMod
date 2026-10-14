@@ -14,6 +14,7 @@ export { BRIDGE_VERSION, FIRMWARE_VERSION, LANGS, SLOTS, ICON_W, ICON_H, OFFICIA
 export type { ClarityChange, SoftFocusLevel, SoftFocusStrength } from './fw';
 export type { BuiltRatio, RatioSpec } from './fw';
 export { MAX_CUSTOM_RATIOS, MAX_NAME_LENGTH, validateRatioName, EXTRA_NAME_MAX, MAX_EXTRA_SLOTS, validateExtraSlotName } from './fw';
-export type { ExtraSlotSpec } from './fw';
+export type { ExtraSlotSpec, HalationSpec } from './fw';
+export { DEFAULT_HALATION, halateRgba, validateHalation } from './fw';
 export { RATIO_ICON_H, RATIO_ICON_W } from './fw/aspect';
 export type { RatioPreview } from './app';

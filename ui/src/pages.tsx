@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { color, EXTRA_NAME_MAX, MAX_CUSTOM_RATIOS, MAX_EXTRA_SLOTS, SHUTDOWN_H, SHUTDOWN_W } from '@grmod/core';
+import { color, EXTRA_NAME_MAX, halateRgba, MAX_CUSTOM_RATIOS, MAX_EXTRA_SLOTS, SHUTDOWN_H, SHUTDOWN_W } from '@grmod/core';
 import type { SlotId } from '@grmod/core';
 import type { ReactNode } from 'react';
 import { DropZone, FileButton, Ico, IconCanvas, Menu, Prop, RatioIcon, RgbCanvas, Segmented, Switch } from './components';
@@ -15,7 +15,7 @@ import {
   setSoft,
   setDateStamp,
   setMonoUnlock,
-  extraName, extraNameProblem, extraProblem, removeExtraSlot, setExtraCount, setExtraName, slotOf,
+  extraName, extraNameProblem, extraProblem, halationOf, removeExtraSlot, resetHalation, setExtraCount, setExtraName, setHalation, slotOf,
 } from './store';
 import type { ExtraSlot, RatioItem, WallItem } from './store';
 
@@ -48,7 +48,15 @@ function Swatches({ params }: { params?: color.SlotParams }) {
 /** The sample photograph with the original on the left of a draggable divider and the preset on the right. */
 function PhotoCompare({ params }: { params?: color.SlotParams }) {
   const photo = usePhoto();
-  const after = useMemo(() => (photo && params ? applySlot(params, photo) : null), [photo, params]);
+  const halo = useStore((s) => { const x = s.extras.find((e) => e.key === s.activeSlot); return x?.halation?.on && x.halation.preview ? x.halation : undefined; });
+  const base = useMemo(() => (photo && params ? applySlot(params, photo) : null), [photo, params]);
+  // The added slot's halation at the level chosen for the preview, as the camera computes it.
+  const after = useMemo(() => {
+    if (!base || !halo) return base;
+    const out = new ImageData(new Uint8ClampedArray(base.data), base.width, base.height);
+    halateRgba(out.data, out.width, out.height, halo, halo.preview as 1 | 2);
+    return out;
+  }, [base, halo]);
   return <Compare photo={photo} after={after} label={t('preset')} />;
 }
 
@@ -278,10 +286,65 @@ function ExtraSlotCard({ x, index }: { x: ExtraSlot; index: number }) {
               {x.icon.mode === 'image' && <FileButton className="btn small" accept="image/*" onFiles={(f) => { void loadIconImage(k, f[0]); }}>{t('chooseImage')}</FileButton>}
             </div>
           </Prop>
+          <HalationProp x={x} />
           {problem && !p?.busy && !p?.error && !nameBad && <div className="chips extra-problem"><span className="chip warn"><span className="ellipsis">{problem}</span></span></div>}
         </div>
       </div>
     </DropZone>
+  );
+}
+
+/** One setting of the halation: label, slider, value. */
+function HaloSlider({ label, value, min, max, step = 1, show, onChange }: { label: string; value: number; min: number; max: number; step?: number; show: (v: number) => string; onChange: (v: number) => void }) {
+  return (
+    <label className="halo-row">
+      <span className="muted small">{label}</span>
+      <input type="range" min={min} max={max} step={step} value={value} onChange={(e) => onChange(Number(e.target.value))} aria-label={label} />
+      <span className="halo-val small">{show(value)}</span>
+    </label>
+  );
+}
+
+/**
+ * An added slot's halation: on / off, the level the preview shows, and its settings. In the
+ * camera the level is chosen on the slot's parameter screen ("Halation": Off / Weak / Strong).
+ */
+function HalationProp({ x }: { x: ExtraSlot }) {
+  const h = halationOf(x);
+  const k = x.key;
+  const hex = `#${h.color.map((c) => c.toString(16).padStart(2, '0')).join('')}`;
+  return (
+    <Prop label={t('haloLabel')}>
+      <div className="halo">
+        <div className="chips">
+          <Switch checked={h.on} onChange={(on) => setHalation(k, { on })} label={t('halation')} />
+          {h.on && (
+            <>
+              <span className="muted small">{t('haloPreview')}</span>
+              <Segmented value={String(h.preview)} onChange={(v) => setHalation(k, { preview: Number(v) as 0 | 1 | 2 })} options={[{ value: '0', label: t('haloOff') }, { value: '1', label: t('haloWeak') }, { value: '2', label: t('haloStrong') }]} />
+            </>
+          )}
+        </div>
+        <span className="muted small halo-note">{t(h.on ? 'haloNote' : 'halationSub')}</span>
+        {h.on && (
+          <div className="halo-grid">
+            <HaloSlider label={t('haloWeakAmt')} min={0} max={200} step={5} value={h.weak} show={(v) => (v / 10).toFixed(1)} onChange={(weak) => setHalation(k, { weak })} />
+            <HaloSlider label={t('haloStrongAmt')} min={0} max={200} step={5} value={h.strong} show={(v) => (v / 10).toFixed(1)} onChange={(strong) => setHalation(k, { strong })} />
+            <HaloSlider label={t('haloRadius')} min={1} max={40} value={h.radius} show={(v) => `${(v / 10).toFixed(1)}%`} onChange={(radius) => setHalation(k, { radius })} />
+            <HaloSlider label={t('haloThreshold')} min={150} max={250} value={h.threshold} show={(v) => String(v)} onChange={(threshold) => setHalation(k, { threshold })} />
+            <HaloSlider label={t('haloLuma')} min={0} max={100} step={5} value={h.luminance} show={(v) => `${v}%`} onChange={(luminance) => setHalation(k, { luminance })} />
+            <label className="halo-row">
+              <span className="muted small">{t('haloColor')}</span>
+              <input type="color" value={hex} aria-label={t('haloColor')} onChange={(e) => {
+                const v = e.target.value;
+                setHalation(k, { color: [parseInt(v.slice(1, 3), 16), parseInt(v.slice(3, 5), 16), parseInt(v.slice(5, 7), 16)] });
+              }} />
+              <button type="button" className="btn ghost small" onClick={() => resetHalation(k)}>{t('haloReset')}</button>
+            </label>
+          </div>
+        )}
+      </div>
+    </Prop>
   );
 }
 

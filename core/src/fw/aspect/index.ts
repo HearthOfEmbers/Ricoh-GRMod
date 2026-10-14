@@ -14,3 +14,5 @@ export { DATESTAMP_BYTE, DATESTAMP_LONG, DATESTAMP_ON, JPEG_EXECUTE, datestampMo
 export { DATESTAMP_ICON_IDS, DATESTAMP_MENU_ID, DATESTAMP_STYLE_ID, DATESTAMP_SWITCH_ID, DATESTAMP_TEXT_IDS, drawStyleIcon, installDateStampMenu } from './datestamp-menu';
 export { EXTRA_FIRST_STYLE, EXTRA_ICON_BYTES, EXTRA_ICON_ID, EXTRA_NAME_MAX, EXTRA_TEXT_ID, MAX_EXTRA_SLOTS, installExtraSlots, readExtraSlots, validateExtraSlotName } from './slots';
 export type { ExtraSlotSpec } from './slots';
+export { DEFAULT_HALATION, HALATION_NAMES, halateRgba, halateYcc, halationIcon, halationScale, lookBytes, validateHalation } from './halation';
+export type { HalationSpec } from './halation';
