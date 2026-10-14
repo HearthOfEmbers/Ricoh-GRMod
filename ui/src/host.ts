@@ -12,7 +12,7 @@ export interface FirmwareRelease { model: string; name: string; applies: string;
 /** What GET /api/update/check reports. */
 export interface UpdateInfo {
   current: string; latest?: string; available: boolean; date?: string; notes?: Record<string, string>; page?: string; size: number;
-  /** false: this copy cannot replace itself; `reason` says why (no-package, translocated, read-only, unsupported). */
+  /** false: this copy cannot replace itself; `reason` says why (no-package, translocated, read-only, unsupported, manual). */
   canInstall: boolean; reason?: string;
   /** Set once, in the first run after an update: the version it replaced. */
   updatedFrom?: string;

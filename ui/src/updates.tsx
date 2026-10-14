@@ -73,7 +73,7 @@ export function UpdatePill() {
 }
 
 const REASONS: Record<string, Key> = {
-  translocated: 'updReasonTranslocated', 'read-only': 'updReasonReadOnly', 'no-package': 'updReasonNoPackage', unsupported: 'updReasonUnsupported',
+  translocated: 'updReasonTranslocated', 'read-only': 'updReasonReadOnly', 'no-package': 'updReasonNoPackage', unsupported: 'updReasonUnsupported', manual: 'updReasonManual',
 };
 const fmtMB = (n: number): string => `${(n / 1e6).toFixed(n >= 1e8 ? 0 : 1)} MB`;
 
