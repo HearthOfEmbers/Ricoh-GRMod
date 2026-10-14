@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { color, EXTRA_NAME_MAX, halateRgba, MAX_CUSTOM_RATIOS, MAX_EXTRA_SLOTS, SHUTDOWN_H, SHUTDOWN_W } from '@grmod/core';
+import { color, EXTRA_NAME_MAX, halateRgba, halationLight, MAX_CUSTOM_RATIOS, MAX_EXTRA_SLOTS, SHUTDOWN_H, SHUTDOWN_W } from '@grmod/core';
 import type { SlotId } from '@grmod/core';
 import type { ReactNode } from 'react';
 import { DropZone, FileButton, Ico, IconCanvas, Menu, Prop, RatioIcon, RgbCanvas, Segmented, Switch } from './components';
@@ -49,14 +49,17 @@ function Swatches({ params }: { params?: color.SlotParams }) {
 function PhotoCompare({ params }: { params?: color.SlotParams }) {
   const photo = usePhoto();
   const halo = useStore((s) => { const x = s.extras.find((e) => e.key === s.activeSlot); return x?.halation?.on && x.halation.preview ? x.halation : undefined; });
+  // where the slot's light starts: its own look decides how bright the highlights end up
+  const result = useStore((s) => s.extras.find((e) => e.key === s.activeSlot)?.preset?.result);
+  const light = useMemo(() => (result ? halationLight(result.curves, result.postQ9) : undefined), [result]);
   const base = useMemo(() => (photo && params ? applySlot(params, photo) : null), [photo, params]);
   // The added slot's halation at the level chosen for the preview, as the camera computes it.
   const after = useMemo(() => {
     if (!base || !halo) return base;
     const out = new ImageData(new Uint8ClampedArray(base.data), base.width, base.height);
-    halateRgba(out.data, out.width, out.height, halo.preview as 1 | 2);
+    halateRgba(out.data, out.width, out.height, halo.preview as 1 | 2, light);
     return out;
-  }, [base, halo]);
+  }, [base, halo, light]);
   return <Compare photo={photo} after={after} label={t('preset')} />;
 }
 
