@@ -677,8 +677,8 @@ async function readCardWall(root: string, l: card.CardListing): Promise<card.Wal
   const index = idx && idx.size > 0 && idx.size <= 16 ? await host.read(host.join(root, idx.name)) : undefined;
   return { script, images, index };
 }
-/** The desktop builds (Windows, macOS) can eject a card; the development build cannot. */
-const canEject = (): boolean => host.info?.kind === 'windows' || host.info?.kind === 'mac';
+/** The desktop builds (Windows, macOS, Linux) can eject a card; the development build cannot. */
+const canEject = (): boolean => host.info?.kind === 'windows' || host.info?.kind === 'mac' || host.info?.kind === 'linux';
 const volumeLabel = (v: Volume): string => `${v.id}${v.label && v.label !== v.id ? ' ' + v.label : ''}`;
 export function canRestoreWall(s: State = state): boolean {
   return !!s.cardWall && !!s.info && !s.busy && s.volumes.some((v) => v.id === s.volumeId) && s.role !== undefined && s.role !== 'wallpaper';
