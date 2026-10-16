@@ -366,7 +366,7 @@ export function extraSpecs(s: State = state): ExtraSlotSpec[] {
   if (s.model === 'MONO') return [];
   return s.extras.map((x) => {
     const r = x.preset!.result!;
-    return { name: extraName(x, s), matrixQ13: r.matrixQ13, curves: r.curves, ...(r.postQ9 ? { postQ9: r.postQ9 } : {}), icon: x.icon.pixels!, ...(x.halation?.on ? { halation: true } : {}) };
+    return { name: extraName(x, s), matrixQ13: r.matrixQ13, curves: r.curves, ...(r.postQ9 ? { postQ9: r.postQ9 } : {}), icon: x.icon.pixels!, halation: true };
   });
 }
 
@@ -378,14 +378,13 @@ function validHalation(v: unknown): HalationState | null {
   return { on: h.on === true, preview: h.preview === 1 || h.preview === 2 ? h.preview : 0 };
 }
 export function halationOf(x: ExtraSlot): HalationState {
-  return x.halation ?? { on: false, preview: 2 };
+  return x.halation ?? { on: true, preview: 0 };
 }
-/** Change an added slot's halation (switching it on shows the strong level in the preview). */
+/** Change the halation preview level of an added slot (every added slot carries halation; the camera switches it). */
 export function setHalation(key: string, patch: Partial<HalationState>): void {
   set((s) => ({ extras: s.extras.map((x) => {
     if (x.key !== key) return x;
     const next = { ...halationOf(x), ...patch };
-    if (patch.on === true && !x.halation?.on) next.preview = 2;
     return { ...x, halation: next };
   }) }));
   scheduleSave();
@@ -838,7 +837,7 @@ export async function outputFirmware(dest: Dest, stock = false): Promise<void> {
     if (soft) lines.push(t('softAdjLine'));
     if (dateStamp) lines.push(t('dateLine'));
     if (monoUnlock) lines.push(t('monoLine'));
-    if (extras.length) lines.push(t('extraLine', { n: extras.length, l: extras.map((x) => (x.halation ? `${x.name} (${t('halation')})` : x.name)).join(' / ') }));
+    if (extras.length) lines.push(t('extraLine', { n: extras.length, l: extras.map((x) => x.name).join(' / ') }));
     if (!(await ask(t('confirmTitle'), lines, t('confirmOk')))) return;
   }
   const target = await destination(dest);
