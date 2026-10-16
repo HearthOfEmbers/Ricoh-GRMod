@@ -284,7 +284,6 @@ export function ConfirmDialog() {
             <b>{t('resetNoteTitle')}</b>
             <span>{t('resetNoteBody')}</span>
             <span className="dialog-reset-path">{t('resetNotePath')}</span>
-            <span className="muted small">{t('resetNoteMin')}</span>
           </div>
         )}
         <div className="dialog-actions">
