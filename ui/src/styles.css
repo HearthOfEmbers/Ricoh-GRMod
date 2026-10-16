@@ -467,3 +467,10 @@ button.fw-rel:disabled { cursor: default; }
 .halo { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .halo .chips { align-items: center; }
 .halo-note { line-height: 1.35; }
+
+/* writing the factory firmware: reset first */
+.dialog-reset { display: flex; flex-direction: column; gap: 6px; margin: 4px 0 16px; padding: 12px 14px; border: 1px solid var(--red); border-radius: 10px; background: color-mix(in srgb, var(--red) 12%, transparent); font-size: 13px; line-height: 1.5; }
+.dialog-reset b { color: var(--red); font-size: 14px; }
+.dialog-reset-path { font-weight: 600; }
+.btn.danger-solid { background: var(--red); border-color: var(--red); color: #fff; font-weight: 600; }
+.btn.danger-solid:hover { filter: brightness(1.08); }
