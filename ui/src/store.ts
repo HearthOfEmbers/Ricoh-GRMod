@@ -26,21 +26,18 @@ export interface HalationState { on: boolean; preview: 0 | 1 | 2 }
 export interface ExtraSlot { key: string; name: string; preset?: PresetState; icon: IconState; halation?: HalationState }
 /** A factory Cinema slot (`CY`, `CG`) or the key of an added slot. */
 export type SlotKey = SlotId | string;
+/**
+ * A power-off image. They are built into the firmware and chosen in the camera's End Screen menu
+ * (Setup > Display > End Screen > Picture): `menuName` is the name in the camera's list, `menuId`
+ * its stable identity, `menuJpeg` the picture file. (GR Mod 0.7 and earlier could also put them on
+ * the card with a start-up script; 0.8 only builds them into the firmware.)
+ */
 export interface WallItem {
-  id: string; name: string; kind: 'image' | 'factory'; blob?: Blob; width: number; height: number; crop: Crop;
-  busy: boolean; error?: string; data?: Uint8Array; quality?: number; grain?: number; soften?: number; preview?: Uint8Array;
-  /** Chosen in the camera's menu (`wallMode` 'menu'): the name in the camera's list, its stable identity, the picture file. */
+  id: string; name: string; blob?: Blob; width: number; height: number; crop: Crop;
+  busy: boolean; error?: string; preview?: Uint8Array;
   menuName?: string; menuId?: number; menuJpeg?: Uint8Array;
 }
-/**
- * How the power-off images reach the camera: 'script' puts them on the card with a start-up script
- * that changes the picture at every power-on; 'menu' builds them into the firmware, chosen in the
- * camera's End Screen menu (Setup > Display > End Screen > Picture).
- */
-export type WallMode = 'script' | 'menu';
 export interface Toast { id: number; text: string; kind: 'ok' | 'error' | 'info'; action?: { label: string; run: () => void } }
-/** The power-off image setup last seen on (or written to) a card; the files themselves are in the host store. */
-export interface CardWall { names: string[]; hasIndex: boolean; savedAt: number; label: string }
 export type PreviewMode = 'photo' | 'swatch';
 /** What the frame of an added ratio is drawn on. */
 export type RatioBackdrop = 'photo' | 'gray';
@@ -64,11 +61,11 @@ export interface State {
   slots: Record<SlotId, SlotState>;
   wall: WallItem[];
   ratios: RatioItem[]; activeRatio?: string; ratioBackdrop: RatioBackdrop;
-  soft: boolean; dateStamp: boolean; monoUnlock: boolean; wallMode: WallMode;
-  previewMode: PreviewMode; photoRev: number; cardWall?: CardWall; activeSlot: SlotKey;
+  soft: boolean; dateStamp: boolean; monoUnlock: boolean;
+  previewMode: PreviewMode; photoRev: number; activeSlot: SlotKey;
   /** Added Image Control slots, in the camera's order (none by default). */
   extras: ExtraSlot[];
-  volumes: Volume[]; showAll: boolean; volumeId?: string; role?: card.CardRole; entryOnCard: boolean;
+  volumes: Volume[]; showAll: boolean; volumeId?: string; role?: card.CardRole;
   copySource: CopySource; parked: ParkedEntry[]; backups: ParkedEntry[]; copySel: string[]; copyInfo: Record<string, CopyInfo>; builds: BuildRecord[];
   busy?: string; toasts: Toast[]; confirm?: Confirm; cropId?: string; onlineOpen: boolean;
   /** Why the download dialog is open, when it says so: the bridge firmware is open, or one is to be made and no firmware is open. */
@@ -82,7 +79,7 @@ const SLOT_IDS: SlotId[] = ['CY', 'CG'];
 const emptySlot = (): SlotState => ({ names: {}, icon: { mode: 'keep', text: '', style: 'film' } });
 let state: State = {
   ready: false, page: 'ic', fwBusy: false, model: 'HDF', lang: 'zh-CN',
-  slots: { CY: emptySlot(), CG: emptySlot() }, extras: [], wall: [], ratios: [], ratioBackdrop: 'photo', soft: false, dateStamp: false, monoUnlock: false, wallMode: 'script', previewMode: 'photo', photoRev: 0, activeSlot: 'CY', volumes: [], entryOnCard: false, bridgeOpen: false,
+  slots: { CY: emptySlot(), CG: emptySlot() }, extras: [], wall: [], ratios: [], ratioBackdrop: 'photo', soft: false, dateStamp: false, monoUnlock: false, previewMode: 'photo', photoRev: 0, activeSlot: 'CY', volumes: [], bridgeOpen: false,
   copySource: 'card', parked: [], backups: [], copySel: [], copyInfo: {}, builds: [], showAll: false, toasts: [], onlineOpen: false, toursSeen: [],
 };
 const listeners = new Set<() => void>();
@@ -148,18 +145,17 @@ function scheduleSave(): void {
 async function saveProject(): Promise<void> {
   const s = state;
   const doc = {
-    v: 1, page: s.page, model: s.model, lang: s.lang, fwName: s.fwName, showAll: s.showAll, previewMode: s.previewMode, ratioBackdrop: s.ratioBackdrop, cardWall: s.cardWall || null,
+    v: 1, page: s.page, model: s.model, lang: s.lang, fwName: s.fwName, showAll: s.showAll, previewMode: s.previewMode, ratioBackdrop: s.ratioBackdrop,
     slots: Object.fromEntries(SLOT_IDS.map((id) => [id, {
       preset: s.slots[id].preset ? { fileName: s.slots[id].preset!.fileName, kind: s.slots[id].preset!.kind } : null,
       names: s.slots[id].names,
       icon: { mode: s.slots[id].icon.mode, text: s.slots[id].icon.text, style: s.slots[id].icon.style, image: s.slots[id].icon.image },
     }])),
     extras: s.extras.map((x) => ({ key: x.key, name: x.name, preset: x.preset ? { fileName: x.preset.fileName, kind: x.preset.kind } : null, icon: { mode: x.icon.mode, text: x.icon.text, style: x.icon.style, image: x.icon.image }, ...(x.halation ? { halation: x.halation } : {}) })),
-    wall: s.wall.map((w) => ({ id: w.id, name: w.name, kind: w.kind, width: w.width, height: w.height, crop: w.crop, ...(w.menuName !== undefined ? { menuName: w.menuName } : {}), ...(w.menuId ? { menuId: w.menuId } : {}) })),
-    wallMode: s.wallMode,
+    wall: s.wall.map((w) => ({ id: w.id, name: w.name, kind: 'image', width: w.width, height: w.height, crop: w.crop, ...(w.menuName !== undefined ? { menuName: w.menuName } : {}), ...(w.menuId ? { menuId: w.menuId } : {}) })),
     ratios: s.ratios.map((r) => ({ id: r.id, ratio: r.ratio, name: r.name })),
     soft: s.soft, dateStamp: s.dateStamp, monoUnlock: s.monoUnlock,
-    tours: s.toursSeen,
+    tours: s.toursSeen, toursV: 2,
   };
   try { await host.storeSet('project.json', JSON.stringify(doc)); } catch (e) { console.warn('save failed', e); }
 }
@@ -187,10 +183,11 @@ export async function init(): Promise<void> {
       const ratios: RatioItem[] = (Array.isArray(doc.ratios) ? doc.ratios : []).slice(0, MAX_CUSTOM_RATIOS)
         .filter((r: RatioItem) => r && typeof r.id === 'string' && typeof r.ratio === 'string')
         .map((r: RatioItem) => ({ id: r.id, ratio: r.ratio.slice(0, 24), name: String(r.name || '').slice(0, 80) }));
-      set({ ratios, activeRatio: ratios[0]?.id, page: doc.page === 'wall' || doc.page === 'copies' || doc.page === 'ratio' || doc.page === 'ic' ? doc.page : doc.page === 'script' ? 'wall' : 'ic', model: doc.model || 'HDF', lang: (LANGS as readonly string[]).includes(doc.lang) ? doc.lang : 'zh-CN', fwName: doc.fwName, showAll: !!doc.showAll, slots, extras, previewMode: doc.previewMode === 'swatch' ? 'swatch' : 'photo', ratioBackdrop: doc.ratioBackdrop === 'gray' ? 'gray' : 'photo', cardWall: validCardWall(doc.cardWall),
+      set({ ratios, activeRatio: ratios[0]?.id, page: doc.page === 'wall' || doc.page === 'copies' || doc.page === 'ratio' || doc.page === 'ic' ? doc.page : doc.page === 'script' ? 'wall' : 'ic', model: doc.model || 'HDF', lang: (LANGS as readonly string[]).includes(doc.lang) ? doc.lang : 'zh-CN', fwName: doc.fwName, showAll: !!doc.showAll, slots, extras, previewMode: doc.previewMode === 'swatch' ? 'swatch' : 'photo', ratioBackdrop: doc.ratioBackdrop === 'gray' ? 'gray' : 'photo',
         soft: doc.soft === true || (!!doc.softFocus && typeof doc.softFocus === 'object' && Object.keys(doc.softFocus).length > 0),
         dateStamp: doc.dateStamp === true, monoUnlock: doc.monoUnlock === true,
-        toursSeen: TOUR_IDS.filter((id) => Array.isArray(doc.tours) && doc.tours.includes(id)) });
+        // GR Mod 0.8 changed the power-off page: its tour (which now says where the pictures are chosen) shows once more
+        toursSeen: TOUR_IDS.filter((id) => Array.isArray(doc.tours) && doc.tours.includes(id) && (id !== 'wall' || doc.toursV >= 2)) });
       const fwRaw = await host.storeGet('firmware.bin');
       if (fwRaw) await openFirmware(fwRaw, doc.fwName || 'fwdc248b.bin', false);
       for (const id of SLOT_IDS) {
@@ -207,12 +204,13 @@ export async function init(): Promise<void> {
       }
       const wall: WallItem[] = [];
       for (const w of doc.wall || []) {
-        if (w.kind === 'factory') { wall.push({ id: w.id, name: w.name, kind: 'factory', width: 720, height: 480, crop: w.crop, busy: false }); continue; }
+        // the factory image of the start-up script's rotation (GR Mod 0.7) is in the camera's menu anyway
+        if (w.kind === 'factory' || wall.length >= SHUTDOWN_MAX_PICTURES) continue;
         const bytes = await host.storeGet('wall-' + w.id);
         const menu = { menuName: typeof w.menuName === 'string' ? String(w.menuName).slice(0, 40) : menuNameOf(String(w.name || '')), menuId: validMenuId(w.menuId) ? w.menuId : newMenuId(wall) };
-        if (bytes) wall.push({ id: w.id, name: w.name, kind: 'image', blob: new Blob([bytes as unknown as BlobPart], { type: 'image/jpeg' }), width: w.width, height: w.height, crop: w.crop, busy: true, ...menu });
+        if (bytes) wall.push({ id: w.id, name: w.name, blob: new Blob([bytes as unknown as BlobPart], { type: 'image/jpeg' }), width: w.width, height: w.height, crop: w.crop, busy: true, ...menu });
       }
-      set({ wall, wallMode: doc.wallMode === 'menu' ? 'menu' : 'script' });
+      set({ wall });
       for (const w of wall) void encodeWall(w.id);
     }
   } catch (e) { console.warn('restore failed', e); }
@@ -482,66 +480,41 @@ export async function wallBitmap(w: WallItem): Promise<ImageBitmap | null> {
   return b;
 }
 const encodeGen = new Map<string, number>();
+/** A picture of the firmware: the crop as it is, its own fixed size (see core aspect/shutdown.ts). */
 async function encodeWall(id: string): Promise<void> {
-  const w = state.wall.find((x) => x.id === id); const info = state.info;
-  if (!w || !info) return;
-  const res = info.shutdown[state.model];
-  if (!res) { setWall(id, { busy: false, error: t('encodeFailed') }); return; }
-  if (w.kind === 'factory') { setWall(id, { busy: false, data: res.data, error: undefined, quality: 100, grain: 0, soften: 0 }); return; }
+  const w = state.wall.find((x) => x.id === id);
+  if (!w || !state.info) return;
   const gen = (encodeGen.get(id) || 0) + 1; encodeGen.set(id, gen);
   setWall(id, { busy: true, error: undefined });
-  if (state.wallMode === 'menu') {
-    // a picture of the firmware: the crop as it is, its own fixed size (see core aspect/shutdown.ts)
-    try {
-      const bmp = await wallBitmap(w);
-      if (!bmp) throw new Error('no image');
-      const rgb = cropToRgb(bmp, w.crop);
-      const jpeg = await engine.menuPicture(rgb);
-      if (encodeGen.get(id) !== gen || state.wallMode !== 'menu') return;
-      setWall(id, { busy: false, menuJpeg: jpeg, preview: rgb, error: undefined, grain: 0, soften: 0 });
-    } catch {
-      if (encodeGen.get(id) !== gen) return;
-      setWall(id, { busy: false, menuJpeg: undefined, preview: undefined, error: t('encodeFailed') });
-    }
-    return;
-  }
   try {
     const bmp = await wallBitmap(w);
     if (!bmp) throw new Error('no image');
-    const model = state.model;
-    const r = await engine.encode(cropToRgb(bmp, w.crop), model);
-    if (encodeGen.get(id) !== gen || state.model !== model) return;
-    setWall(id, { busy: false, data: r.data, quality: r.quality, grain: r.grain, soften: r.soften, preview: r.preview });
-  } catch (e) {
+    const rgb = cropToRgb(bmp, w.crop);
+    const jpeg = await engine.menuPicture(rgb);
     if (encodeGen.get(id) !== gen) return;
-    const tooSmall = e instanceof EngineError && e.code === 'unreachable-size';
-    setWall(id, { busy: false, data: undefined, preview: undefined, error: tooSmall ? t('tooDetailed') : t('encodeFailed') });
+    setWall(id, { busy: false, menuJpeg: jpeg, preview: rgb, error: undefined });
+  } catch {
+    if (encodeGen.get(id) !== gen) return;
+    setWall(id, { busy: false, menuJpeg: undefined, preview: undefined, error: t('encodeFailed') });
   }
 }
-/** At most this many images: 9 rotated by the script, 8 in the camera's menu. */
-export const wallMax = (s: State = state): number => (s.wallMode === 'menu' ? SHUTDOWN_MAX_PICTURES : 9);
+/** At most this many images (the camera's menu lists them). */
+export const wallMax = (): number => SHUTDOWN_MAX_PICTURES;
 export async function addWallFiles(files: File[]): Promise<void> {
   for (const f of files) {
-    if (state.wall.length >= wallMax()) { toast(t(state.wallMode === 'menu' ? 'wallMenuMax' : 'wallMax'), 'info'); break; }
+    if (state.wall.length >= wallMax()) { toast(t('wallMax', { n: wallMax() }), 'info'); break; }
     if (!/^image\//.test(f.type) && !/\.(jpe?g|png|webp|bmp|gif|avif)$/i.test(f.name)) continue;
     try {
       const bmp = await loadBitmap(f);
       const wc = await workingCopy(bmp);
       bmp.close();
       const id = Math.random().toString(36).slice(2, 10);
-      const item: WallItem = { id, name: f.name, kind: 'image', blob: wc.blob, width: wc.width, height: wc.height, crop: defaultCrop(wc.width, wc.height), busy: true, menuName: menuNameOf(f.name), menuId: newMenuId(state.wall) };
+      const item: WallItem = { id, name: f.name, blob: wc.blob, width: wc.width, height: wc.height, crop: defaultCrop(wc.width, wc.height), busy: true, menuName: menuNameOf(f.name), menuId: newMenuId(state.wall) };
       set((s) => ({ wall: [...s.wall, item] }));
       if (host.available) void host.storeSet('wall-' + id, new Uint8Array(await wc.blob.arrayBuffer())).catch(() => undefined);
       void encodeWall(id);
     } catch (e) { fail(e); }
   }
-  scheduleSave();
-}
-export function addFactoryWall(): void {
-  if (state.wall.length >= 9) { toast(t('wallMax'), 'info'); return; }
-  const id = Math.random().toString(36).slice(2, 10);
-  set((s) => ({ wall: [...s.wall, { id, name: t('wallFactory'), kind: 'factory', width: 720, height: 480, crop: { x: 0, y: 0, w: 720, h: 480 }, busy: false }] }));
-  void encodeWall(id);
   scheduleSave();
 }
 export function removeWall(id: string): void {
@@ -574,31 +547,23 @@ export function menuNameOf(fileName: string): string {
   const stem = fileName.replace(/\.[^.]+$/, '').replace(/[^\x20-\x7e]/g, '').replace(/\s+/g, ' ').trim();
   return (stem || 'Picture').slice(0, SHUTDOWN_NAME_MAX).trim();
 }
-export function setWallMode(wallMode: WallMode): void {
-  if (state.wallMode === wallMode) return;
-  set({ wallMode });
-  for (const w of state.wall) void encodeWall(w.id);
-  scheduleSave();
-}
 export function setWallName(id: string, menuName: string): void { setWall(id, { menuName }); scheduleSave(); }
 const SHUTDOWN_NAME_PROBLEMS: Record<string, Key> = { empty: 'wallNameEmpty', 'too-long': 'wallNameLong', 'bad-char': 'wallNameBad' };
 /** Why an image cannot go into the camera's menu (null when it can). */
 export function wallMenuProblem(w: WallItem): string | null {
-  if (w.kind === 'factory') return t('wallMenuFactory');
   const p = validateShutdownName(w.menuName ?? '');
   if (p) return t(SHUTDOWN_NAME_PROBLEMS[p], { n: SHUTDOWN_NAME_MAX });
   if (w.busy) return t('converting');
   if (w.error || !w.menuJpeg) return w.error || t('encodeFailed');
   return null;
 }
-/** The pictures the firmware gets (none unless the images are chosen in the camera's menu). */
+/** The pictures the firmware gets. */
 export function menuPictures(s: State = state): ShutdownPictureSpec[] {
-  if (s.wallMode !== 'menu') return [];
-  return s.wall.filter((w) => w.kind === 'image' && !wallMenuProblem(w)).map((w) => ({ id: w.menuId!, name: w.menuName!.trim() === w.menuName ? w.menuName! : w.menuName!.trim(), jpeg: w.menuJpeg! }));
+  return s.wall.filter((w) => !wallMenuProblem(w)).map((w) => ({ id: w.menuId!, name: w.menuName!.trim() === w.menuName ? w.menuName! : w.menuName!.trim(), jpeg: w.menuJpeg! }));
 }
-/** In menu mode: every image is ready (names valid, encoded), and there is at least one. */
+/** Every image is ready (names valid, encoded), and there is at least one. */
 export function menuReady(s: State = state): boolean {
-  return s.wallMode === 'menu' && s.wall.length > 0 && s.wall.length <= SHUTDOWN_MAX_PICTURES && s.wall.every((w) => !wallMenuProblem(w));
+  return s.wall.length > 0 && s.wall.length <= SHUTDOWN_MAX_PICTURES && s.wall.every((w) => !wallMenuProblem(w));
 }
 export function setCrop(id: string, crop: Crop): void { setWall(id, { crop }); set({ cropId: undefined }); void encodeWall(id); scheduleSave(); }
 
@@ -720,67 +685,8 @@ export function setRatioBackdrop(ratioBackdrop: RatioBackdrop): void { set({ rat
 /** The slot the preview on the right shows. */
 export function setActiveSlot(id: SlotKey): void { if (state.activeSlot !== id) set({ activeSlot: id }); }
 
-// ------------------------------------------------------------------ remembered power-off images of the card
-const CW_SCRIPT = 'cw-script'; const CW_INDEX = 'cw-index';
-const cwKey = (name: string): string => 'cw-' + name.toLowerCase();
-function validCardWall(d: unknown): CardWall | undefined {
-  const c = d as CardWall | null;
-  if (!c || !Array.isArray(c.names) || c.names.length < 1 || c.names.length > 9 || !c.names.every((n) => /^GBR[1-9]\.JPG$/i.test(n))) return undefined;
-  return { names: c.names, hasIndex: !!c.hasIndex, savedAt: Number(c.savedAt) || 0, label: String(c.label || '') };
-}
-async function rememberCardWall(snap: card.WallpaperSnapshot, label: string): Promise<void> {
-  const old = state.cardWall;
-  await host.storeSet(CW_SCRIPT, snap.script);
-  for (const im of snap.images) await host.storeSet(cwKey(im.name), im.data);
-  if (snap.index) await host.storeSet(CW_INDEX, snap.index); else await host.storeDel(CW_INDEX).catch(() => undefined);
-  const names = snap.images.map((im) => im.name.toUpperCase());
-  for (const n of old?.names || []) if (!names.includes(n.toUpperCase())) await host.storeDel(cwKey(n)).catch(() => undefined);
-  set({ cardWall: { names, hasIndex: !!snap.index, savedAt: Date.now(), label } });
-  await saveProject();
-}
-/** Read the power-off image setup that is active on a card (script + images), if there is one. */
-async function readCardWall(root: string, l: card.CardListing): Promise<card.WallpaperSnapshot | null> {
-  if (!card.hasWallpaperScript(l)) return null;
-  const names = card.wallpaperImageNames(l);
-  const scriptDir = l.root.find((e) => e.dir && e.name.toLowerCase() === card.SCRIPT_DIR);
-  const scriptFile = l.script.find((e) => !e.dir && e.name.toLowerCase() === card.SCRIPT_FILE);
-  if (!names.length || !scriptDir || !scriptFile || scriptFile.size === 0 || scriptFile.size > 262_144) return null;
-  if (names.some((n) => { const e = l.root.find((x) => x.name === n)!; return e.size === 0 || e.size > 2_000_000; })) return null;
-  const script = await host.read(host.join(root, scriptDir.name, scriptFile.name));
-  const images: card.WallpaperSnapshot['images'] = [];
-  for (const n of names) images.push({ name: n, data: await host.read(host.join(root, n)) });
-  const idx = l.root.find((e) => !e.dir && e.name.toLowerCase() === card.INDEX_FILE.toLowerCase());
-  const index = idx && idx.size > 0 && idx.size <= 16 ? await host.read(host.join(root, idx.name)) : undefined;
-  return { script, images, index };
-}
 /** The desktop builds (Windows, macOS, Linux) can eject a card; the development build cannot. */
 const canEject = (): boolean => host.info?.kind === 'windows' || host.info?.kind === 'mac' || host.info?.kind === 'linux';
-const volumeLabel = (v: Volume): string => `${v.id}${v.label && v.label !== v.id ? ' ' + v.label : ''}`;
-export function canRestoreWall(s: State = state): boolean {
-  return !!s.cardWall && !!s.info && !s.busy && s.volumes.some((v) => v.id === s.volumeId) && s.role !== undefined && s.role !== 'wallpaper';
-}
-/** Put the remembered power-off images and their script back on the selected card. */
-export async function restoreCardWall(): Promise<void> {
-  const cw = state.cardWall; const v = state.volumes.find((x) => x.id === state.volumeId);
-  if (state.busy || !cw) return;
-  if (!v) { toast(t('noCard'), 'error'); return; }
-  try {
-    set({ busy: t('writing') });
-    const script = await host.storeGet(CW_SCRIPT);
-    const images: card.WallpaperSnapshot['images'] = [];
-    for (const n of cw.names) { const data = await host.storeGet(cwKey(n)); if (data) images.push({ name: n, data }); }
-    if (!script || images.length !== cw.names.length) { set({ busy: undefined, cardWall: undefined }); scheduleSave(); toast(t('restoreMissing'), 'error'); return; }
-    const index = cw.hasIndex ? (await host.storeGet(CW_INDEX)) || undefined : undefined;
-    const plan = card.planRestoreWallpaper(await listing(v.root), { script, images, index }, await freshStamp(v.root));
-    const moved = await runPlan(v.root, plan);
-    set({ busy: undefined });
-    const text = t('wallRestored', { n: images.length }) + (moved ? ` · ${t('parked', { n: moved })}` : '');
-    if (canEject()) toast(text, 'ok', { label: t('eject'), run: () => { host.eject(v.id).then(() => { toast(t('ejected'), 'ok'); void refreshVolumes(); }).catch(fail); } });
-    else toast(text, 'ok');
-  } catch (e) { set({ busy: undefined }); fail(e); }
-  void refreshVolumes();
-}
-
 // ------------------------------------------------------------------ volumes
 async function listing(root: string): Promise<card.CardListing> {
   const rootEntries = await host.list(root);
@@ -795,15 +701,15 @@ export async function refreshVolumes(): Promise<void> {
     const volumes = await host.volumes(state.showAll);
     let volumeId = state.volumeId;
     if (!volumeId || !volumes.some((v) => v.id === volumeId)) volumeId = (volumes.find((v) => v.removable) || volumes[0])?.id;
-    let role: card.CardRole | undefined; let entryOnCard = false;
+    let role: card.CardRole | undefined;
     const v = volumes.find((x) => x.id === volumeId);
-    if (v) { try { const l = await listing(v.root); role = card.cardRole(l); entryOnCard = card.hasEntryFiles(l, entryNames()); } catch { role = undefined; } }
-    const same = JSON.stringify(volumes) === JSON.stringify(state.volumes) && volumeId === state.volumeId && role === state.role && entryOnCard === state.entryOnCard;
-    if (!same) set({ volumes, volumeId, role, entryOnCard });
+    if (v) { try { role = card.cardRole(await listing(v.root)); } catch { role = undefined; } }
+    const same = JSON.stringify(volumes) === JSON.stringify(state.volumes) && volumeId === state.volumeId && role === state.role;
+    if (!same) set({ volumes, volumeId, role });
     if (state.page === 'copies') void refreshCopies();
   } catch { /* shell gone or busy */ } finally { refreshing = false; }
 }
-export function selectVolume(id: string): void { set({ volumeId: id, role: undefined, entryOnCard: false, parked: [], copySel: state.copySource === 'card' ? [] : state.copySel }); void refreshVolumes(); }
+export function selectVolume(id: string): void { set({ volumeId: id, role: undefined, parked: [], copySel: state.copySource === 'card' ? [] : state.copySel }); void refreshVolumes(); }
 export function setShowAll(v: boolean): void { set({ showAll: v }); scheduleSave(); void refreshVolumes(); }
 
 // ------------------------------------------------------------------ output
@@ -865,24 +771,16 @@ async function destination(dest: Dest): Promise<{ root: string; volume?: Volume 
   const path = await host.pickDirectory(t('pickFolder'));
   return path ? { root: path } : null;
 }
-function doneToast(root: string, volume: Volume | undefined, moved: number, file: string, kept = false): void {
-  const text = (volume ? t('written', { p: host.join(root, file) }) : t('exported', { p: root })) + (kept ? ` · ${t('wallKept')}` : moved ? ` · ${t('parked', { n: moved })}` : '');
+function doneToast(root: string, volume: Volume | undefined, moved: number, file: string): void {
+  const text = (volume ? t('written', { p: host.join(root, file) }) : t('exported', { p: root })) + (moved ? ` · ${t('parked', { n: moved })}` : '');
   if (volume && canEject()) {
     toast(text, 'ok', { label: t('eject'), run: () => { host.eject(volume.id).then(() => { toast(t('ejected'), 'ok'); void refreshVolumes(); }).catch(fail); } });
   } else toast(text, 'ok', { label: t('reveal'), run: () => { void host.reveal(host.join(root, file)); } });
 }
 
-/** Turn a card into a firmware card holding `file`; remembers the card's power-off images first. */
-async function firmwareToCard(volume: Volume, file: Uint8Array): Promise<{ moved: number; kept: boolean }> {
-  const l = await listing(volume.root);
-  let kept = false;
-  // a card that shows the user's own power-off images: remember them before the script is moved aside
-  try {
-    const snap = await readCardWall(volume.root, l);
-    if (snap) { await rememberCardWall(snap, volumeLabel(volume)); kept = true; }
-  } catch (e) { console.warn('remember power-off images', e); }
-  const moved = await runPlan(volume.root, card.planFirmwareCard(l, file, await freshStamp(volume.root)));
-  return { moved, kept };
+/** Turn a card into a firmware card holding `file` (what is in the way, such as a start-up script of GR Mod 0.7's power-off images, is moved aside). */
+async function firmwareToCard(volume: Volume, file: Uint8Array): Promise<number> {
+  return runPlan(volume.root, card.planFirmwareCard(await listing(volume.root), file, await freshStamp(volume.root)));
 }
 
 export async function outputFirmware(dest: Dest, stock = false): Promise<void> {
@@ -896,7 +794,7 @@ export async function outputFirmware(dest: Dest, stock = false): Promise<void> {
   if (!stock && (hasNameErrors() || hasRatioErrors())) return;
   if (!stock && hasExtraErrors()) { toast(t('extraIncomplete'), 'error'); return; }
   const extras = stock ? [] : extraSpecs();
-  if (!stock && state.wallMode === 'menu' && state.wall.length > 0 && !menuReady()) { toast(t('wallMenuIncomplete'), 'error'); return; }
+  if (!stock && state.wall.length > 0 && !menuReady()) { toast(t('wallMenuIncomplete'), 'error'); return; }
   const pictures = stock ? [] : menuPictures();
   if (!stock && changes.length === 0 && ratios.length === 0 && !soft && !dateStamp && !monoUnlock && extras.length === 0 && pictures.length === 0) { toast(t('nothingToDo'), 'info'); return; }
   if (stock && !(await askOfficial([t('copyOfficial')]))) return;
@@ -923,11 +821,11 @@ export async function outputFirmware(dest: Dest, stock = false): Promise<void> {
       void recordBuild(file, changes);
     }
     set({ busy: t('writing') });
-    let moved = 0; let kept = false;
-    if (target.volume) ({ moved, kept } = await firmwareToCard(target.volume, file));
+    let moved = 0;
+    if (target.volume) moved = await firmwareToCard(target.volume, file);
     else await runPlan(target.root, [{ op: 'write', path: [card.FIRMWARE_FILE], data: file }]);
     set({ busy: undefined });
-    doneToast(target.root, target.volume, moved, card.FIRMWARE_FILE, kept);
+    doneToast(target.root, target.volume, moved, card.FIRMWARE_FILE);
   } catch (e) { set({ busy: undefined }); fail(e); }
   void refreshVolumes();
 }
@@ -945,62 +843,16 @@ export async function outputBridge(dest: Dest): Promise<void> {
     set({ busy: t('building') });
     const file = await engine.bridge();
     set({ busy: t('writing') });
-    let moved = 0; let kept = false;
-    if (target.volume) ({ moved, kept } = await firmwareToCard(target.volume, file));
+    let moved = 0;
+    if (target.volume) moved = await firmwareToCard(target.volume, file);
     else await runPlan(target.root, [{ op: 'write', path: [card.FIRMWARE_FILE], data: file }]);
     set({ busy: undefined });
-    doneToast(target.root, target.volume, moved, card.FIRMWARE_FILE, kept);
+    doneToast(target.root, target.volume, moved, card.FIRMWARE_FILE);
   } catch (e) { set({ busy: undefined }); fail(e); }
   void refreshVolumes();
 }
 
-// ------------------------------------------------------------------ factory-menu entry (to switch Script on)
-// Nothing takes these files off the card on request: the next firmware or power-off image write moves them aside.
-const entryNames = (): readonly string[] => state.info?.factoryEntry.files.map((f) => f.name) || card.FACTORY_ENTRY_FILES;
-/** Put the files that open the camera's factory menu on the card (or into a folder). */
-export async function outputEntry(dest: Dest): Promise<void> {
-  const info = state.info;
-  if (state.busy || !info) return;
-  if (bridgeLoaded()) { askForOfficial(); return; }
-  const target = await destination(dest);
-  if (!target) return;
-  try {
-    set({ busy: t('writing') });
-    const files = info.factoryEntry.files;
-    let moved = 0;
-    if (target.volume) moved = await runPlan(target.root, card.planEntryCard(await listing(target.root), files, await freshStamp(target.root)));
-    else await runPlan(target.root, files.map((f) => ({ op: 'write' as const, path: [f.name], data: f.data })));
-    set({ busy: undefined });
-    doneToast(target.root, target.volume, moved, info.factoryEntry.modeSetName);
-  } catch (e) { set({ busy: undefined }); fail(e); }
-  void refreshVolumes();
-}
-export function wallReady(s: State = state): boolean {
-  if (s.wallMode === 'menu') return menuReady(s);
-  return s.wall.length > 0 && s.wall.every((w) => !w.busy && !w.error && !!w.data);
-}
-export async function outputWallpaper(dest: Dest): Promise<void> {
-  if (state.busy || !state.info) return;
-  if (bridgeLoaded()) { askForOfficial(); return; }
-  if (!wallReady()) { toast(t('nothingToDo'), 'info'); return; }
-  const target = await destination(dest);
-  if (!target) return;
-  try {
-    set({ busy: t('writing') });
-    const images = state.wall.map((w) => w.data!);
-    const script = await engine.script(state.model, images.length);
-    const plan = card.planWallpaperCard(target.volume ? await listing(target.root) : { root: [], script: [] }, images, script, target.volume ? await freshStamp(target.root) : stamp());
-    const moved = await runPlan(target.root, plan);
-    if (target.volume) {
-      const files = card.planFiles(plan);
-      const scriptBytes = files.find((f) => f.path.length === 2)!.data;
-      await rememberCardWall({ script: scriptBytes, images: images.map((data, i) => ({ name: `GBR${i + 1}.JPG`, data })), index: new Uint8Array([0x31]) }, volumeLabel(target.volume)).catch((e) => console.warn('remember power-off images', e));
-    }
-    set({ busy: undefined });
-    doneToast(target.root, target.volume, moved, host.join(card.SCRIPT_DIR, card.SCRIPT_FILE));
-  } catch (e) { set({ busy: undefined }); fail(e); }
-  void refreshVolumes();
-}
+export function wallReady(s: State = state): boolean { return menuReady(s); }
 
 // ------------------------------------------------------------------ copies moved aside on the card, and their backups
 const BUILDS_KEY = 'builds.json';
@@ -1174,9 +1026,9 @@ export async function writeCopy(): Promise<void> {
     const now = await engine.inspect(file.slice());
     if (!now.verified || now.sha256 !== pick.summary.sha256) throw new EngineError('selfcheck-failed', t('copyUnverified'));
     set({ busy: t('writing') });
-    const { moved, kept } = await firmwareToCard(v, file);
+    const moved = await firmwareToCard(v, file);
     set({ busy: undefined });
-    doneToast(v.root, v, moved, card.FIRMWARE_FILE, kept);
+    doneToast(v.root, v, moved, card.FIRMWARE_FILE);
   } catch (e) { set({ busy: undefined }); fail(e); }
   await refreshCopies();
   void refreshVolumes();

@@ -10,15 +10,15 @@ import type { Crop } from './pixels';
 import { onUiScale, uiScale } from './fit';
 import { applySlot } from './preview';
 import {
-  addFactoryWall, addRatio, addWallFiles, askForOfficial, bridgeLoaded, loadFirmwareFile, outputEntry, loadIconImage, loadPresetFile, loadPreviewFile, moveWall, nameProblem, openCrop, outputFirmware, previewPhoto, removePreset, removeWall,
+  addRatio, addWallFiles, askForOfficial, bridgeLoaded, loadFirmwareFile, loadIconImage, loadPresetFile, loadPreviewFile, moveWall, nameProblem, openCrop, outputFirmware, previewPhoto, removePreset, removeWall,
   ratioName, ratioProblem, removeRatio, setActiveRatio, setActiveSlot, setCrop, setIcon, setName, setPreviewMode, setRatio, setRatioBackdrop, useStore, wallBitmap,
   setSoft,
   setDateStamp,
   setMonoUnlock,
   extraName, extraNameProblem, extraProblem, halationOf, removeExtraSlot, setExtraCount, setExtraName, setHalation, slotOf,
-  setWallMode, setWallName, wallMax, wallMenuProblem,
+  setWallName, wallMax, wallMenuProblem,
 } from './store';
-import type { ExtraSlot, RatioItem, WallItem, WallMode } from './store';
+import type { ExtraSlot, RatioItem, WallItem } from './store';
 
 const isPreset = (f: File): boolean => /\.(xmp|cube)$/i.test(f.name);
 const isFirmware = (f: File): boolean => /\.bin$/i.test(f.name);
@@ -566,15 +566,8 @@ export function RatioPage() {
 // ---------------------------------------------------------------- power-off images
 function WallCard({ w, index }: { w: WallItem; index: number }) {
   const tour = index === 0 ? 'wall-card' : undefined;
-  const info = useStore((s) => s.info);
-  const model = useStore((s) => s.model);
   const [over, setOver] = useState(false);
-  const menu = useStore((s) => s.wallMode === 'menu');
-  const factory = w.kind === 'factory' ? info?.shutdown[model] : undefined;
-  const problem = menu && !w.busy ? wallMenuProblem(w) : null;
-  const ref = useRef<HTMLImageElement>(null);
-  const url = useMemo(() => (factory ? URL.createObjectURL(new Blob([factory.data as unknown as BlobPart], { type: 'image/jpeg' })) : ''), [factory]);
-  useEffect(() => () => { if (url) URL.revokeObjectURL(url); }, [url]);
+  const problem = !w.busy ? wallMenuProblem(w) : null;
   return (
     <div
       className={`wall-card ${over ? 'drag-over' : ''}`} data-tour={tour}
@@ -586,30 +579,21 @@ function WallCard({ w, index }: { w: WallItem; index: number }) {
     >
       <div className="wall-thumb">
         {w.preview && <RgbCanvas rgb={w.preview} w={SHUTDOWN_W} h={SHUTDOWN_H} />}
-        {factory && <img ref={ref} src={url} alt="" draggable={false} />}
         {w.busy && <span className="thumb-state"><span className="spinner" /></span>}
         {w.error && <span className="thumb-state bad">{w.error}</span>}
-        {menu && w.kind === 'factory' && <span className="thumb-state bad">{t('wallMenuFactory')}</span>}
         <span className="wall-index">{index + 1}</span>
         <span className="wall-actions">
-          {w.kind === 'image' && <button className="btn mini" title={t('wallCrop')} onClick={() => openCrop(w.id)}>{Ico.crop}</button>}
+          <button className="btn mini" title={t('wallCrop')} onClick={() => openCrop(w.id)}>{Ico.crop}</button>
           <button className="btn mini" title={t('remove')} onClick={() => removeWall(w.id)}>{Ico.x}</button>
         </span>
       </div>
-      {menu && w.kind === 'image' ? (
-        <div className="wall-meta wall-name">
-          <input
-            className={`input small ${problem && w.menuJpeg ? 'bad' : ''}`} value={w.menuName ?? ''} maxLength={SHUTDOWN_NAME_MAX + 8}
-            placeholder={t('wallName')} aria-label={t('wallName')} title={problem && w.menuJpeg ? problem : w.name} spellCheck={false}
-            onChange={(e) => setWallName(w.id, e.target.value)}
-          />
-        </div>
-      ) : (
-        <div className="wall-meta">
-          <span className="ellipsis">{w.name}</span>
-          {!menu && !!w.grain && <span className="chip tiny">{t('grain')}</span>}
-        </div>
-      )}
+      <div className="wall-meta wall-name">
+        <input
+          className={`input small ${problem && w.menuJpeg ? 'bad' : ''}`} value={w.menuName ?? ''} maxLength={SHUTDOWN_NAME_MAX + 8}
+          placeholder={t('wallName')} aria-label={t('wallName')} title={problem && w.menuJpeg ? problem : w.name} spellCheck={false}
+          onChange={(e) => setWallName(w.id, e.target.value)}
+        />
+      </div>
     </div>
   );
 }
@@ -648,8 +632,7 @@ export function fitTiles(n: number, w: number, h: number): { cols: number; tile:
 export function WallpaperPage() {
   const wall = useStore((s) => s.wall);
   const info = useStore((s) => s.info);
-  const mode = useStore((s) => s.wallMode);
-  const max = useStore((s) => wallMax(s));
+  const max = wallMax();
   const [ref, box] = useBox<HTMLDivElement>();
   const tiles = wall.length + (wall.length < max ? 1 : 0);
   const fit = fitTiles(tiles, box.w, box.h);
@@ -661,20 +644,10 @@ export function WallpaperPage() {
         {info && (
           <div className="head-right">
             {wall.length > 0 && <span className={`chip ${wall.length > max ? 'warn' : ''}`}>{wall.length}/{max}</span>}
-            <Segmented value={mode} onChange={(v) => setWallMode(v as WallMode)} options={[{ value: 'script', label: t('wallModeScript') }, { value: 'menu', label: t('wallModeMenu') }]} />
           </div>
         )}
       </header>
       {!info && <FirmwareHero />}
-      {info && mode === 'script' && <FactoryEntryCard />}
-      {info && mode === 'menu' && (
-        <div className="card entry-card">
-          <div className="entry-row">
-            <span className="page-icon soft-ico">{Ico.image}</span>
-            <div className="soft-text"><span className="muted small">{t('wallMenuHint')}</span></div>
-          </div>
-        </div>
-      )}
       {info && (
         <div className="wall-fit" ref={ref} data-tour-page="wall">
           {fit.tile > 0 && (
@@ -683,7 +656,6 @@ export function WallpaperPage() {
               {wall.length < max && (
                 <div className="wall-add" data-tour="wall-add">
                   <FileButton className="wall-add-btn" accept="image/*" multiple onFiles={(f) => { void addWallFiles(f); }}>{Ico.plus}<span>{wall.length ? t('wallAdd') : t('wallEmpty')}</span></FileButton>
-                  {mode === 'script' && <button className="btn ghost small" onClick={() => addFactoryWall()}>{t('wallFactory')}</button>}
                 </div>
               )}
             </div>
@@ -691,40 +663,6 @@ export function WallpaperPage() {
         </div>
       )}
     </DropZone>
-  );
-}
-
-// ---------------------------------------------------------------- switching Script on
-/**
- * The files that open the camera's factory menu, where Script is switched on once so that the
- * power-off images take effect. Only the power-off images need it, so it sits on their page.
- */
-function FactoryEntryCard() {
-  const info = useStore((s) => s.info);
-  const onCard = useStore((s) => s.entryOnCard);
-  const busy = useStore((s) => !!s.busy);
-  const hasCard = useStore((s) => s.volumes.some((v) => v.id === s.volumeId));
-  const bridge = useStore((s) => bridgeLoaded(s));
-  if (!info) return null;
-  const run = (kind: 'card' | 'folder'): void => { if (bridge) askForOfficial(); else void outputEntry({ kind }); };
-  return (
-    <div className="card entry-card" data-tour="wall-entry">
-      <div className="entry-row">
-        <span className="page-icon soft-ico">{Ico.tool}</span>
-        <div className="soft-text">
-          <b>{t('navScript')}</b>
-          <span className="muted small">{t('scriptHint')}</span>
-          <div className="chips entry-chips">
-            {info.factoryEntry.files.map((f) => <span key={f.name} className="chip file tiny">{Ico.file}{f.name}</span>)}
-            {onCard && <span className="chip ok tiny">{Ico.check}{t('entryOnCard')}</span>}
-          </div>
-        </div>
-        <div className="entry-actions">
-          <button className="btn ghost icon-only" disabled={busy} title={t('exportFolder')} aria-label={t('exportFolder')} onClick={() => run('folder')}>{Ico.folder}</button>
-          <button className="btn" data-tour="wall-entry-write" disabled={busy || (!hasCard && !bridge)} onClick={() => run('card')}>{t('writeCard')}</button>
-        </div>
-      </div>
-    </div>
   );
 }
 

@@ -58,7 +58,7 @@ export const TOURS: Record<TourId, Step[]> = {
     step('write', 'IcWrite', 'top'),
   ],
   wall: [
-    step('wall-entry', 'WallEntry', 'bottom'),
+    step(undefined, 'WallMenu'),
     step('wall-add', 'WallAdd'),
     step('wall-card', 'WallCard'),
     step('write', 'WallWrite', 'top'),
