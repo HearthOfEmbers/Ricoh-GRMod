@@ -2,9 +2,10 @@
 /**
  * Power-off pictures chosen in the camera's End Screen menu (aspect/shutdown.ts). The data part
  * runs everywhere; the firmware part needs the official firmware in testdata/private. What the
- * camera-side code does when it runs (the menu's rows, ticks, confirm, thumbnails, the picture
- * request, the store record) was checked in an emulator on builds of this code (1, 2 and 8
- * pictures, with and without the other additions).
+ * camera-side code does when it runs (the submenu, both End Screen list instances, rows, ticks,
+ * confirm, thumbnails, the picture request, the store record) is checked in an emulator by
+ * tools/shutdown/menu_check.py on builds of this code (2 and 8 pictures, with and without the
+ * other additions).
  */
 import { describe, expect, it } from 'vitest';
 import { existsSync, readFileSync } from 'node:fs';
@@ -89,7 +90,18 @@ describe.skipIf(!have)('power-off pictures: firmware files', () => {
       for (const f of official) expect(aspect.resFile(d, f)).toEqual(aspect.resFile(off, f));
       // camera menu data
       const rtos = fw.sectionsOf(d).find((x) => x.name === 'RTOS')!;
-      expect(aspect.readShutdownMenu(new Patch(d.slice(rtos.offset, rtos.offset + rtos.size)))).toEqual(list.map((p) => ({ id: p.id, name: p.name })));
+      const built = new Patch(d.slice(rtos.offset, rtos.offset + rtos.size));
+      expect(aspect.readShutdownMenu(built)).toEqual(list.map((p) => ({ id: p.id, name: p.name })));
+      // Setup > Display > End Screen opens the submenu; its line names in Simplified Chinese / English
+      expect(built.word(0x53d9ca10 + 0x1bc + 10 * 4)).toBe(aspect.SHUTDOWN_MENU_ID);
+      const text = (row: number, id: number): string => {
+        const desc = built.word(built.word(0x543d4ac0 + row * 4) + id * 4);
+        const units = built.read(desc, 1)[0];
+        const bytes = built.read(built.word(desc + 4), 2 * (units - 1));
+        return String.fromCharCode(...Array.from({ length: units - 1 }, (_, i) => bytes[2 * i] | (bytes[2 * i + 1] << 8)));
+      };
+      expect([aspect.SHUTDOWN_TYPE_TEXT, aspect.SHUTDOWN_PICTURE_TEXT, aspect.SHUTDOWN_FACTORY_TEXT].map((id) => text(19, id))).toEqual(['类型', '图片', '原厂']);
+      expect([aspect.SHUTDOWN_TYPE_TEXT, aspect.SHUTDOWN_PICTURE_TEXT, aspect.SHUTDOWN_FACTORY_TEXT].map((id) => text(1, id))).toEqual(['Type', 'Picture', 'Original']);
     }
   }, 300_000);
 

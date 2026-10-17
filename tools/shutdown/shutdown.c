@@ -2,15 +2,16 @@
  *
  * GR Mod: power-off pictures chosen in the camera (Ricoh GR IV, firmware 1.11).
  *
- * The camera's "End Screen" menu (Setup > Display) has two rows of its own (type 1 / type 2:
- * whether the shooting statistics are shown). This module extends that list with a row for the
- * factory picture and one row per added picture; picking one is remembered in a record of the
- * camera's own settings store (APData) and the power-off screen shows that picture:
- *   rows 0, 1        the camera's own setting (as before);
- *   row 2            factory picture (this camera's GoodBye / HDF / Monochrome / 20th picture);
- *   rows 3 .. 3+n-1  the added pictures, by name.
- * The two groups have one tick each. The footer graphic above the list shows a thumbnail of the
- * focused row (the camera's own two thumbnails for rows 0 and 1).
+ * The camera's "End Screen" line (Setup > Display) opens a submenu of two lines (see shutdown.ts):
+ *   Type      the camera's own End Screen list (type 1 / type 2: whether the shooting statistics
+ *             are shown), unchanged;
+ *   Picture   a second instance of the same list controller, built with 1 + n rows:
+ *               row 0            factory picture (this camera's GoodBye / HDF / Monochrome / 20th);
+ *               rows 1 .. n      the added pictures, by name.
+ * The picture list has one tick; the footer graphic above it shows a 520x200 thumbnail of the
+ * focused row. Picking one is remembered in a record of the camera's own settings store (APData)
+ * and the power-off screen shows that picture. Only the picture list's controller comes here (its
+ * stubs compare the controller with the one GR Mod created); the camera's own list runs as before.
  *
  * The pictures are files of the firmware's RES section (A:\Resource\Jpeg\GRMOD<k>.jpg, 720x480),
  * reached through the camera's table of full-screen JPEGs, which GR Mod copies and extends (the
@@ -25,7 +26,7 @@
  *
  * Same approach as the End Screen list of gr-custom-tool (Copyright (C) 2026 DoYitNow,
  * GPL-2.0-only), written anew for GR Mod's build: GR Mod's own record magic, files and catalog
- * numbers, every entry taking its context from a stub.
+ * numbers, menu layout, every entry taking its context from a stub.
  *
  * Position-independent: no global data; firmware functions are called at their fixed addresses,
  * everything else comes in through `struct sd_ctx` (built by shutdown.ts).
@@ -40,7 +41,7 @@ struct sd_ctx {
   u32 magic;                 /* SD_CTX_MAGIC */
   u32 record;                /* APData record of the choice */
   u32 count;                 /* added pictures, 1..MAX_PICTURES */
-  u32 factory_text;          /* text of row 2; the pictures' names follow it */
+  u32 factory_text;          /* text of row 0; the pictures' names follow it */
   u32 original_background;   /* the native picture request, continued past its first instruction */
   u32 prior_save;            /* the settings save this hook continues */
   u16 factory_icon[4];       /* thumbnails of the factory pictures 1, 2, 3, 11 (0: none) */
@@ -67,14 +68,13 @@ typedef void (*move_fn)(void *, int, u32);
 #define VARIANT_ROOT     ((get0_fn)0x5372b620u)
 #define DISPLAY_GET      ((get1_fn)0x5323ed78u)
 #define JPEG_REQUEST     ((u32_2_fn)0x53262558u)
-#define STATS_GET        ((u32_1_fn)0x5329af24u)
-#define STATS_SET        ((u32_2_fn)0x5333d364u)
 #define LIST_SELECTED    ((u32_1_fn)0x53570b6cu)
 #define LIST_ITEM        ((item_fn)0x53570a9cu)
 #define LIST_FOCUS       ((set2_fn)0x53571788u)
 #define LIST_MOVE        ((move_fn)0x535715b8u)
 #define ITEM_CHECK       ((set2_fn)0x5357ad40u)
 #define ITEM_TEXT        ((set2_fn)0x5357ade0u)
+#define SUB_LINE_TEXT    ((set2_fn)0x535831e8u)
 #define GRAPHIC_ICON     ((set2_fn)0x53576e38u)
 #define GRAPHIC_VISIBLE  ((set2_fn)0x53589ab4u)
 #define STORAGE          ((get0_fn)0x53a81480u)
@@ -82,10 +82,6 @@ typedef void (*move_fn)(void *, int, u32);
 #define STORE_SIZE       ((u32 (*)(void *, u32))0x53a7e208u)
 #define STORE_READ       ((u32 (*)(void *, u32, u32, void *))0x53a7e434u)
 #define STORE_WRITE      ((u32 (*)(void *, u32, u32, const void *))0x53a7e518u)
-
-/* The statistics texts of rows 0 and 1, and their thumbnails (as the native list has them). */
-#define STATS_TEXT_0 6u
-#define STATS_ICON_0 17u
 
 struct record { u32 magic, choice; };
 
@@ -146,12 +142,13 @@ u32 sd_save(void *mode, const struct sd_ctx *k) {
 /* ---- the menu ------------------------------------------------------------------------------- */
 
 static void *list(void *controller) { return *(void **)((u8 *)controller + 0x168); }
-static void *userdata(void) { return USERDATA_GET(APP_GET()); }
 
-static u32 rows(const struct sd_ctx *k) { return 3u + k->count; }
+static u32 rows(const struct sd_ctx *k) { return 1u + k->count; }
 
-static u32 label(const struct sd_ctx *k, u32 row) {
-  return row < 2 ? STATS_TEXT_0 + row : k->factory_text + (row - 2);
+/* Row of the current choice: 0 factory, 1 + i the added picture i. */
+static u32 chosen_row(const struct sd_ctx *k) {
+  int picture = row_of(k, sd_get(k));
+  return picture >= 0 ? 1u + (u32)picture : 0u;
 }
 
 /* The factory picture this camera shows (as 0x531B9488 chooses it), as an index of factory_icon. */
@@ -170,19 +167,17 @@ static u32 factory_index(void) {
 
 static void update(void *controller, const struct sd_ctx *k, int focus) {
   void *widget = list(controller);
-  u32 stats = STATS_GET(userdata());
-  int picture = row_of(k, sd_get(k));
-  u32 chosen = picture >= 0 ? 3u + (u32)picture : 2u;
+  u32 chosen = chosen_row(k);
   u32 row;
   for (row = 0; row < rows(k); row++) {
     void *item = LIST_ITEM(widget, row);
-    u32 on = row < 2 ? row == stats : row == chosen;
-    ITEM_CHECK(item, on);
-    ITEM_TEXT(item, label(k, row));
+    ITEM_CHECK(item, row == chosen);
+    ITEM_TEXT(item, k->factory_text + row);
   }
   if (focus) LIST_FOCUS(widget, chosen);
 }
 
+/* The picture list: rows, ticks and texts, the cursor on the current choice (when it opens). */
 void sd_refresh(void *controller, const struct sd_ctx *k) {
   if (ok(k)) update(controller, k, 1);
 }
@@ -192,8 +187,7 @@ u32 sd_confirm(void *controller, const struct sd_ctx *k) {
   if (!ok(k)) return 0;
   row = LIST_SELECTED(list(controller));
   if (row >= rows(k)) return 0;
-  if (row < 2) STATS_SET(userdata(), row);
-  else put(k, row == 2 ? 0 : k->choice[row - 3]);
+  put(k, row == 0 ? 0 : k->choice[row - 1]);
   update(controller, k, 0);
   return 1;
 }
@@ -216,9 +210,14 @@ void sd_right(void *controller, u32 stop, const struct sd_ctx *k) {
 void sd_footer(void *controller, const struct sd_ctx *k) {
   void *graphic = *(void **)((u8 *)controller + 0x164);
   u32 row = LIST_SELECTED(list(controller)), icon = 0;
-  if (row < 2) icon = STATS_ICON_0 + row;
-  else if (ok(k) && row == 2) icon = k->factory_icon[factory_index()];
-  else if (ok(k) && row < rows(k)) icon = k->icon[row - 3];
+  if (ok(k) && row == 0) icon = k->factory_icon[factory_index()];
+  else if (ok(k) && row < rows(k)) icon = k->icon[row - 1];
   if (icon) GRAPHIC_ICON(graphic, icon);
   GRAPHIC_VISIBLE(graphic, icon != 0);
+}
+
+/* The submenu's "Picture" line: the name of the current choice. */
+void sd_line(void *submenu, void *line, const struct sd_ctx *k) {
+  (void)submenu;
+  if (ok(k)) SUB_LINE_TEXT(line, k->factory_text + chosen_row(k));
 }

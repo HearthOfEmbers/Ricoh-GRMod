@@ -151,6 +151,8 @@ export class Patch {
   private len: number;
   readonly words: PatchedWord[] = [];
   textBoundSites: number[] = [];
+  /** Records of the relocated submenu table (0 while it is the official one; see `datestamp-menu.ts`). */
+  submenuRecords = 0;
 
   constructor(official: Uint8Array) {
     this.buf = new Uint8Array(official.length + 0x80000);

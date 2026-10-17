@@ -48,7 +48,7 @@
  *    within what added ratios use).
  */
 import { FirmwareError } from '../types';
-import { assembleWords, movImmediate, movWord } from './arm';
+import { assembleWords, branchTarget, movImmediate, movWord } from './arm';
 import {
   ICON_CATALOG, LANGUAGES, LOOKUP_BOUNDS, NATIVE_TEXT_ROOTS, Patch, TEXT_CATALOG, concat, expectWord, u16le, u32le, utf16z,
 } from './build';
@@ -290,6 +290,68 @@ function installIcons(patch: Patch, iconbin: Uint8Array): Uint8Array {
 }
 
 // --------------------------------------------------------------------------------------------
+// Shared with other camera-menu additions (`shutdown.ts`)
+
+export { FACTORY as CONTROLLER_FACTORY, D_RANGE_ID as SUBMENU_CONTROLLER_ID };
+
+/** A submenu record (0x64 bytes) to start from: Reset (Setup), two lines without values. */
+export function submenuTemplate(patch: Patch): Uint8Array {
+  const r = patch.read(SUB_TABLE + 17 * SUB_RECORD, SUB_RECORD);
+  const v = new DataView(r.buffer);
+  if (v.getUint16(0, true) !== 0 || v.getUint16(2, true) !== 703 || r[6] !== 2 || v.getUint32(0x14, true) !== 0x02000112 || v.getUint32(0x18, true) !== 0x02000116) {
+    fail('unexpected-layout', 'Reset submenu record is not as expected');
+  }
+  return r;
+}
+
+/**
+ * Add a submenu record (SubMenuController, 0x64 bytes) shown for controller id `id`: the table is
+ * copied once more with the record at its end, and SetCurrentMenu maps `id` to it (before what was
+ * there: the official code, or the date imprint's mapping). The controller itself is the one of
+ * every submenu (the factory must hand it out for `id`, as for SUBMENU_CONTROLLER_ID). Returns the
+ * record number.
+ */
+export function addSubmenuRecord(patch: Patch, id: number, record: Uint8Array, what: string): number {
+  if (record.length !== SUB_RECORD) fail('internal', 'submenu record size');
+  const at = SUB_SITES.map(([low, high, r]) => {
+    const a = patch.word(low), b = patch.word(high);
+    if (a !== movWord(r, movImmediate(a)) || b !== movWord(r, movImmediate(b), true)) fail('unexpected-layout', 'submenu table site is not a MOVW/MOVT pair');
+    return (movImmediate(a) | (movImmediate(b) << 16)) >>> 0;
+  });
+  const table = at[0];
+  if (at.some((t) => t !== table) || (table === SUB_TABLE) !== (patch.submenuRecords === 0)) fail('unexpected-layout', 'submenu table is not where it was expected');
+  const copy = patch.submenuRecords || SUB_RECORDS + 1;
+  if (copy > 0xff) fail('internal', 'too many submenu records');
+  relocateTable(patch, table, SUB_RECORD, copy, [record], SUB_SITES, `${what}: submenu records`);
+  const first = patch.word(SUB_SET_CURRENT);
+  const prior = first === 0xe28134fe
+    ? patch.append((a) => assembleWords(`add r3, r1, #0xfe000000; b #${SUB_SET_CURRENT + 4}`, a), 16)
+    : first >>> 24 === 0xea ? branchTarget(SUB_SET_CURRENT, first) : fail('unexpected-layout', 'submenu SetCurrentMenu is not as expected');
+  const current = patch.append((a) => assembleWords(
+    `movw ip, #${lo(id)}; movt ip, #${hi(id)}
+     cmp r1, ip
+     moveq r3, #${copy}; strbeq r3, [r0, #0x174]; bxeq lr
+     b #${prior}`, a), 16);
+  patch.setWord(SUB_SET_CURRENT, branchWord(SUB_SET_CURRENT, current), `${what}: submenu record`);
+  patch.submenuRecords = copy + 1;
+  return copy;
+}
+
+/**
+ * Hook the controller factory: `body` (assembly) sees the id in r1 and ends with `b prior` (the
+ * label is defined here) to go on as before, with r1 possibly replaced; or returns a controller
+ * in r0 itself.
+ */
+export function hookControllerFactory(patch: Patch, body: string, what: string): void {
+  const first = patch.word(FACTORY);
+  const prior = first === movWord(3, 0x12e)
+    ? patch.append((a) => assembleWords(`movw r3, #0x12e; b #${FACTORY + 4}`, a), 16)
+    : first >>> 24 === 0xea ? branchTarget(FACTORY, first) : fail('unexpected-layout', 'controller factory is not as expected');
+  const hook = patch.append((a) => assembleWords(`${body}\n prior: b #${prior}`, a), 16);
+  patch.setWord(FACTORY, branchWord(FACTORY, hook), what);
+}
+
+// --------------------------------------------------------------------------------------------
 
 /** Load the setting byte into r3 (r2 = its address); anything above 3 becomes (and is stored as) 0. */
 const LOAD_SETTING = `movw r2, #${lo(DATESTAMP_BYTE)}; movt r2, #${hi(DATESTAMP_BYTE)}; ldrb r3, [r2]
@@ -447,6 +509,7 @@ export function installDateStampMenu(patch: Patch, iconbin: Uint8Array): Uint8Ar
     v.setUint32(0x48, 0, true);
   }
   relocateTable(patch, SUB_TABLE, SUB_RECORD, SUB_RECORDS + 1, [subRecord], SUB_SITES, 'date imprint: submenu records');
+  patch.submenuRecords = SUB_RECORD_NUMBER + 1;
 
   // --- Two still-menu descriptors.
   const descriptor = (keep: number): Uint8Array => {

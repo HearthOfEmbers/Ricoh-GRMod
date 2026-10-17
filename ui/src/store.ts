@@ -35,7 +35,7 @@ export interface WallItem {
 /**
  * How the power-off images reach the camera: 'script' puts them on the card with a start-up script
  * that changes the picture at every power-on; 'menu' builds them into the firmware, chosen in the
- * camera's End Screen menu (Setup > Display).
+ * camera's End Screen menu (Setup > Display > End Screen > Picture).
  */
 export type WallMode = 'script' | 'menu';
 export interface Toast { id: number; text: string; kind: 'ok' | 'error' | 'info'; action?: { label: string; run: () => void } }
