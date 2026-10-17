@@ -28,17 +28,20 @@
  *    the End Screen list (0x020000C4) and draws as Setup's other submenu lines (title only); that id
  *    is the submenu controller with an added submenu record (see `datestamp-menu.ts`), whose lines
  *    open 0x020000C4 and SHUTDOWN_PICTURE_ID;
- *  - SHUTDOWN_PICTURE_ID: the controller factory makes a second instance of the End Screen list's
- *    class (0x16C bytes, constructor 0x53223EB4), kept at PICTURE_CONTROLLER. Its constructor
- *    builds 1 + n rows (0x53223BA4) of an appended array of row types (0x53223BD4) and its title is
- *    the "Picture" text (0x53223E9C); the five handlers (0x532240E4 refresh, 0x53223FA4 confirm,
- *    0x53223F14 / 0x53223F58 up / down, 0x5322419C footer) go to the module for that instance only.
- *    The camera's own instance (factory cache +0x180) runs the official code throughout;
+ *  - SHUTDOWN_PICTURE_ID: the camera's End Screen list itself (the controller factory hands out
+ *    its one object, as for 0x020000C4) in picture mode: PICTURE_MODE is set when the factory is
+ *    asked for SHUTDOWN_PICTURE_ID and cleared when asked for 0x020000C4. The list is built with
+ *    1 + n rows (0x53223BA4) of an appended array of row types (0x53223BD4); when it opens
+ *    (0x532240E4) it shows 2 of them and the title "End Screen" in the camera's mode, all of them
+ *    and the title "Picture" in picture mode. In picture mode the handlers (0x532240E4 refresh,
+ *    0x53223FA4 confirm, 0x53223F14 / 0x53223F58 up / down, 0x5322419C footer) go to the module,
+ *    otherwise the official code runs. (A second object of the class, as in the first 0.7.6
+ *    build, got touches but no keys on the camera.)
  *  - the module, its context and stubs: also the picture request (0x531B9488) and the settings save;
  *  - the settings store APData (0x53A80ADC) is created for SHUTDOWN_RECORD + 1 records instead of
  *    16 (the choice is record SHUTDOWN_RECORD);
  *  - the start-up zero fill also clears the 44 bytes before the heap (as with added slots), so
- *    PICTURE_CONTROLLER starts at 0.
+ *    PICTURE_MODE starts at 0.
  *
  * The approach (pictures in RES, the extended JPEG table, the record) is that of gr-custom-tool's
  * End Screen list (Copyright (C) 2026 DoYitNow, GPL-2.0-only); the code is GR Mod's own.
@@ -103,13 +106,12 @@ const SETTINGS_SAVE = 0x533e1c04;
 const MENU = { refresh: 0x532240e4, confirm: 0x53223fa4, left: 0x53223f14, right: 0x53223f58, footer: 0x5322419c } as const;
 const MENU_ROWS_AT = 0x53223ba4;
 const MENU_TYPES_AT = 0x53223bd4;
-const MENU_TITLE_AT = 0x53223e9c;
 const ROW_TYPE = 0x15;
 const END_SCREEN_ID = 0x020000c4;
 const END_SCREEN_TITLE = 701;
-const END_SCREEN_BYTES = 0x16c;
-const END_SCREEN_CONSTRUCTOR = 0x53223eb4;
-const ALLOCATE = 0x538e09b0;
+/** List widget: rows shown (0x535711E4, at most those built); title view: text (0x5357F2B0). */
+const LIST_SHOWN = 0x535711e4;
+const TITLE_SET = 0x5357f2b0;
 /** Setup menu descriptor (menu table entry 4) and its End Screen item (10). */
 const SETUP_MENU = 0x53d9ca10;
 const SETUP_MENU_ENTRY = 0x55001e88;
@@ -123,7 +125,8 @@ const APP = 0x5323ea84;
 const SUBMENU_LINE_TEXT = 0x535831e8;
 /** The start-up zero fill's end (literal) and the 44 bytes before the heap. */
 const ZERO_FILL_END = 0x53000460;
-const PICTURE_CONTROLLER = 0x558372f0;
+/** Nonzero while the End Screen list is the picture list (set by the controller factory). */
+const PICTURE_MODE = 0x558372f0;
 const APDATA_BOUND_AT = 0x53a80adc;
 const APDATA_BOUND_NEXT = 0x53a80ae0;
 const CTX_MAGIC = 0x31445347; // 'GSD1'
@@ -285,12 +288,11 @@ export function installShutdownMenu(p: Patch, iconbin: Uint8Array, pictures: rea
   expectWord(p, MENU.footer, 0xe1a0c00d);
   expectWord(p, MENU_ROWS_AT, 0xe3a02002); // mov r2, #2
   expectWord(p, MENU_TYPES_AT, 0xe54b3034); // strb r3, [fp, #-0x34]
-  expectWord(p, MENU_TITLE_AT, movWord(1, END_SCREEN_TITLE));
   expectWord(p, APDATA_BOUND_AT, 0xe58d9000);
-  expectWord(p, END_SCREEN_CONSTRUCTOR, 0xe1a0c00d);
-  // The factory's End Screen case: cache +0x180, allocate 0x16C, construct.
+  // The factory's End Screen case: one object, cached at +0x180.
   for (const [at, w] of [[0x53187784, 0xe5940180], [0x53187790, 0xe3a00f5b], [0x53187794, 0xeb1d6485], [0x5318779c, 0xeb0271c4]] as const) expectWord(p, at, w);
-  for (const f of [ALLOCATE, APP, 0x5323f378, 0x5323f018, SUBMENU_LINE_TEXT, LINE_VALUE_ICON, LINE_TITLE]) expectWord(p, f, 0xe1a0c00d);
+  expectWord(p, 0x53223e9c, movWord(1, END_SCREEN_TITLE)); // its constructor's title
+  for (const f of [LIST_SHOWN, TITLE_SET, APP, 0x5323f378, 0x5323f018, SUBMENU_LINE_TEXT, LINE_VALUE_ICON, LINE_TITLE]) expectWord(p, f, 0xe1a0c00d);
   expectWord(p, 0x5329c2d8, 0xe5d00988); // ldrb r0, [r0, #0x988]
   expectWord(p, 0x53380874, 0xe3510000); // cmp r1, #0
   expectWord(p, ZERO_FILL_END, p.word(ZERO_FILL_END) === 0x55837300 ? 0x55837300 : 0x558372d4);
@@ -326,53 +328,58 @@ export function installShutdownMenu(p: Patch, iconbin: Uint8Array, pictures: rea
   p.setWord(BACKGROUND, branchWord(BACKGROUND, stub(1, 'sd_background')), 'power-off picture: the one chosen in the menu');
   p.setWord(SETTINGS_SAVE, branchWord(SETTINGS_SAVE, stub(1, 'sd_save')), 'settings save, then the power-off picture choice');
 
-  // The picture list: handlers of the End Screen list's class go to the module for its instance only.
-  const P = `movw ip, #${PICTURE_CONTROLLER & 0xffff}; movt ip, #${PICTURE_CONTROLLER >>> 16}; ldr ip, [ip]`;
+  // One End Screen list, two modes: opened as SHUTDOWN_PICTURE_ID it is the picture list (PICTURE_MODE
+  // set), as 0x020000C4 the camera's own list. The camera has one controller object per kind of
+  // list and routes keys and touches to it; the date imprint's lists share the camera's in the same way.
+  const MODE = `movw ip, #${PICTURE_MODE & 0xffff}; movt ip, #${PICTURE_MODE >>> 16}; ldr ip, [ip]; cmp ip, #0`;
   const handler = (at: number, original: string, reg: number, fn: keyof typeof SHUTDOWN_EXPORTS, what: string): void => {
     const target = p.append((a) => assembleWords(
-      `${P}; cmp ip, r0; bne native
+      `${MODE}; beq native
        movw r${reg}, #${ctx & 0xffff}; movt r${reg}, #${ctx >>> 16}; b #${code + SHUTDOWN_EXPORTS[fn]}
        native: ${original}; b #${at + 4}`, a), 16);
     p.setWord(at, branchWord(at, target), what);
   };
-  handler(MENU.refresh, 'mov ip, sp', 1, 'sd_refresh', 'End Screen picture list: rows and ticks');
   handler(MENU.confirm, 'ldr r0, [r0, #0x168]', 1, 'sd_confirm', 'End Screen picture list: confirm');
   handler(MENU.left, 'mov ip, sp', 2, 'sd_left', 'End Screen picture list: up');
   handler(MENU.right, 'mov ip, sp', 2, 'sd_right', 'End Screen picture list: down');
   handler(MENU.footer, 'mov ip, sp', 1, 'sd_footer', 'End Screen picture list: thumbnail');
-  // Its constructor: 1 + n rows (this = r0), their types from an appended array (this = r5; the
-  // native array is 2 bytes on the stack), its title (this = r4).
+  // Refresh (run when the list opens): the rows shown (2, or 1 + n) and the title of the mode, then
+  // the module's rows and ticks or the official ones.
+  const activate = p.append((a) => assembleWords(
+    `push {r4, lr}
+     mov r4, r0
+     ${MODE}
+     ldr r0, [r4, #0x168]; moveq r1, #2; movne r1, #${1 + n}
+     bl #${LIST_SHOWN}
+     ${MODE}
+     ldr r0, [r4, #0x15c]; movweq r1, #${END_SCREEN_TITLE}; movwne r1, #${SHUTDOWN_PICTURE_TEXT}
+     bl #${TITLE_SET}
+     ${MODE}
+     mov r0, r4
+     pop {r4, lr}
+     beq native
+     movw r1, #${ctx & 0xffff}; movt r1, #${ctx >>> 16}; b #${code + SHUTDOWN_EXPORTS.sd_refresh}
+     native: mov ip, sp; b #${MENU.refresh + 4}`, a), 16);
+  p.setWord(MENU.refresh, branchWord(MENU.refresh, activate), 'End Screen list: rows and title of the mode, then rows and ticks');
+  // The constructor makes 1 + n rows (at least the official 2), their types from an appended array
+  // (the official one is 2 bytes on the stack).
   const types = p.append(new Uint8Array(1 + n).fill(ROW_TYPE), 4);
-  const rows = p.append((a) => assembleWords(
-    `movw r2, #${PICTURE_CONTROLLER & 0xffff}; movt r2, #${PICTURE_CONTROLLER >>> 16}; ldr r2, [r2]
-     cmp r2, r0; moveq r2, #${1 + n}; movne r2, #2
-     b #${MENU_ROWS_AT + 4}`, a), 16);
-  p.setWord(MENU_ROWS_AT, branchWord(MENU_ROWS_AT, rows), 'End Screen picture list: rows');
-  const typesAt = p.append((a) => assembleWords(
-    `strb r3, [fp, #-0x34]
-     movw r0, #${PICTURE_CONTROLLER & 0xffff}; movt r0, #${PICTURE_CONTROLLER >>> 16}; ldr r0, [r0]
-     cmp r0, r5; movweq r1, #${types & 0xffff}; movteq r1, #${types >>> 16}
-     b #${MENU_TYPES_AT + 4}`, a), 16);
-  p.setWord(MENU_TYPES_AT, branchWord(MENU_TYPES_AT, typesAt), 'End Screen picture list: row types');
-  const title = p.append((a) => assembleWords(
-    `movw r1, #${END_SCREEN_TITLE}
-     ${P}; cmp ip, r4; movweq r1, #${SHUTDOWN_PICTURE_TEXT}
-     b #${MENU_TITLE_AT + 4}`, a), 16);
-  p.setWord(MENU_TITLE_AT, branchWord(MENU_TITLE_AT, title), 'End Screen picture list: title');
+  p.setWord(MENU_ROWS_AT, (0xe3a02000 | (1 + n)) >>> 0, 'End Screen list: rows for the picture list');
+  const typesAt = p.append((a) => [0xe54b3034, movWord(1, types & 0xffff), movWord(1, types >>> 16, true), branchWord(a + 12, MENU_TYPES_AT + 4)], 16);
+  p.setWord(MENU_TYPES_AT, branchWord(MENU_TYPES_AT, typesAt), 'End Screen list: row types');
 
-  // The controllers: the submenu (as every submenu's), the picture list (made once, kept).
+  // The controllers: the submenu (as every submenu's); the picture list is the End Screen list in
+  // picture mode, the End Screen list itself in its own mode.
   hookControllerFactory(p, `movw ip, #${SHUTDOWN_MENU_ID & 0xffff}; movt ip, #${SHUTDOWN_MENU_ID >>> 16}
      cmp r1, ip; bne picture
      movw r1, #${SUBMENU_CONTROLLER_ID & 0xffff}; movt r1, #${SUBMENU_CONTROLLER_ID >>> 16}; b prior
-     picture: add ip, ip, #${SHUTDOWN_PICTURE_ID - SHUTDOWN_MENU_ID}; cmp r1, ip; bne prior
-     push {r4, r5, r6, lr}
-     movw r4, #${PICTURE_CONTROLLER & 0xffff}; movt r4, #${PICTURE_CONTROLLER >>> 16}
-     ldr r0, [r4]; cmp r0, #0; bne made
-     mov r0, #${END_SCREEN_BYTES}; bl #${ALLOCATE}
-     str r0, [r4]
-     bl #${END_SCREEN_CONSTRUCTOR}
-     ldr r0, [r4]
-     made: pop {r4, r5, r6, pc}`, 'End Screen submenu and picture list controllers');
+     picture: add ip, ip, #${SHUTDOWN_PICTURE_ID - SHUTDOWN_MENU_ID}; cmp r1, ip; bne own
+     movw r1, #${END_SCREEN_ID & 0xffff}; movt r1, #${END_SCREEN_ID >>> 16}
+     mov ip, #1; b mode
+     own: movw ip, #${END_SCREEN_ID & 0xffff}; movt ip, #${END_SCREEN_ID >>> 16}; cmp r1, ip; bne prior
+     mov ip, #0
+     mode: movw r3, #${PICTURE_MODE & 0xffff}; movt r3, #${PICTURE_MODE >>> 16}; str ip, [r3]
+     b prior`, 'End Screen submenu; the End Screen list as picture list');
 
   // The submenu: "Type" (the camera's list, its value as the native line shows it), "Picture".
   const lineType = p.append((a) => assembleWords(

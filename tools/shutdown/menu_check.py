@@ -43,7 +43,7 @@ BASE = 0x53000000
 RAMVA, RAMIMG, RAMLEN = 0x55000000, 0x5437b640, 0x57480
 RET = 0x100
 FAKE = 0x60200000
-PIC = 0x558372f0
+MODE = 0x558372f0
 MENU_ID, PICTURE_ID, END_SCREEN = 0x020001a3, 0x020001a4, 0x020000c4
 T_TYPE, T_PICTURE, T_FACTORY = 853, 854, 855
 TITLE = 701
@@ -93,7 +93,7 @@ class World:
         w32(mu, self.storage + 8, self.ap)
         w32(mu, self.controller + 0x168, self.widget)
         w32(mu, self.controller + 0x164, self.graphic)
-        w32(mu, PIC, self.controller if picture else FAKE + 0x7000)
+        w32(mu, MODE, 1 if picture else 0)
         a, b, c = FAKE + 0x5000, FAKE + 0x5100, FAKE + 0x5200
         w32(mu, self.variant_root + 8, a); w32(mu, a + 0xc, b); w32(mu, b + 0x20, c); w32(mu, c + 0x48, variant)
         self.fns = {
@@ -118,7 +118,8 @@ class World:
             0x53576e38: lambda r: self.rec('icon', r[1]),
             0x53589ab4: lambda r: self.rec('visible', r[1]),
             0x5357094c: lambda r: self.rec('list_init', r[1], r[2], bytes(mu.mem_read(r[1], r[2]))),
-            0x5357f2b0: lambda r: self.rec('title', r[1]),
+            0x5357f2b0: lambda r: self.rec('title', r[0], r[1]),
+            0x535711e4: lambda r: self.rec('shown', r[0], r[1]),
             0x535831e8: lambda r: self.rec('line_text', r[0], r[1]),
             0x5357a428: lambda r: self.rec('top_icon', r[0], r[1]),
             0x5357a1c0: lambda r: self.rec('top_title', r[0], r[1]),
@@ -247,33 +248,25 @@ if DATESTAMP:
 check(dm.factory_class(new, PICTURE_ID + 1) == dm.factory_class(off, PICTURE_ID + 1), 'id after the new ones as officially')
 
 
-def make_picture(first_pic=0):
+# The picture id: the End Screen list's own object (the official path for 0x020000C4), in picture mode.
+check(dm.factory_class(new, PICTURE_ID) == dm.factory_class(off, END_SCREEN), 'picture id: the End Screen list object, as officially for 0x020000C4')
+
+
+def mode_after(cid, before, cached=0x7abc0000):
     e = dm.Emu(new)
-    e.mu.mem_write(PIC, struct.pack('<I', first_pic))
-    seen = []
-
-    def ctor(uc, addr, size, ud):
-        seen.append((uc.reg_read(UC_ARM_REG_R0), struct.unpack('<I', uc.mem_read(PIC, 4))[0], len(e.heap) and e.heap[0]))
-        uc.reg_write(UC_ARM_REG_PC, uc.reg_read(UC_ARM_REG_LR))
-    e.mu.hook_add(UC_HOOK_CODE, ctor, begin=0x53223eb4, end=0x53223eb4)
-    factory = 0x70000000
-    r = e.call(0x53185f7c, (factory, PICTURE_ID), limit=200000)
-    return e, r, seen
+    e.mu.mem_write(0x70000000 + 0x180, struct.pack('<I', cached))
+    e.mu.mem_write(MODE, struct.pack('<I', before))
+    # Other ids construct their (uncached) controllers, which need more than this emulation has:
+    # only the mode is checked for them.
+    end = cid in (PICTURE_ID, END_SCREEN)
+    r = e.call(0x53185f7c, (0x70000000, cid), limit=200000, strict=end)
+    return r, e.u32(MODE), e.mu.reg_read(UC_ARM_REG_SP) if end else 0x600f0000
 
 
-e, r, seen = make_picture()
-check(len(seen) == 1 and seen[0][0] == r == 0x70400000 and seen[0][1] == r and e.heap[0] - r == 0x170 and e.u32(PIC) == r,
-      f'picture id: one object of 0x16C, kept before its constructor runs ({[tuple(map(hex, s)) for s in seen]}, r {r:#x})')
-check(e.mu.reg_read(UC_ARM_REG_SP) == 0x600f0000, 'picture id: stack balanced')
-again = e.call(0x53185f7c, (0x70000000, PICTURE_ID), limit=200000)
-check(again == r and e.heap[0] - r == 0x170, 'picture id again: the same object, nothing allocated')
-e2, r2, seen2 = make_picture(0x12345670)
-check(r2 == 0x12345670 and not seen2, 'picture id with an object kept: that object')
-# The camera's own End Screen object stays the factory's cached one, apart from the picture list's.
-e3 = dm.Emu(new)
-e3.mu.mem_write(0x70000000 + 0x180, struct.pack('<I', 0x7abc0000))
-e3.mu.mem_write(PIC, struct.pack('<I', 0x7def0000))
-check(e3.call(0x53185f7c, (0x70000000, END_SCREEN), limit=200000) == 0x7abc0000, 'End Screen id: the cached native object')
+for cid, before, want in ((PICTURE_ID, 0, 1), (PICTURE_ID, 1, 1), (END_SCREEN, 1, 0), (END_SCREEN, 0, 0), (MENU_ID, 1, 1), (MENU_ID, 0, 0), (0x020000c3, 1, 1)):
+    r, mode, sp = mode_after(cid, before)
+    obj_ok = r == 0x7abc0000 if cid in (PICTURE_ID, END_SCREEN) else True
+    check(mode == want and obj_ok and sp == 0x600f0000, f'factory({cid:#x}) with mode {before}: mode {mode}, object {r:#x}')
 
 # --- 4. the submenu.
 print('4. submenu')
@@ -325,13 +318,13 @@ values = [c[1] for c in seen if c[0] == hex(0x535831e8)]
 check(texts == [T_TYPE, T_PICTURE] and titles == [TITLE], f'SubMenuController draws the record: title {titles} lines {texts} values {values}')
 
 # --- 5. the End Screen class.
-print('5. End Screen list, both instances')
+print('5. End Screen list, both modes')
 
 
 def native_reaches(at, regs, expect):
-    """Run a patched entry on an object that is not the picture list; it must reach the official
-    instruction after the patched one with the registers `expect` gives, without running module code."""
-    mu = make(); World(mu, picture=False)
+    """Run a patched entry in the camera's mode; it must reach the official instruction after the
+    patched one with the registers `expect` gives (None: free there), without running module code."""
+    mu = make(); w = World(mu, picture=False)
     seen = {}
 
     def stop(uc, address, size, _):
@@ -344,44 +337,38 @@ def native_reaches(at, regs, expect):
              UC_ARM_REG_R8, UC_ARM_REG_SB, UC_ARM_REG_SL, UC_ARM_REG_FP, UC_ARM_REG_IP, UC_ARM_REG_SP, UC_ARM_REG_LR)
     for r, v in zip(names, regs): mu.reg_write(r, v)
     mu.mem_write(regs[0] + 0x168, struct.pack('<I', 0x60255550))
+    mu.mem_write(regs[0] + 0x15c, struct.pack('<I', 0x60255660))
     mu.mem_write(regs[11] - 0x34, b'\0\0')
-    mu.emu_start(at, RET, count=200)
+    mu.emu_start(at, RET, count=400)
     got = seen.get('regs')
     want = expect(list(regs))
-    if got: got = [g if w is not None else None for g, w in zip(got, want)]
-    return got == want, got, want
+    if got: got = [g if x is not None else None for g, x in zip(got, want)]
+    return got == want, got, want, w.log
 
 
 base = [FAKE + 0x1000, 0x11, 0x22, 0x33, 0x44, FAKE + 0x1000, 0x66, 0x77, 0x88, 0x99, 0xaa, 0x600e0100, 0xcc, 0x600e0000, 0x12345678]
 for name, (at, _) in HANDLERS.items():
     def expect(r, name=name):
         if name == 'confirm': r[0] = 0x60255550; r[12] = None  # ip: free (the next official instruction sets it)
+        elif name == 'refresh': r[1] = r[2] = r[3] = None; r[12] = r[13]  # refresh(this): r1..r3 free
         else: r[12] = r[13]
         return r
-    good, got, want = native_reaches(at, base, expect)
-    check(good, f'native {name}: reaches {at + 4:#x} as officially' + ('' if good else f' {got} vs {want}'))
-good, got, want = native_reaches(0x53223ba4, base, lambda r: r[:2] + [2] + r[3:13] + r[13:])
-check(good, f'native rows: 2 ({got and got[2]})')
-# r0 is free there (the next official instructions set it), the stack array as officially.
-good, got, want = native_reaches(0x53223bd4, base, lambda r: [None] + r[1:])
-check(good, 'native row types: the stack array')
-good, got, want = native_reaches(0x53223e9c, base, lambda r: r[:1] + [TITLE] + r[2:12] + [None] + r[13:])
-check(good, f'native title: {TITLE} ({got and got[1]})')
-
+    good, got, want, log = native_reaches(at, base, expect)
+    if name == 'refresh':
+        check(good and log == [('shown', 0x60255550, 2), ('title', 0x60255660, TITLE)], f'camera\'s mode refresh: 2 rows shown, title {TITLE}, then official ({log})' + ('' if good else f' {got} vs {want}'))
+    else:
+        check(good and not log, f'camera\'s mode {name}: reaches {at + 4:#x} as officially' + ('' if good else f' {got} vs {want}'))
+good, got, want, log = native_reaches(0x53223bd4, base, lambda r: r[:13] + r[13:])
+check(not good and got and got[1] != base[1], 'row types: the appended array')
 mu = make(); w = World(mu)
 call(mu, 0x53223ba0, (w.controller,))
 init = [x for x in w.log if x[0] == 'list_init']
-check(init and init[0][2] == 1 + N and init[0][3] == bytes([0x15] * (1 + N)), f'picture list constructor: {init[0][2] if init else None} rows, types {init[0][3].hex() if init else None}')
-mu = make(); w = World(mu, picture=False)
-call(mu, 0x53223ba0, (w.controller,))
-init = [x for x in w.log if x[0] == 'list_init']
-check(init and init[0][2] == 2 and init[0][3] == bytes([0x15] * 2), f'native list constructor: {init[0][2] if init else None} rows, types {init[0][3].hex() if init else None}')
-for picture_list, want in ((True, T_PICTURE), (False, TITLE)):
-    mu = make(); w = World(mu, picture=picture_list)
-    mu.reg_write(UC_ARM_REG_R4, w.controller); mu.reg_write(UC_ARM_REG_SP, 0x600f0000)
-    w32(mu, w.controller + 0x15c, 0x7171)
-    mu.emu_start(0x53223e98, 0x53223ea0, count=100)
-    check(mu.reg_read(UC_ARM_REG_R1) == want and mu.reg_read(UC_ARM_REG_R0) == 0x7171, f'{"picture" if picture_list else "native"} list title: {mu.reg_read(UC_ARM_REG_R1)}')
+check(init and init[0][2] == 1 + N and init[0][3] == bytes([0x15] * (1 + N)), f'constructor: {init[0][2] if init else None} rows, types {init[0][3].hex() if init else None}')
+check(new.u32(0x53223e9c) == off.u32(0x53223e9c), 'constructor title as officially')
+mu = make(); w = World(mu)
+w32(mu, w.controller + 0x15c, 0x7171)
+call(mu, 0x532240e4, (w.controller,))
+check(w.log[:2] == [('shown', w.widget, 1 + N), ('title', 0x7171, T_PICTURE)], f'picture mode refresh: {1 + N} rows shown, title {T_PICTURE} ({w.log[:2]})')
 
 for record, chosen in ((None, 0), (REC(0xdead), 0)) + tuple((REC(IDS[k]), 1 + k) for k in range(N)):
     mu = make(); w = World(mu, record=record)

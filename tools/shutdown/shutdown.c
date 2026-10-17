@@ -5,13 +5,14 @@
  * The camera's "End Screen" line (Setup > Display) opens a submenu of two lines (see shutdown.ts):
  *   Type      the camera's own End Screen list (type 1 / type 2: whether the shooting statistics
  *             are shown), unchanged;
- *   Picture   a second instance of the same list controller, built with 1 + n rows:
+ *   Picture   the same list in picture mode (the camera has one object of it; shutdown.ts sets
+ *             the mode when the list is opened from this line), showing 1 + n rows:
  *               row 0            factory picture (this camera's GoodBye / HDF / Monochrome / 20th);
  *               rows 1 .. n      the added pictures, by name.
  * The picture list has one tick; the footer graphic above it shows a 520x200 thumbnail of the
  * focused row. Picking one is remembered in a record of the camera's own settings store (APData)
- * and the power-off screen shows that picture. Only the picture list's controller comes here (its
- * stubs compare the controller with the one GR Mod created); the camera's own list runs as before.
+ * and the power-off screen shows that picture. The list's handlers come here only in picture
+ * mode; in its own mode the camera's code runs as before.
  *
  * The pictures are files of the firmware's RES section (A:\Resource\Jpeg\GRMOD<k>.jpg, 720x480),
  * reached through the camera's table of full-screen JPEGs, which GR Mod copies and extends (the

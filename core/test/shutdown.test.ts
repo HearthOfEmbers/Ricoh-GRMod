@@ -2,7 +2,7 @@
 /**
  * Power-off pictures chosen in the camera's End Screen menu (aspect/shutdown.ts). The data part
  * runs everywhere; the firmware part needs the official firmware in testdata/private. What the
- * camera-side code does when it runs (the submenu, both End Screen list instances, rows, ticks,
+ * camera-side code does when it runs (the submenu, the End Screen list in both modes, rows, ticks,
  * confirm, thumbnails, the picture request, the store record) is checked in an emulator by
  * tools/shutdown/menu_check.py on builds of this code (2 and 8 pictures, with and without the
  * other additions).
