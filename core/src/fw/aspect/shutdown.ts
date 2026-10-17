@@ -35,8 +35,8 @@
  *    (0x532240E4) it shows 2 of them and the title "End Screen" in the camera's mode, all of them
  *    and the title "Picture" in picture mode. In picture mode the handlers (0x532240E4 refresh,
  *    0x53223FA4 confirm, 0x53223F14 / 0x53223F58 up / down, 0x5322419C footer) go to the module,
- *    otherwise the official code runs. (A second object of the class, as in the first 0.7.6
- *    build, got touches but no keys on the camera.)
+ *    otherwise the official code runs. The key mapper (KEY_MAP_ID_READS) is given 0x020000C4 for
+ *    SHUTDOWN_PICTURE_ID, so that the list gets the End Screen list's keys;
  *  - the module, its context and stubs: also the picture request (0x531B9488) and the settings save;
  *  - the settings store APData (0x53A80ADC) is created for SHUTDOWN_RECORD + 1 records instead of
  *    16 (the choice is record SHUTDOWN_RECORD);
@@ -125,6 +125,14 @@ const APP = 0x5323ea84;
 const SUBMENU_LINE_TEXT = 0x535831e8;
 /** The start-up zero fill's end (literal) and the 44 bytes before the heap. */
 const ZERO_FILL_END = 0x53000460;
+/**
+ * The key mapper (hardware keys to a screen's commands) reads the current controller id at these
+ * two calls of the getter (0x5325CA14): 0x53255A0C tells whether the screen has a key map of its
+ * own, 0x532544A4 picks it. Unknown ids get a generic map that, for the End Screen list, loses
+ * every key (on the camera: no key worked in the picture list, touch did).
+ */
+const KEY_MAP_ID_READS = [0x53255a20, 0x532544c0] as const;
+const CURRENT_ID = 0x5325ca14;
 /** Nonzero while the End Screen list is the picture list (set by the controller factory). */
 const PICTURE_MODE = 0x558372f0;
 const APDATA_BOUND_AT = 0x53a80adc;
@@ -367,6 +375,18 @@ export function installShutdownMenu(p: Patch, iconbin: Uint8Array, pictures: rea
   p.setWord(MENU_ROWS_AT, (0xe3a02000 | (1 + n)) >>> 0, 'End Screen list: rows for the picture list');
   const typesAt = p.append((a) => [0xe54b3034, movWord(1, types & 0xffff), movWord(1, types >>> 16, true), branchWord(a + 12, MENU_TYPES_AT + 4)], 16);
   p.setWord(MENU_TYPES_AT, branchWord(MENU_TYPES_AT, typesAt), 'End Screen list: row types');
+
+  // The key mapper sees the picture list as the End Screen list.
+  for (const at of KEY_MAP_ID_READS) expectWord(p, at, branchWord(at, CURRENT_ID, 14, true));
+  const keyMapId = p.append((a) => assembleWords(
+    `push {r4, lr}
+     bl #${CURRENT_ID}
+     movw r4, #${SHUTDOWN_PICTURE_ID & 0xffff}; movt r4, #${SHUTDOWN_PICTURE_ID >>> 16}
+     cmp r0, r4
+     movweq r0, #${END_SCREEN_ID & 0xffff}; movteq r0, #${END_SCREEN_ID >>> 16}
+     pop {r4, pc}`, a), 16);
+  for (const at of KEY_MAP_ID_READS) p.setWord(at, branchWord(at, keyMapId, 14, true), 'key map: the picture list has the End Screen list\'s keys');
+  expectWord(p, CURRENT_ID, 0xe5900000); // ldr r0, [r0]
 
   // The controllers: the submenu (as every submenu's); the picture list is the End Screen list in
   // picture mode, the End Screen list itself in its own mode.

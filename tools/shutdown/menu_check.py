@@ -268,6 +268,26 @@ for cid, before, want in ((PICTURE_ID, 0, 1), (PICTURE_ID, 1, 1), (END_SCREEN, 1
     obj_ok = r == 0x7abc0000 if cid in (PICTURE_ID, END_SCREEN) else True
     check(mode == want and obj_ok and sp == 0x600f0000, f'factory({cid:#x}) with mode {before}: mode {mode}, object {r:#x}')
 
+
+
+def key_map(img, fn, cid):
+    """Run a key-mapper function (0x53255A0C has-own-map, 0x532544A4 pick-map) with `cid` as the
+    current controller id; returns its result and the last instruction it ran (the map chosen)."""
+    e = dm.Emu(img)
+    e.stubs[0x5325ca14] = lambda: cid
+    e.stubs[0x5323ebf8] = lambda: 0x70100000
+    last = []
+    e.mu.hook_add(UC_HOOK_CODE, lambda uc, a, s, u: last.append(a) if fn <= a < fn + 0x2000 else None)
+    r = e.call(fn, (0x70200000, 5), limit=20000, strict=False)
+    return r, last[-1] if last else None
+
+
+for fn in (0x53255a0c, 0x532544a4):
+    a, b = key_map(new, fn, PICTURE_ID), key_map(off, fn, END_SCREEN)
+    check(a == b, f'key map {fn:#x}: the picture list as the End Screen list ({a} vs {b})')
+    for cid in (END_SCREEN, MENU_ID, 0x020000c3, 0x020000d0):
+        check(key_map(new, fn, cid) == key_map(off, fn, cid), f'key map {fn:#x}: {cid:#x} as officially')
+
 # --- 4. the submenu.
 print('4. submenu')
 sub_sites = [(0x531e2064, 0x531e206c), (0x531e20cc, 0x531e20d4), (0x531e2438, 0x531e2444), (0x531e2668, 0x531e266c), (0x531e2734, 0x531e2740)]
