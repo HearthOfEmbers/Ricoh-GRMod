@@ -54,6 +54,13 @@ esac
 # a copy of it; otherwise whatever is there is kept (the placeholder page,
 # which is recreated if web/ is missing, e.g. in a fresh checkout).
 if [ -f ../ui/dist/index.html ]; then
+  # The UI bundle also holds the firmware code (core/); refuse one older than its sources.
+  stale="$(find ../ui/src ../ui/index.html ../core/src ../package.json -type f -newer ../ui/dist/index.html 2>/dev/null | head -n 3)"
+  if [ -n "$stale" ] && [ -z "${GRMOD_ALLOW_STALE_UI:-}" ]; then
+    echo "build.sh: ../ui/dist is older than its sources; run 'npm -w ui run build' first:" >&2
+    echo "$stale" | sed 's/^/  /' >&2
+    exit 2
+  fi
   rm -rf web.new
   cp -R ../ui/dist web.new
   rm -rf web
