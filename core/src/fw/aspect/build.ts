@@ -34,6 +34,8 @@ import { installMonoUnlock } from './monounlock';
 import { CINEMA_STYLES, installExtraSlots, installHalation } from './slots';
 import { halationLight } from './halation';
 import type { HalationLook } from './halation';
+import { installFactoryHidden, installLookOrder, validateLookLayout } from './looks';
+import type { LookLayout } from './looks';
 import type { ExtraSlotSpec } from './slots';
 import { installShutdownMenu } from './shutdown';
 import { FIRST_ADDED_LOOK, installSettingsGuard } from './guard';
@@ -118,6 +120,8 @@ export interface ExtensionFeatures {
   monoUnlock?: boolean;
   /** Added Image Control slots, 1 to 20 (see `slots.ts`; up to 0.8.1 at most 6). */
   extraSlots?: readonly ExtraSlotSpec[];
+  /** Image Control menu order and hidden looks (see `looks.ts`). */
+  lookLayout?: LookLayout;
   /**
    * Halation for Cinema Yellow / Green (0.8.2): only for a slot whose curves were replaced by a
    * preset (its Toning then does nothing and becomes the Halation slider, see `halation.ts`).
@@ -1042,12 +1046,17 @@ export function installExtensions(rtos: Uint8Array, iconbin: Uint8Array, ratios:
     halation.push({ style, light: colour.ownCurves ? halationLight(colour.curves, colour.postQ9) : halationLight() });
   }
   // Last: the added slots compose with the monochrome looks' visibility check.
-  if (slots.length > 0) icons = installExtraSlots(patch, icons, slots, { stashLook: (!!features.dateStamp && !!features.guard) || halation.length > 0 });
+  if (slots.length > 0) icons = installExtraSlots(patch, icons, slots, { stashLook: (!!features.dateStamp && !!features.guard) || halation.length > 0, layout: features.lookLayout });
+  else if (features.lookLayout) {
+    validateLookLayout(features.lookLayout, 0);
+    installLookOrder(patch, features.lookLayout.order);
+    installFactoryHidden(patch, features.lookLayout.hidden);
+  }
   if (halation.length > 0) icons = installHalation(patch, icons, halation);
   if (shutdown) icons = installShutdownMenu(patch, icons, shutdown.pictures, shutdown.factory);
   // Last: wraps every other settings save/load and user-mode recall hook.
   if (features.guard) installSettingsGuard(patch, { slots: slots.length, ratios: ratios.length > 0, adjSoftFocus: !!features.adjSoftFocus });
   if (patch.length % 4 !== 0) fail('internal', 'image length is not a multiple of 4');
   if (BASE + patch.length >= APPEND_LIMIT) fail('too-many-ratios', 'the appended area would reach the RAM area');
-  return { revision, rtos: patch.bytes(), iconbin: icons, ratios: [...ratios], words: patch.words, features: { adjSoftFocus: !!features.adjSoftFocus, ...(features.dateStamp ? { dateStamp: true } : {}), ...(features.monoUnlock ? { monoUnlock: true } : {}), ...(slots.length > 0 ? { extraSlots: [...slots] } : {}), ...(shutdown ? { shutdown } : {}), ...(features.guard ? { guard: true } : {}), ...(cinema.length > 0 ? { cinemaHalation: Object.fromEntries(cinema.map((id) => [id, true])) } : {}) } };
+  return { revision, rtos: patch.bytes(), iconbin: icons, ratios: [...ratios], words: patch.words, features: { adjSoftFocus: !!features.adjSoftFocus, ...(features.dateStamp ? { dateStamp: true } : {}), ...(features.monoUnlock ? { monoUnlock: true } : {}), ...(slots.length > 0 ? { extraSlots: [...slots] } : {}), ...(shutdown ? { shutdown } : {}), ...(features.guard ? { guard: true } : {}), ...(cinema.length > 0 ? { cinemaHalation: Object.fromEntries(cinema.map((id) => [id, true])) } : {}), ...(features.lookLayout ? { lookLayout: features.lookLayout } : {}) } };
 }
