@@ -51,7 +51,7 @@ try {
   if (!summary.all_checks_passed || summary.candidate_sha256 !== result.report.outputSha256) {
     throw new Error('Validation is not bound to this candidate');
   }
-  await copyFile(join(here, '../../docs/' + (softFocus.length ? 'GR3X_FEATURES_TEST.txt' : 'GR3X_ADJ9_TEST.txt')), join(target, '请先阅读.txt'));
+  await copyFile(join(here, '../../docs/' + (result.report.filename === 'fwdc239b.bin' ? 'GR3_HDF_210_TEST.txt' : softFocus.length ? 'GR3X_FEATURES_TEST.txt' : 'GR3X_ADJ9_TEST.txt')), join(target, '请先阅读.txt'));
   await writeFile(join(target, 'SHA256SUMS.txt'), result.report.outputSha256 + '  ' + result.report.filename + '\n', { flag: 'wx' });
   await rename(join(target, 'UNVALIDATED.bin'), join(target, result.report.filename));
   console.log(JSON.stringify({ directory: target, filename: result.report.filename, sha256: result.report.outputSha256,

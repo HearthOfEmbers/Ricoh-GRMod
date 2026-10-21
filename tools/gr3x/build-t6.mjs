@@ -85,7 +85,7 @@ try {
   if (!inspected.verified || inspected.monoUnlock || inspected.slots.length !== 9 || inspected.slots.some((s, i) => s.names.en !== T6_FILM_NAMES[i])) throw new Error('T6 fresh-engine reconstruction failed');
   await json('reconstruction-check.json', { verified: true, sha256: inspected.sha256, monoReplicas: inspected.monoUnlock,
     slotNames: inspected.slots.map(s => s.names.en), hardwareTested: false });
-  await copyFile(join(root, 'docs/GR3X_T6_TEST.txt'), join(target, '请先阅读.txt'));
+  await copyFile(join(root, 'docs/' + (result.report.filename === 'fwdc239b.bin' ? 'GR3_HDF_210_TEST.txt' : 'GR3X_T6_TEST.txt')), join(target, '请先阅读.txt'));
   await writeFile(join(target, 'SHA256SUMS.txt'), result.report.outputSha256 + '  ' + result.report.filename + '\n', { flag: 'wx' });
   await rename(join(target, 'UNVALIDATED.bin'), join(target, result.report.filename));
   console.log(JSON.stringify({ directory: target, sha256: result.report.outputSha256, bytes: result.bytes.length,
