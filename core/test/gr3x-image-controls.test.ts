@@ -91,11 +91,12 @@ describe.skipIf(!input)('IIIx T5 additive film/replica firmware', () => {
       expect((built.manifest as any).addedLooks[i].parameters).toEqual((old.manifest as any).addedLooks[i].parameters);
   }, 60000);
   it('rejects ambiguous names, malformed LUT bytes and unported features before export', async () => {
-    await expect(engine.buildFirmware([{ slot: 'CY', names: { en: 'One', 'zh-CN': 'Two' } }], ratios)).rejects.toMatchObject({ code: 'bad-name' });
+    // names per camera language are allowed; a character outside that language's font is not
+    await expect(engine.buildFirmware([{ slot: 'CY', names: { en: 'One', ja: '曝光' + '\u{1F600}' } }], ratios)).rejects.toMatchObject({ code: 'bad-name' });
     await expect(engine.buildFirmware([], ratios, soft, { dateStamp: true })).rejects.toMatchObject({ code: 'gr3x-fixed-nine-only' });
     await expect(buildGr3xImageControls(raw, { films: [{ name: 'Broken', preset: { matrixQ13: [1], curves: [[],[],[]] } }] }))
       .rejects.toMatchObject({ code: 'bad-edit' });
-    expect(() => engine.convertPreset('xmp', '<x/>')).toThrow('sRGB-display .cube');
+    expect(() => engine.convertPreset('xmp', '<x/>')).toThrow('no rdf:RDF element');
     expect(engine.validateName('CY', 'en', 'Film\nA').ok).toBe(false);
   });
 });
