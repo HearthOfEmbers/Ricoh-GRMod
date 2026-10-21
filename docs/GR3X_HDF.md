@@ -115,6 +115,9 @@ node --experimental-transform-types tools/gr3x/build-t6.mjs /path/to/official/fw
 The small historical T2/T3 executable-patch fixtures in `tools/gr3x/fixtures/`
 make the differential probes runnable without the private research directory.
 They omit icon pixel payloads. Hashes bind the fixtures and generated reports.
+Note (2026-10-21): T6 now restores each film's fixed parameters at every render
+(GR III camera test showed washed-out colours after using the detail page), so
+newly generated T6 files differ from the hash below.
 Generation leaves `UNVALIDATED.bin` until every required check passes, then
 assigns the update filename. The expected local T6 SHA-256 is
 `b236813463a3da13d9d3000a0769f655654e7a10f855efb1e4def48f7694aa37`.

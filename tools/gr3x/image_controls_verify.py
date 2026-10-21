@@ -212,6 +212,24 @@ def verify(data, base, manifest):
         descriptors.append({'id': slot['id'], 'name': slot['name'], 'native_base': slot['nativeBase'],
                             'native_matrix_output_sha256': hashlib.sha256(matrix_output).hexdigest(),
                             'descriptor_sha256': hashlib.sha256(actual[0]).hexdigest()})
+    # Whatever the camera's detail page leaves in the live parameter bytes, a film renders
+    # with its fixed parameters, and the bytes are restored (GR III T6 washed-out colours).
+    stale_cases = 0
+    if 'enforce' in manifest['lookEntries']:
+        import random
+        rng = random.Random(7)
+        for slot in slots:
+            fixed = descriptor(patched, slot['id'], slot['parameters']); fixed_matrix = matrix_process(patched)
+            for params in ([0] * 26, [8] * 26, [3] + slot['parameters'][1:], [rng.randrange(9) for _ in range(26)]):
+                assert descriptor(patched, slot['id'], params) == fixed, slot['name']
+                assert matrix_process(patched) == fixed_matrix, slot['name']
+                assert list(patched.uc.mem_read(COMMON + 0x77d, 26)) == slot['parameters']
+                stale_cases += 1; calls += 2
+        for identity in NATIVE:  # native looks keep whatever the user set
+            params = [rng.randrange(9) for _ in range(26)]
+            descriptor(patched, identity, params)
+            assert list(patched.uc.mem_read(COMMON + 0x77d, 26))[:22] == params[:22]
+            stale_cases += 1; calls += 1
     # Exercise ordered changes without rebuilding the emulator. The gamma object
     # and its identity persist across calls, so first/last and same-slot returns
     # cannot leave the preceding film's curves or matrix selected.
@@ -235,7 +253,7 @@ def verify(data, base, manifest):
             transition_cases += 1
             calls += 8
     return dict(schema=1, rtos_sha256=hashlib.sha256(data).hexdigest(), native_calls=calls, adapter_cases=adapter_cases,
-                sequential_look_transition_cases=transition_cases,
+                sequential_look_transition_cases=transition_cases, stale_parameter_cases=stale_cases,
                 native_looks_restored_after_each_imported_look=True,
                 audited_property_consumers=len(manifest['lookEntries']['adapters']),
                 original_menu_and_look_descriptors_preserved=True,

@@ -176,6 +176,17 @@ export async function buildGr3xImageControls(raw: Uint8Array, options: Gr3xLookO
     patch(at, 0xe1a0c00d, branchWord(at, entry), 'image control: fixed new-slot default parameter');
     return { address: at, offset, entry };
   });
+  // Films render through the native Standard path, which reads the live parameter bytes
+  // CommonProperty[0x77d..0x796]. The camera's Image Control detail page can leave other
+  // values there (it cannot store parameters for an added look), which washed out the
+  // colours on GR III T6 until the next settings transaction. Every descriptor build now
+  // restores the film's fixed parameters first, before any consumer reads them.
+  const enforce = code(`push {r0-r3,ip,lr};ldrb r2,[r7,#0x77c];` +
+    slots.map(s => `cmp r2,#${s.id};beq slot${s.id};`).join('') +
+    `b done;` + slots.map(s => `slot${s.id}:${addr(1, s.parameterAddress)}add r0,r7,#0x700;add r0,r0,#0x7d;mov r2,#26;bl #0x5313fd80;b done;`).join('') +
+    `done:pop {r0-r3,ip,lr};b #0x536db7d8;`);
+  patch(0x536dc124, branchWord(0x536dc124, 0x536db7d8, 14, true),
+    branchWord(0x536dc124, enforce, 14, true), 'image control: films always render with their fixed parameters');
   const descriptor = code(`push {r1-r3,ip};ldrb r2,[r7,#0x77c];` +
     slots.filter(s => s.record).map(s => `cmp r2,#${s.id};beq slot${s.id};`).join('') +
     `b done;` + slots.filter(s => s.record).map(s => `slot${s.id}:${addr(3, s.record)}str r3,[r4,#8];` +
@@ -200,7 +211,7 @@ export async function buildGr3xImageControls(raw: Uint8Array, options: Gr3xLookO
     ...menu, kind: 'gr3x-image-control-patchset' as const, sites,
     append: { address: menu.append.address, bytes: hex(payload) },
     addedLooks: slots, renderingImplemented: true as const,
-    lookEntries: { aggregate, rawEnum, restriction, descriptor, gamma, defaults, adapters },
+    lookEntries: { aggregate, rawEnum, restriction, enforce, descriptor, gamma, defaults, adapters },
     // A patch-set is not a firmware update. Packaging and native regression checks
     // are separate; camera behavior remains unverified until the user tests it.
     flashable: false as const, cameraUpdateCandidate: false as const, hardwareTested: false,
