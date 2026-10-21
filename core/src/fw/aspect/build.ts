@@ -137,6 +137,11 @@ export interface TestOptions {
   dateStampFixed?: number;
   /** Also print the encoder configuration on the 720x480 picture. */
   dateStampDiag?: boolean;
+  /**
+   * Test builds (0.8.2 tests 038): with an added ratio, also paint the strips beside the live-view
+   * picture from the CPU at the painted-byte test, in this colour (magenta: to see where and when).
+   */
+  liveViewStrips?: 'magenta' | 'black';
 }
 
 export interface AspectResult {
@@ -975,7 +980,7 @@ const LAST_FILL_RECT = 0x558372e8;
 /** The aspect the live-view layout last laid out. */
 const LV_ASPECT = 0x558372f4;
 
-function installLiveViewRepaint(patch: Patch): void {
+function installLiveViewRepaint(patch: Patch, strips?: 'magenta' | 'black'): void {
   expectWord(patch, LAYOUT, 0xe1a0c00d); // mov ip,sp
   expectWord(patch, FILL_FLAG_TEST, 0xe594331c); // ldr r3,[r4,#0x31c]
   expectWord(patch, FILL_FLAG_TEST + 4, 0xe0800003); // add r0,r0,r3
@@ -995,6 +1000,37 @@ function installLiveViewRepaint(patch: Patch): void {
      same:pop {r1,r2,r3,ip}
      ldr r3,[r4,#0x31c];b #${FILL_FLAG_TEST + 4}`, at), 16);
   patch.setWord(FILL_FLAG_TEST, branchWord(FILL_FLAG_TEST, stub), 'live view: paint around the picture of an added ratio in every display buffer');
+  if (strips) {
+    // The job's buffer (Y +0xB88, CbCr +0xB8C; stride taken as the larger of +0xB90 / +0xB92;
+    // buffer w, h +0xB9C / +0xB9E) outside the picture's columns (x +0xBAC, w +0xBA0), all rows;
+    // then the cache cleaned. Every register kept.
+    const [yy, cc] = strips === 'magenta' ? [0x6969, 0xead4] : [0x0000, 0x8080];
+    const paint = patch.append((at) => assembleWords(
+      `push {r0-r12,lr}
+       movw ip,#${LV_ASPECT & 65535};movt ip,#${LV_ASPECT >>> 16};ldr r1,[ip];cmp r1,#${FIRST_CUSTOM_ID};blo done
+       add r6,r4,#0xb00
+       ldr r7,[r4,#0xb88];ldr r8,[r4,#0xb8c]
+       ldrh r1,[r6,#0x90];ldrh r2,[r6,#0x92];cmp r1,r2;movhs r9,r1;movlo r9,r2
+       ldrh r5,[r6,#0x9c];ldrh r11,[r6,#0x9e]
+       ldrh r2,[r6,#0xac];ldrh r3,[r6,#0xa0];add r3,r3,r2
+       add r2,r2,#1;bic r2,r2,#1;bic r3,r3,#1
+       cmp r7,#0x40000000;blo done;cmp r8,#0x40000000;blo done;cmp r7,#0xc0000000;bhs done;cmp r8,#0xc0000000;bhs done
+       cmp r5,r9;bhi done;cmp r3,r5;bhi done;cmp r11,#0;beq done;cmp r11,#2048;bhi done
+       movw r10,#${yy};movw r12,#${cc}
+       mov r0,#0
+       row:cmp r0,r11;bhs flush
+       mul r1,r0,r9;add lr,r1,r8;add r1,r1,r7;mov r4,#0
+       l1:cmp r4,r2;bhs l1e;add r6,r1,r4;strh r10,[r6];add r6,lr,r4;strh r12,[r6];add r4,r4,#2;b l1
+       l1e:mov r4,r3
+       l2:cmp r4,r5;bhs l2e;add r6,r1,r4;strh r10,[r6];add r6,lr,r4;strh r12,[r6];add r4,r4,#2;b l2
+       l2e:add r0,r0,#1;b row
+       flush:bl #0x538f0448;mov r10,r0;mul r6,r9,r11
+       bic r1,r7,#63;add r2,r7,r6;add r2,r2,#63;bic r2,r2,#63;sub r2,r2,r1;mov r0,r10;bl #0x538f04c4
+       bic r1,r8,#63;add r2,r8,r6;add r2,r2,#63;bic r2,r2,#63;sub r2,r2,r1;mov r0,r10;bl #0x538f04c4
+       done:pop {r0-r12,lr}
+       b #${stub}`, at), 16);
+    patch.setWord(FILL_FLAG_TEST, branchWord(FILL_FLAG_TEST, paint), 'live view (test): paint the strips beside an added ratio\'s picture');
+  }
   extendZeroFill(patch);
 }
 
@@ -1069,7 +1105,7 @@ export function installExtensions(rtos: Uint8Array, iconbin: Uint8Array, ratios:
     installState(patch, ratios, menu.activeBitmap);
     installImageIdentity(patch, ratios);
     if (revision >= 2) installPlaybackDecode(patch);
-    if (features.guard) installLiveViewRepaint(patch);
+    if (features.guard) installLiveViewRepaint(patch, test.liveViewStrips);
   }
   if (features.adjSoftFocus) icons = installAdjSoftFocus(patch, icons);
   if (features.monoUnlock) installMonoUnlock(patch);

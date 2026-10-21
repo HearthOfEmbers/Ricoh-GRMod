@@ -49,10 +49,10 @@ export const HALATION = {
   mix: 0.6,
   /**
    * The camera's Weak and Strong: how strongly the spread light lifts the colours. 0.8.2: Strong as
-   * test 036's "normal" Strong, Weak as its "weak" Strong (half of it), chosen on the camera; up to
-   * 0.8.1 Weak was 25, Strong 60.
+   * test 036's "normal" Weak, Weak as its "weak" Weak (half of it), chosen on the camera; up to
+   * 0.8.1 Weak was 25, Strong 60 (with the harder start).
    */
-  gain: [28, 56] as const,
+  gain: [12, 24] as const,
   /** Lift of red, green and blue per unit of light (red first: the red layer is exposed again from behind, a little the green). */
   channels: [1, 0.06, 0.03] as const,
 };
