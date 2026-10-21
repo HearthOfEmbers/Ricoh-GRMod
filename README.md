@@ -2,17 +2,22 @@
 
 A small desktop tool for the Ricoh GR IV / GR IV HDF (firmware 1.11). Not a Ricoh product.
 
-This branch adds **GR IIIx HDF firmware 1.60** support. It preserves the existing
-GR IV paths and adds a model-specific nine-ratio ADJ list, full-frame RAW with
-cropped JPEG/previews, a wide live-view alignment fix, optional clarity-table
-soft focus, CUBE fitting, nine independent image-control slots and colour icons.
-The shell can locate and download the matching official GR IIIx update.
+**Experimental branch (`gr3-hdf-210-exp`, version 0.8.0-gr3expN): GR III HDF 2.10 and GR IIIx HDF 1.60.**
+Not a release: it keeps its own data folder (`GRMod-GR3-Experimental`) and never updates itself.
 
-The camera owner has tested the T4 capture/RAW paths, SF1 soft focus and T5-L1
-sample looks/icons. **T6's nine film presets still need camera testing.**
-Script/factory entry and power-off images have local/native-function checks only.
-IIIx XMP import, date imprint and a separate ADJ soft-focus control are not ported.
-See [IIIx support, validation and reproduction](docs/GR3X_HDF.md).
+GR III 2.10 (`fwdc239b.bin`) and GR IIIx 1.60 (`fwdc243b.bin`) are the same build of one program:
+every address is shared and the images differ only in identity bytes (name, project/product,
+version, build time, RTC epoch year). The IIIx port (nine-ratio ADJ list, full-frame RAW with
+cropped JPEG/previews, wide live-view alignment, clarity-table soft focus, nine CUBE film slots)
+is therefore applied unchanged to GR III; `core/test/gr3-equivalence.test.ts` checks that every
+GR III build is the IIIx build of the same recipe with only the identity bytes swapped, and the
+native probes in `tools/gr3x` run on either RTOS. Newer releases (GR III 2.20, GR IIIx 1.70) are a
+different program and are not supported; the shell downloads the pinned 2.10 / 1.60 archives.
+
+On GR IIIx HDF the owner has tested the T4 capture/RAW paths, SF1 soft focus and T5-L1 looks/icons;
+**nothing has been tested on a GR III yet, and T6's nine films are untested on either camera.**
+Power-off images, XMP import, date imprint and a separate ADJ soft-focus control are not offered.
+Camera test procedure: [docs/GR3_HDF_210_TEST.txt](docs/GR3_HDF_210_TEST.txt); IIIx details: [docs/GR3X_HDF.md](docs/GR3X_HDF.md).
 
 - `core/`  platform-independent TypeScript: firmware container codec and patcher with built-in self-check (`src/fw`), added aspect ratios (`src/fw/aspect`), preset conversion from .xmp Look profiles and .cube LUTs (`src/color`), exact-length baseline JPEG encoder (`src/jpeg`), start-up script generator and simulator (`src/wallpaper`; used by GR Mod 0.7 and earlier, whose power-off images rotated through a start-up script on the card; 0.8 builds them into the firmware and the UI no longer offers the script), memory-card layout planning (`src/card`), and the `Engine` facade (`src/app`).
 - `ui/`    React UI (Vite). Talks to the platform through `src/host.ts` only.
