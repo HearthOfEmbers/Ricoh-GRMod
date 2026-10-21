@@ -92,7 +92,7 @@ describe.skipIf(!input)('GR IIIx official 1.60 integration', () => {
     await expect(engine.buildFirmware([], [{ name: '65:24', ratio: '65:24' }])).rejects.toMatchObject({ code: 'gr3x-fixed-nine-only' });
     await expect(engine.bridgeFirmware()).rejects.toMatchObject({ code: 'gr3x-port-incomplete' });
     expect(() => engine.convertPreset('cube', '')).toThrow('LUT_3D_SIZE');
-    expect(() => engine.convertPreset('xmp', '')).toThrow('sRGB-display .cube');
+    expect(() => engine.convertPreset('xmp', '')).toThrow('not an XML document');
     expect(() => engine.encodeShutdownImage(new Uint8Array(), 'GR3X_HDF')).toThrow('power-off images is not ported');
     expect(() => engine.rotationScript('HDF', 1)).toThrow('startup scripts is not ported');
     expect(engine.previewRatio('65:24')).toMatchObject({ status: 'planning-only', sizes: [[6000, 2216], [4800, 1772], [3360, 1240], [1920, 708]] });

@@ -16,7 +16,10 @@ import { GR3X_FILM_NAMES, gr3xLookResources, validateGr3xLookName } from './look
 import { gr3xLookBadge } from './look-icons';
 
 export interface Gr3xFilmLook {
+  /** Default name (menus of languages without their own name). */
   name: string;
+  /** Names for particular camera languages (checked against that language's font characters). */
+  names?: Partial<Record<string, string>>;
   params?: SlotParams;
   preset?: { matrixQ13: ArrayLike<number>; curves: [ArrayLike<number>, ArrayLike<number>, ArrayLike<number>] };
   icon?: Uint8Array;
@@ -84,7 +87,7 @@ export async function buildGr3xImageControls(raw: Uint8Array, options: Gr3xLookO
   // saved replica identities never shift between successive firmware builds.
   const films = Array.from({ length: capacity }, (_, i): Gr3xFilmLook => options.films?.[i] ?? { name: GR3X_FILM_NAMES[i] });
   const specs = [
-    ...films.map((f, i) => ({ name: f.name, icon: f.icon ?? (displayIcons ? gr3xLookBadge(resources.tiles.film, 'F', i + 1) : undefined), source: 'cube' as const, base: 11, parameters: neutral(), film: f })),
+    ...films.map((f, i) => ({ name: f.name, names: f.names, icon: f.icon ?? (displayIcons ? gr3xLookBadge(resources.tiles.film, 'F', i + 1) : undefined), source: 'cube' as const, base: 11, parameters: neutral(), film: f })),
     ...(options.monoReplicas ? REPLICAS.map((r, i) => {
       const parameters = neutral();
       for (const [offset, value] of Object.entries(r.params)) parameters[Number(offset) - 0x77d] = value;

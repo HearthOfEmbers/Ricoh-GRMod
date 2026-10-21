@@ -9,6 +9,7 @@ import { normalizeIcon } from '../icons';
 import { FirmwareError } from '../types';
 import { buildGr3xAdjResearch, GR3X_ADJ } from './adj';
 import { GR3X_160, openGr3xOfficial } from './profile';
+import { GR3X_TEXT_ROWS, gr3xAllowedChars, validateGr3xLookNameFor } from './look-resources';
 
 export const GR3X_LOOK_RESEARCH = {
   // The native list has 24 widgets: twelve originals, nine films and Custom 1/2.
@@ -29,6 +30,8 @@ export const GR3X_LOOK_RESEARCH = {
 
 export interface Gr3xResearchLook {
   name: string;
+  /** Per camera language (GR3X_TEXT_ROWS codes); rows without one use `name`. */
+  names?: Partial<Record<string, string>>;
   /** Optional 40x40 RGBA pixels, normalized against the IIIx native film tile. */
   icon?: Uint8Array;
   source: 'cube' | 'gr4m-research' | 'gr4m-replica';
@@ -50,9 +53,15 @@ export async function buildGr3xLookMenuResearch(raw: Uint8Array, looks: readonly
     if (!['cube', 'gr4m-research', 'gr4m-replica'].includes(look.source))
       throw new FirmwareError('bad-edit', 'unknown research look source');
     names.add(look.name);
+    for (const [lang, text] of Object.entries(look.names ?? {})) {
+      if (!(GR3X_TEXT_ROWS as readonly string[]).includes(lang) || typeof text !== 'string')
+        throw new FirmwareError('bad-edit', 'unknown look name language');
+    }
   }
   const base = await buildGr3xAdjResearch(raw);
   const { decoded } = await openGr3xOfficial(raw);
+  for (const look of looks) for (const [lang, text] of Object.entries(look.names ?? {}))
+    if (text) validateGr3xLookNameFor(text, gr3xAllowedChars(decoded, lang as typeof GR3X_TEXT_ROWS[number]));
   const p = GR3X_160, m = GR3X_ADJ, cfg = GR3X_LOOK_RESEARCH;
   const rtos = decoded.subarray(p.rtosOffset, p.rtosOffset + p.rtosLength);
   const parts: Uint8Array[] = [unhex(base.append.bytes)];
@@ -108,17 +117,27 @@ export async function buildGr3xLookMenuResearch(raw: Uint8Array, looks: readonly
     return row;
   });
   const slots = looks.map((look, index) => ({
-    id: cfg.firstId + index, name: look.name, source: look.source,
+    id: cfg.firstId + index, name: look.name, names: look.names, source: look.source,
     textId: base.catalogs.textColumns + index, iconId: base.catalogs.iconCount + index,
     renderingImplemented: false as const,
   }));
   for (const slot of slots) {
-    const string = new Uint8Array((slot.name.length + 1) * 2);
-    const view = new DataView(string.buffer);
-    for (let i = 0; i < slot.name.length; i++) view.setUint16(i * 2, slot.name.charCodeAt(i), true);
-    const pointer = append(string);
-    const record = append(Uint8Array.of(slot.name.length + 1, 1, 0, 0, ...wordsToBytes([pointer])));
-    for (const row of rows) new DataView(row.buffer).setUint32(slot.textId * 4, record, true);
+    const records = new Map<string, number>();
+    const recordFor = (text: string) => {
+      let record = records.get(text);
+      if (record !== undefined) return record;
+      const string = new Uint8Array((text.length + 1) * 2);
+      const view = new DataView(string.buffer);
+      for (let i = 0; i < text.length; i++) view.setUint16(i * 2, text.charCodeAt(i), true);
+      const pointer = append(string);
+      record = append(Uint8Array.of(text.length + 1, 1, 0, 0, ...wordsToBytes([pointer])));
+      records.set(text, record);
+      return record;
+    };
+    rows.forEach((row, language) => {
+      const text = slot.names?.[GR3X_TEXT_ROWS[language]] || slot.name;
+      new DataView(row.buffer).setUint32(slot.textId * 4, recordFor(text), true);
+    });
   }
   const textRoots = append(wordsToBytes(rows.map(row => append(row))));
   for (const [lo, hi] of m.textRootSites) pair(lo, hi, 3, m.textRoots, textRoots, 'research: extended look language directory');

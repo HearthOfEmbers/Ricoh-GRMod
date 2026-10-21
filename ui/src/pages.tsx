@@ -201,11 +201,11 @@ function SlotCard({ id }: { id: SlotId }) {
         </div>
         <div className="props">
           <Prop label={t('preset')} tour={first ? 'ic-preset' : undefined}>
-            {!p && <FileButton className="btn dashed fill" accept={gr3x ? ".cube" : ".xmp,.cube"} onFiles={(f) => { void loadPresetFile(id, f[0]); }}>{Ico.plus}<span>{t(gr3x ? 'gr3xCubeDrop' : 'dropPreset')}</span></FileButton>}
+            {!p && <FileButton className="btn dashed fill" accept=".xmp,.cube" onFiles={(f) => { void loadPresetFile(id, f[0]); }}>{Ico.plus}<span>{t('dropPreset')}</span></FileButton>}
             {p && (
               <div className="preset">
                 <div className={`file-chip ${p.error ? 'bad' : ''}`}>
-                  <FileButton className="file-main" accept={gr3x ? ".cube" : ".xmp,.cube"} title={t('replace')} onFiles={(f) => { void loadPresetFile(id, f[0]); }}>{Ico.file}<span className="ellipsis">{p.result?.title || p.fileName}</span></FileButton>
+                  <FileButton className="file-main" accept=".xmp,.cube" title={t('replace')} onFiles={(f) => { void loadPresetFile(id, f[0]); }}>{Ico.file}<span className="ellipsis">{p.result?.title || p.fileName}</span></FileButton>
                   <button className="file-x" title={t('remove')} aria-label={t('remove')} onClick={() => removePreset(id)}>{Ico.x}</button>
                 </div>
                 {gr3x && p.result && <p className="small muted">{t('gr3xFit', { mean: p.result.meanDE.toFixed(1), p95: p.result.p95DE.toFixed(1) })}{p.result.p95DE > 6 && <><br />{t('gr3xFitPoor')}</>}</p>}

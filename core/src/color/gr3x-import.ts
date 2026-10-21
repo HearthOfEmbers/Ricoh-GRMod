@@ -8,6 +8,8 @@ import type { Conversion, ConvertOptions } from './convert';
 import { fitSlot } from './fit';
 import { deltaELab, lab, mean, percentile } from './math';
 import { GR3X_CAMERA } from './gr3x-camera';
+import { parseXmp } from './xmp';
+import { FullLook } from './look';
 
 export interface Gr3xCubeImport {
   schema: 1;
@@ -74,4 +76,32 @@ export function convertGr3xCube(text: string, options: ConvertOptions = {}): Con
   options.onProgress?.(1);
   return { kind: 'cube', title: cube.title, params: { M1: fit.M1, ck: fit.ck },
     meanDE, p95DE, warnings, unsupported: [] };
+}
+
+/** Lightroom .xmp look (Look profile / preset with its RGB table and curves) for GR III / IIIx.
+ * The look is applied to display-sRGB colours, as Lightroom applies it to Adobe Standard; the
+ * camera's own Standard rendering stands in for Adobe Standard (no GR III calibration pair exists,
+ * unlike GR IV). The result is fitted to the camera's matrix/RGB-curve format like a CUBE. */
+export function convertGr3xXmp(text: string, options: ConvertOptions = {}): Conversion {
+  if (text.length > 32 * 1024 * 1024) throw new ColorError('bad-input', 'XMP exceeds 32 MiB');
+  const look = parseXmp(text);
+  const full = new FullLook(look);
+  const P = syntheticSamples(2200, 160, 4);
+  options.onProgress?.(0.05);
+  const fit = fitSlot(P, full.apply(P), {
+    camera: GR3X_CAMERA, maxIterations: 250,
+    onProgress: f => options.onProgress?.(0.05 + f * 0.9),
+  });
+  const validation = syntheticSamples(1100, 161, 1);
+  const errors = deltaELab(lab(GR3X_CAMERA.slotApply(fit, validation)), lab(full.apply(validation)));
+  const meanDE = mean(errors), p95DE = percentile(errors, 95);
+  const warnings = [
+    ...look.warnings,
+    'GR III / IIIx: the look is applied to the camera\'s Standard rendering in place of Adobe Standard, then fitted to its matrix/RGB curves.',
+    'Keep a full-frame RAW. In-camera RAW development falls back to the original base Image Control.',
+  ];
+  if (p95DE > 6) warnings.push('Large color differences in parts of this look; compare the preview before exporting.');
+  options.onProgress?.(1);
+  return { kind: 'xmp', title: look.title, params: { M1: fit.M1, ck: fit.ck },
+    meanDE, p95DE, warnings, unsupported: look.unsupported.slice() };
 }

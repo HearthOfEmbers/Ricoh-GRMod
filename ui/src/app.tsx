@@ -107,11 +107,9 @@ function OutputBar() {
 
 /** The ? button: this page's guide again (skippable), or every guide from the start as on first use. */
 function HelpMenu() {
-  const gr3x = useStore((s) => isGr3(s.model));
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useDismiss(open, ref, () => setOpen(false));
-  if (gr3x) return null;
   return (
     <div className="menu-wrap" ref={ref}>
       <button className="help-btn" data-tour="help" title={t('tourHelp')} aria-label={t('tourHelp')} aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((v) => !v)}>{Ico.help}</button>

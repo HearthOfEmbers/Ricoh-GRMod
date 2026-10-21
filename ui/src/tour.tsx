@@ -15,6 +15,9 @@ type Side = 'right' | 'left' | 'top' | 'bottom';
  * middle of the window); `side` is where the card goes if there is room.
  */
 interface Step { target?: string | string[]; title: Key; body: Key; side?: Side }
+/** GR III / IIIx have their own text where the GR IV one would be wrong (key + 'G3'). */
+const bodyFor = (key: Key, gr3: boolean): Key => (gr3 && (`${key}G3` as Key) in GR3_BODIES ? (`${key}G3` as Key) : key);
+const GR3_BODIES: Record<string, true> = { tOvWelcomeBG3: true, tOvFirmwareBG3: true, tOvIcBG3: true, tOvRatioBG3: true, tIcSlotBG3: true, tIcExtraBG3: true, tIcNameBG3: true, tRatioFactoryBG3: true };
 const step = (target: string | string[] | undefined, name: string, side?: Side): Step => ({ target, title: `t${name}T` as Key, body: `t${name}B` as Key, side });
 const names = (target: Step['target']): string[] => (target === undefined ? [] : Array.isArray(target) ? target : [target]);
 
@@ -84,7 +87,7 @@ function find(name: string): HTMLElement | null {
  * (`data-tour-page`), which is not there while no firmware is open.
  */
 export function beginTour(id: TourId, replay: boolean): boolean {
-  if (getState().tour || isGr3(getState().model)) return false;
+  if (getState().tour) return false;
   if (id !== 'overview' && !document.querySelector(`.app [data-tour-page="${id}"]`)) return false;
   const steps: number[] = [];
   TOURS[id].forEach((st, i) => { if (names(st.target).every((n) => find(n))) steps.push(i); });
@@ -144,7 +147,6 @@ export function Tour() {
   const hasFirmware = useStore((s) => !!s.info);
   const model = useStore((s) => s.model);
   useEffect(() => {
-    if (isGr3(model)) { if (tour) endTour(); return; }
     if (tour || wait) return;
     const id: TourId | null = !seen.includes('overview') ? 'overview' : !seen.includes(page) ? page : null;
     if (!id) return;
@@ -153,11 +155,12 @@ export function Tour() {
     return () => clearTimeout(timer);
   }, [tour, wait, page, seen, hasFirmware, model]);
   const root = document.getElementById('root');
-  return !isGr3(model) && tour && root ? createPortal(<TourLayer key={tour.id} />, root) : null;
+  return tour && root ? createPortal(<TourLayer key={tour.id} />, root) : null;
 }
 
 function TourLayer() {
   const tour = useStore((s) => s.tour);
+  const gr3 = useStore((s) => isGr3(s.model));
   const [hole, setHole] = useState<Rect | null>(null);
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
   const [live, setLive] = useState(false);
@@ -228,7 +231,7 @@ function TourLayer() {
       >
         <div className="tour-text" key={tour.index}>
           <b>{t(current.title)}</b>
-          <p>{t(current.body)}</p>
+          <p>{t(bodyFor(current.body, gr3))}</p>
         </div>
         <div className="tour-foot">
           <span className="tour-count">{tour.index + 1} / {tour.steps.length}</span>

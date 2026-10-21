@@ -471,7 +471,7 @@ export function nameProblem(info: FirmwareInfo, id: SlotId, lang: LangCode, text
   return bad.length ? t('nameBadChar', { c: bad.join(' ') }) : null;
 }
 export function setName(id: SlotId, lang: LangCode, text: string): void {
-  setSlot(id, (s) => ({ names: state.info?.family === 'gr3x' ? Object.fromEntries(LANGS.map(l => [l, text])) : { ...s.names, [lang]: text } }));
+  setSlot(id, (s) => ({ names: { ...s.names, [lang]: text } }));
   scheduleSave();
 }
 

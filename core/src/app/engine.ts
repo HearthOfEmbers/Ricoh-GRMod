@@ -66,10 +66,10 @@ import { GFX_RATIOS } from '../fw/gr3x/geometry';
 import { buildGr3xTestFirmware } from '../fw/gr3x/research-package';
 import { readGr3xFactoryEntry } from '../fw/gr3x/factory';
 import { GR3X_CLARITY_OFFSET } from '../fw/gr3x/clarity';
-import { GR3X_FILM_IDS, GR3X_FILM_NAMES, GR3X_LOOK_CHARS, gr3xLookResources, validateGr3xLookName } from '../fw/gr3x/look-resources';
+import { GR3X_FILM_IDS, GR3X_FILM_NAMES, GR3X_LOOK_CHARS, gr3xAllowedChars, gr3xLookResources, validateGr3xLookName } from '../fw/gr3x/look-resources';
 import { readGr3xLookRecipe } from '../fw/gr3x/look-recipe';
 import type { Gr3xLookOptions } from '../fw/gr3x/image-control';
-import { convertGr3xCube } from '../color/gr3x-import';
+import { convertGr3xCube, convertGr3xXmp } from '../color/gr3x-import';
 import type { CameraModel } from '../wallpaper';
 
 export const SHUTDOWN_W = 720;
@@ -364,7 +364,7 @@ export class Engine {
           id, defaultName: GR3X_FILM_NAMES[i], icon: lookResources.film.slice(),
           names: Object.fromEntries(LANGS.map(l => [l, { text: GR3X_FILM_NAMES[i], capacity: 24 }])) as SlotInfoView['names'],
         })), tiles: lookResources.tiles, contentArea: CONTENT_AREA,
-        allowed: Object.fromEntries(LANGS.map(l => [l, GR3X_LOOK_CHARS])) as Record<LangCode, string>,
+        allowed: Object.fromEntries(LANGS.map(l => [l, gr3xAllowedChars(decoded, l)])) as Record<LangCode, string>,
         shutdown: { [profile.model]: { size: resource.length, sampling: samplingOf(data), data } }, factoryEntry: readGr3xFactoryEntry(decoded, profile),
       };
       return new Engine(input.slice(), decoded, info, lookResources.matrix, null);
@@ -456,9 +456,9 @@ export class Engine {
       return { sha256, kind: official ? 'official' : matched ? 'modified' : 'unknown', verified: official || matched,
         changedBytes: matched ? candidate!.changedBytes : 0,
         slots: matched && looks ? this.info.slots.slice(0, looks.displayRevision === 3 ? 9 : 2).map((s, i) => ({
-          id: s.id, names: Object.fromEntries(LANGS.map(l => [l, looks!.films?.[i]?.name ?? GR3X_FILM_NAMES[i]])) as Record<LangCode, string>,
+          id: s.id, names: Object.fromEntries(LANGS.map(l => [l, looks!.films?.[i]?.names?.[l] || looks!.films?.[i]?.name || GR3X_FILM_NAMES[i]])) as Record<LangCode, string>,
           icon: looks!.films?.[i]?.icon ?? s.icon, colorChanged: !!(looks!.films?.[i]?.preset || looks!.films?.[i]?.params),
-          nameChanged: !!looks!.films?.[i]?.name && looks!.films?.[i]?.name !== GR3X_FILM_NAMES[i],
+          nameChanged: (!!looks!.films?.[i]?.name && looks!.films?.[i]?.name !== GR3X_FILM_NAMES[i]) || !!looks!.films?.[i]?.names,
           iconChanged: !!looks!.films?.[i]?.icon,
         })) : [], ratios: matched ? candidate!.ratios : [], softFocus: matched ? softFocus : [],
         adjSoftFocus: false, dateStamp: false, monoUnlock: matched && looks?.monoReplicas === true, extraSlots: [] };
@@ -705,13 +705,12 @@ export class Engine {
 
   /**
    * Fit a preset to a slot: matrix, curves and (unless `post` is false) the post-curve matrix.
-   * Without it the result is what GR Mod 0.6.1 and earlier made. The GR IIIx takes .cube files
-   * only, without the post-curve matrix (its firmware has no place for it yet).
+   * Without it the result is what GR Mod 0.6.1 and earlier made. GR III / IIIx take .xmp and .cube,
+   * without the post-curve matrix (its firmware has no place for it yet).
    */
   convertPreset(kind: 'xmp' | 'cube', text: string, onProgress?: (f: number) => void, options: { post?: boolean } = {}): PresetResult {
     if (this.info.family === 'gr3x') {
-      if (kind !== 'cube') throw new FirmwareError('gr3x-cube-only', 'IIIx film import requires an sRGB-display .cube file');
-      const c = convertGr3xCube(text, { onProgress });
+      const c = kind === 'xmp' ? convertGr3xXmp(text, { onProgress }) : convertGr3xCube(text, { onProgress });
       return { ...c, ...quantizeSlot(c.params, this.mStdQ13) };
     }
     if (this.layout === null || !this.info.capabilities.presets) requireGr3xPort('preset conversion');
@@ -726,7 +725,9 @@ export class Engine {
       if (!this.info.slots.some(s => s.id === slot) || !LANGS.includes(lang)) throw new FirmwareError('bad-edit', 'unknown IIIx slot/language');
       if (!text.trim()) return { ok: false, reason: 'empty', capacity: 24 };
       if (text.length > 24) return { ok: false, reason: 'too-long', capacity: 24 };
-      const badChars = [...new Set(Array.from(text).filter(c => !GR3X_LOOK_CHARS.includes(c)))];
+      const allowed = this.info.allowed[lang] ?? GR3X_LOOK_CHARS;
+      const badChars = [...new Set(Array.from(text).filter(c => !allowed.includes(c)))];
+      if (text !== text.trim()) badChars.push(text[0] === ' ' ? ' ' : text[text.length - 1]);
       return badChars.length ? { ok: false, reason: 'bad-char', badChars, capacity: 24 } : { ok: true, capacity: 24 };
     }
     if (this.layout === null || !this.info.capabilities.presets) requireGr3xPort('Image Control names');
@@ -752,10 +753,13 @@ export class Engine {
         monoReplicas: !!options.monoUnlock,
         films: ids.map((slot, i) => {
           const r = requests.find(r => r.slot === slot);
-          const names = [...new Set(Object.values(r?.names ?? {}).filter(Boolean))];
-          if (names.length > 1) throw new FirmwareError('bad-name', 'IIIx uses one film name in all menu languages');
-          const name = names[0] ?? GR3X_FILM_NAMES[i]; validateGr3xLookName(name);
-          return { name, ...(r?.preset ? { preset: r.preset } : {}), ...(r?.icon ? { icon: r.icon } : {}) };
+          // Each camera language may have its own name. Languages without one show the default:
+          // the English name, else any plain-ASCII name given, else the slot's default name.
+          const given = Object.entries(r?.names ?? {}).filter(([, v]) => typeof v === 'string' && v.length > 0) as [string, string][];
+          const ascii = given.find(([l, v]) => l === 'en' && /^[\x20-\x7e]+$/.test(v)) ?? given.find(([, v]) => /^[\x20-\x7e]+$/.test(v));
+          const name = ascii?.[1] ?? GR3X_FILM_NAMES[i]; validateGr3xLookName(name);
+          const own = Object.fromEntries(given.filter(([, v]) => v !== name));
+          return { name, ...(Object.keys(own).length ? { names: own } : {}), ...(r?.preset ? { preset: r.preset } : {}), ...(r?.icon ? { icon: r.icon } : {}) };
         }),
       } : undefined;
       const r = await this.fixedGr3x(softFocus, looks);

@@ -9,6 +9,7 @@ export function encodeGr3xLookRecipe(options: Gr3xLookOptions): Uint8Array {
     schema: options.displayRevision ?? 2, monoReplicas: options.monoReplicas === true,
     films: (options.films ?? []).map(f => ({
       name: f.name,
+      ...(f.names && Object.keys(f.names).length ? { names: f.names } : {}),
       ...(f.icon ? { icon: Array.from(f.icon) } : {}),
       ...(f.params ? { params: { M1: f.params.M1, ck: f.params.ck.map(c => Array.from(c)) } } : {}),
       ...(f.preset ? { preset: { matrixQ13: Array.from(f.preset.matrixQ13), curves: f.preset.curves.map(c => Array.from(c)) } } : {}),
@@ -37,7 +38,9 @@ export function readGr3xLookRecipe(appendedRtos: Uint8Array): Gr3xLookOptions | 
       if (typeof f.name !== 'string' || (f.icon && (!Array.isArray(f.icon) || f.icon.length !== 6400 ||
           f.icon.some((v: number) => !Number.isInteger(v) || v < 0 || v > 255))))
         throw new FirmwareError('bad-edit', 'invalid IIIx recipe slot');
-      return { name: f.name, ...(f.icon ? { icon: Uint8Array.from(f.icon) } : {}),
+      if (f.names !== undefined && (typeof f.names !== 'object' || Object.values(f.names).some(v => typeof v !== 'string')))
+        throw new FirmwareError('bad-edit', 'invalid IIIx recipe names');
+      return { name: f.name, ...(f.names ? { names: f.names } : {}), ...(f.icon ? { icon: Uint8Array.from(f.icon) } : {}),
         ...(f.params ? { params: f.params } : {}), ...(f.preset ? { preset: f.preset } : {}) };
     }) };
   }
