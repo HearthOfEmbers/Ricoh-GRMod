@@ -11,7 +11,7 @@ import { CropEditor, ImageControlPage, RatioPage, WallpaperPage } from './pages'
 import { Tour, replayTour, restartTours } from './tour';
 import { UpdatePill, UpdateWatcher, checkForUpdate, openWhatsNew } from './updates';
 import {
-  askForOfficial, bridgeLoaded, backupCopies, extrasOn, copyList, deleteCopies, hasNameErrors, hasRatioErrors, ratioSpecs, revealBackups, writableCopy, writeCopy, menuPictures, outputFirmware, pendingChanges, refreshVolumes, selectVolume, setLang, setModel, setPage, setShowAll, useStore, wallReady,
+  askForOfficial, bridgeLoaded, isGr3, backupCopies, extrasOn, copyList, deleteCopies, hasNameErrors, hasRatioErrors, ratioSpecs, revealBackups, writableCopy, writeCopy, menuPictures, outputFirmware, pendingChanges, refreshVolumes, selectVolume, setLang, setModel, setPage, setShowAll, useStore, wallReady,
 } from './store';
 
 const gb = (n: number): string => (n >= 1e9 ? `${(n / 1e9).toFixed(n >= 1e10 ? 0 : 1)} GB` : `${Math.max(1, Math.round(n / 1e6))} MB`);
@@ -107,7 +107,7 @@ function OutputBar() {
 
 /** The ? button: this page's guide again (skippable), or every guide from the start as on first use. */
 function HelpMenu() {
-  const gr3x = useStore((s) => s.model === 'GR3X_HDF');
+  const gr3x = useStore((s) => isGr3(s.model));
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useDismiss(open, ref, () => setOpen(false));
@@ -126,6 +126,13 @@ function HelpMenu() {
   );
 }
 
+/** Shown while an experimental camera (GR III 2.10) is open: not tested on that camera yet. */
+function ExperimentalBanner() {
+  const on = useStore((s) => !!s.info?.experimental);
+  if (!on) return null;
+  return <div className="gr3x-notice experimental" role="status"><b>{t('gr3Experimental')}</b><p>{t('gr3ExperimentalBody')}</p></div>;
+}
+
 export function App() {
   const page = useStore((s) => s.page);
   const ready = useStore((s) => s.ready);
@@ -135,6 +142,7 @@ export function App() {
       <Sidebar />
       <main className="main">
         <BridgeBanner />
+        <ExperimentalBanner />
         <div className="stage">{ready ? (page === 'ratio' ? <RatioPage /> : page === 'wall' ? <WallpaperPage /> : page === 'copies' ? <CopiesPage /> : <ImageControlPage />) : <div className="page"><span className="spinner" /></div>}</div>
         <OutputBar />
       </main>

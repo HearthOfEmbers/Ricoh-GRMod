@@ -6,9 +6,8 @@ import { Firmware, sha256Hex, sectionsOf, buildGrown, FRAME_SIZE, sum32 } from '
 import { GR3X_CLARITY_OFFSET, gr3xClarityBytes } from '../src/fw/gr3x/clarity';
 import { buildGr3xTestFirmware } from '../src/fw/gr3x/research-package';
 import { readClarity, SOFT_FOCUS_GAINS, OFFICIAL_CLARITY } from '../src/fw/clarity';
-import { checkShutdownJpeg } from '../src/jpeg';
 import { GFX_RATIOS } from '../src/fw/gr3x/geometry';
-import { planEntryCard, planFirmwareCard, planWallpaperCard, hasEntryFiles } from '../src/card';
+import { planFirmwareCard } from '../src/card';
 
 const input = process.env.GRMOD_GR3X_FIRMWARE;
 const soft = [{ level: -1, strength: 'weak' }, { level: -2, strength: 'medium' }, { level: -3, strength: 'strong' }] as const;
@@ -60,28 +59,23 @@ describe.skipIf(!input)('IIIx additional features from the verified original', (
     const changed = buildGrown(fw, d, insertions).out;
     expect(await engine.inspect(changed)).toMatchObject({ kind: 'unknown', verified: false });
   });
-  it('produces a decodable exact-size IIIx shutdown JPEG and keeps the original intact', () => {
-    const factory = engine.info.shutdown.GR3X_HDF!.data.slice();
-    const preview = engine.factoryShutdownPreview('GR3X_HDF')!;
-    const image = engine.encodeShutdownImage(preview.rgb, 'GR3X_HDF');
-    expect(image.data.length).toBe(7264);
-    expect(checkShutdownJpeg(image.data, { byteLength: 7264, sampling: '420' }).ok).toBe(true);
-    expect(image.preview.length).toBe(720 * 480 * 3);
-    expect(engine.info.shutdown.GR3X_HDF!.data).toEqual(factory);
+  it('refuses power-off images and start-up scripts (dropped with GR Mod 0.8)', () => {
+    const preview = new Uint8Array(720 * 480 * 3);
+    expect(() => engine.encodeShutdownImage(preview, 'GR3X_HDF')).toThrow('power-off images is not ported');
+    expect(() => engine.rotationScript('GR3X_HDF', 1)).toThrow('startup scripts is not ported');
   });
-  it('parks interfering files for either family without touching photos', () => {
-    const listing = { root: ['FWDC243B.BIN','FWDC248B.BIN','00078560.636','00078490.609','DEVELOP.MOD','DCIM'].map(name => ({ name, dir: name === 'DCIM', size: 10 })),
+  it('parks interfering firmware files of either family without touching photos', () => {
+    const listing = { root: ['FWDC243B.BIN','FWDC248B.BIN','FWDC239B.BIN','00078560.636','00078490.609','DEVELOP.MOD','DCIM'].map(name => ({ name, dir: name === 'DCIM', size: 10 })),
       script: [{ name: 'startup.ttl', dir: false, size: 10 }] };
-    const plans = [planFirmwareCard(listing, raw, 'test', 'fwdc243b.bin'),
-      planEntryCard(listing, engine.info.factoryEntry.files, 'test'),
-      planWallpaperCard(listing, [engine.info.shutdown.GR3X_HDF!.data], engine.rotationScript('GR3X_HDF',1), 'test')];
-    for (const plan of plans) {
+    for (const name of ['fwdc243b.bin', 'fwdc239b.bin'] as const) {
+      const plan = planFirmwareCard(listing, raw, 'test', name);
       expect(plan.some(s => JSON.stringify(s.op === 'move' ? s.from : s.path).includes('DCIM'))).toBe(false);
-      expect(new Set(plan.filter(s => s.op === 'move').map(s => s.from.join('/'))).size).toBe(plan.filter(s => s.op === 'move').length);
+      const moved = plan.filter(s => s.op === 'move').map(s => s.from[0]);
+      expect(new Set(moved).size).toBe(moved.length);
+      expect(moved).toContain('00078490.609');
+      // every other camera's update file is moved aside; the written one replaces its own name
+      for (const other of ['FWDC243B.BIN', 'FWDC248B.BIN', 'FWDC239B.BIN'].filter(n => n.toLowerCase() !== name)) expect(moved).toContain(other);
+      expect(plan.some(s => s.op === 'write' && s.path.join('/') === name)).toBe(true);
     }
-    expect(hasEntryFiles(listing, engine.info.factoryEntry.files.map(f => f.name))).toBe(true);
-    expect(plans[0].filter(s => s.op === 'move').map(s => s.from[0])).toContain('00078490.609');
-    expect(plans[1].filter(s => s.op === 'move').map(s => s.from[0])).toEqual(['FWDC243B.BIN','FWDC248B.BIN','00078560.636']);
-    expect(plans[2].filter(s => s.op === 'move').map(s => s.from[0])).toContain('FWDC243B.BIN');
   });
 });

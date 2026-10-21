@@ -67,7 +67,18 @@ func updateTarget() update.Target {
 	return &update.FileTarget{Exe: exe}
 }
 
+// experimental reports a test build (a version such as 0.8.0-gr3exp.1). It keeps a data folder
+// of its own and never updates itself, so it can neither replace the released GR Mod nor be
+// replaced by it.
+func experimental() bool { return strings.Contains(version, "exp") }
+
+// experimentalDataSuffix is appended to the default data folder of an experimental build.
+const experimentalDataSuffix = "-GR3-Experimental"
+
 func updateOptions(target update.Target) *server.UpdateOptions {
+	if experimental() {
+		return nil
+	}
 	key, err := base64.StdEncoding.DecodeString(updatePublicKey)
 	if err != nil {
 		return nil

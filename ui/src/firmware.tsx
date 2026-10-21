@@ -1,23 +1,23 @@
 // Where the firmware comes from: a file the user picks, or the current official update fetched
 // from Ricoh's site. The program itself carries no firmware.
 import { useEffect, useRef, useState } from 'react';
-import { FIRMWARE_VERSION, GR3X_160 } from '@grmod/core';
+import { FIRMWARE_VERSION, GR3_210, GR3X_160 } from '@grmod/core';
 import type { CameraModel } from '@grmod/core';
 import { FileButton, Ico, Segmented, useDismiss } from './components';
 import { host, HostError } from './host';
 import type { FirmwareRelease } from './host';
 import { t } from './i18n';
 import type { Key } from './i18n';
-import { adoptFirmware, askForOfficial, fmtSize, loadFirmwareFile, outputBridge, setBridgeOpen, setModel, setOnlineOpen, toast, useStore } from './store';
+import { adoptFirmware, askForOfficial, fmtSize, isGr3, loadFirmwareFile, outputBridge, setBridgeOpen, setModel, setOnlineOpen, toast, useStore } from './store';
 
-export const MODELS: readonly CameraModel[] = ['GR3X_HDF', 'HDF', 'STANDARD', 'MONO'];
+export const MODELS: readonly CameraModel[] = ['GR3_HDF', 'GR3X_HDF', 'HDF', 'STANDARD', 'MONO'];
 export const modelLabel = (m: CameraModel): string => t(('model' + m) as Key);
 
 /** The sidebar's firmware row: a menu with the two ways to get a firmware file. */
 export function FirmwareRow() {
   const info = useStore((s) => s.info);
   const model = useStore((s) => s.model);
-  const noBridge = model === 'MONO' || model === 'GR3X_HDF';
+  const noBridge = model === 'MONO' || isGr3(model);
   const [open, setOpen] = useState(false);
   const wrap = useRef<HTMLDivElement>(null);
   const file = useRef<HTMLInputElement>(null);
@@ -31,7 +31,7 @@ export function FirmwareRow() {
       </button>
       {open && (
         <div className="pop up" role="menu">
-          <button type="button" role="menuitem" className="pop-item" disabled={noBridge} title={noBridge ? t(model === 'GR3X_HDF' ? 'gr3xPending' : 'bridgeMono') : undefined} onClick={() => { close(); setBridgeOpen(true); }}><span className="pop-ico">{Ico.bridge}</span><span>{t('fwBridge')}</span></button>
+          <button type="button" role="menuitem" className="pop-item" disabled={noBridge} title={noBridge ? t(isGr3(model) ? 'gr3xPending' : 'bridgeMono') : undefined} onClick={() => { close(); setBridgeOpen(true); }}><span className="pop-ico">{Ico.bridge}</span><span>{t('fwBridge')}</span></button>
           <div className="pop-sep" />
           <button type="button" role="menuitem" className="pop-item" onClick={() => { close(); file.current?.click(); }}><span className="pop-ico">{Ico.folder}</span><span>{t('fwPick')}</span></button>
           <button type="button" role="menuitem" className="pop-item" onClick={() => { close(); setOnlineOpen(true); }}><span className="pop-ico">{Ico.download}</span><span>{t('fwOnline')}</span></button>
@@ -87,7 +87,7 @@ function OnlineDialog() {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const rel = look.state === 'ready' ? look.rel : null;
-  const supported = !!rel && rel.version === (model === 'GR3X_HDF' ? GR3X_160.version : FIRMWARE_VERSION);
+  const supported = !!rel && rel.version === (model === 'GR3_HDF' ? GR3_210.version : model === 'GR3X_HDF' ? GR3X_160.version : FIRMWARE_VERSION);
   const start = async (): Promise<void> => {
     if (!rel || !supported || progress) return;
     const ac = new AbortController();

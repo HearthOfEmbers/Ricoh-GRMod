@@ -57,6 +57,9 @@ func newApp(cfg config) (*app, error) {
 		if dir, err = platform.DataDirFor(runtime.GOOS, os.Getenv, home); err != nil {
 			return nil, fmt.Errorf("no data directory: %w", err)
 		}
+		if experimental() {
+			dir += experimentalDataSuffix
+		}
 	}
 	dir, err := filepath.Abs(dir)
 	if err != nil {

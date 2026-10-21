@@ -72,7 +72,8 @@ describe.skipIf(!input)('GR IIIx official 1.60 integration', () => {
     expect(fw.frames).toHaveLength(2430);
     expect(engine.info).toMatchObject({ family: 'gr3x', version: '1.60', filename: 'fwdc243b.bin', models: ['GR3X_HDF'], factoryRatios: ['3:2', '1:1'] });
     expect(engine.info.slots.map(s => s.defaultName)).toEqual(Array.from({ length: 9 }, (_, i) => `Film ${i + 1}`));
-    expect(engine.info.capabilities).toEqual({ build: true, presets: true, wallpaper: true, factoryEntry: true, bridge: false });
+    // Power-off images and the factory entry needed a start-up script on the card; GR Mod 0.8 dropped that route.
+    expect(engine.info.capabilities).toEqual({ build: true, presets: true, wallpaper: false, factoryEntry: false, bridge: false });
   });
   it('round-trips the unmodified official container byte for byte', async () => {
     const fw = new Firmware(raw);
@@ -92,8 +93,8 @@ describe.skipIf(!input)('GR IIIx official 1.60 integration', () => {
     await expect(engine.bridgeFirmware()).rejects.toMatchObject({ code: 'gr3x-port-incomplete' });
     expect(() => engine.convertPreset('cube', '')).toThrow('LUT_3D_SIZE');
     expect(() => engine.convertPreset('xmp', '')).toThrow('sRGB-display .cube');
-    expect(() => engine.encodeShutdownImage(new Uint8Array(), 'GR3X_HDF')).toThrow('720x480');
-    expect(() => engine.rotationScript('HDF', 1)).toThrow('no power-off image');
+    expect(() => engine.encodeShutdownImage(new Uint8Array(), 'GR3X_HDF')).toThrow('power-off images is not ported');
+    expect(() => engine.rotationScript('HDF', 1)).toThrow('startup scripts is not ported');
     expect(engine.previewRatio('65:24')).toMatchObject({ status: 'planning-only', sizes: [[6000, 2216], [4800, 1772], [3360, 1240], [1920, 708]] });
     expect(engine.previewRatio('65:24', ['130:48'])).toMatchObject({ problem: 'ratio-duplicate' });
   });
@@ -106,7 +107,7 @@ describe.skipIf(!input)('GR IIIx official 1.60 integration', () => {
     ]);
     expect(new TextDecoder().decode(entry.files[1].data)).toBe('[OPEN_FACTORY_DEBUG_MENU]\r\n');
     expect(engine.info.shutdown.GR3X_HDF).toMatchObject({ size: 7264, sampling: '420' });
-    expect(engine.factoryShutdownPreview('GR3X_HDF')).toMatchObject({ width: 720, height: 480 });
-    expect(engine.rotationScript('GR3X_HDF', 2)).toContain('7264 bytes');
+    // read and checked, but no longer offered (no start-up script route in GR Mod 0.8)
+    expect(() => engine.rotationScript('GR3X_HDF', 2)).toThrow('startup scripts is not ported');
   });
 });

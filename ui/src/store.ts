@@ -76,7 +76,9 @@ export interface State {
 }
 
 const SLOT_IDS: readonly SlotId[] = GR3X_FILM_IDS;
-const availableSlots = (s: State = state): SlotId[] => s.info?.slots.map(slot => slot.id) ?? (s.model === 'GR3X_HDF' ? [...GR3X_FILM_IDS] : ['CY', 'CG']);
+/** GR IIIx 1.60 and GR III 2.10 (experimental): one program, one code path in GR Mod. */
+export const isGr3 = (m?: CameraModel): boolean => m === 'GR3X_HDF' || m === 'GR3_HDF';
+const availableSlots = (s: State = state): SlotId[] => s.info?.slots.map(slot => slot.id) ?? (isGr3(s.model) ? [...GR3X_FILM_IDS] : ['CY', 'CG']);
 const emptySlot = (): SlotState => ({ names: {}, icon: { mode: 'keep', text: '', style: 'film' } });
 const emptySlots = (): Record<SlotId, SlotState> => Object.fromEntries(SLOT_IDS.map(id => [id, emptySlot()])) as Record<SlotId, SlotState>;
 let state: State = {
@@ -252,7 +254,7 @@ export function setPage(page: Page): void { set({ page }); scheduleSave(); if (p
 export function setLang(lang: LangCode): void { set({ lang }); scheduleSave(); }
 export function setModel(model: CameraModel): void {
   if (state.busy || state.fwBusy || model === state.model) return;
-  const differentFamily = (state.model === 'GR3X_HDF') !== (model === 'GR3X_HDF');
+  const differentFamily = isGr3(state.model) !== isGr3(model);
   ++ratioGen;
   clearTimeout(ratioTimer);
   if (state.info && !state.info.models.includes(model)) {
@@ -263,7 +265,7 @@ export function setModel(model: CameraModel): void {
   }
   set({ model,
     ...(differentFamily ? { slots: emptySlots(), activeSlot: 'CY' as const, soft: false, dateStamp: false, monoUnlock: false } : {}),
-    ...(model === 'GR3X_HDF' ? { page: 'ratio' as const, bridgeOpen: false, bridgeAfter: undefined } : {}) });
+    ...(isGr3(model) ? { page: 'ratio' as const, bridgeOpen: false, bridgeAfter: undefined } : {}) });
   scheduleSave();
   for (const w of state.wall) void encodeWall(w.id);
 }
@@ -278,7 +280,7 @@ async function openFirmware(raw: Uint8Array, name: string, persist: boolean): Pr
   try {
     const info = await engine.open(raw);
     const model = info.models.includes(state.model) ? state.model : info.models[0];
-    const sameFamily = (state.model === 'GR3X_HDF') === (model === 'GR3X_HDF');
+    const sameFamily = isGr3(state.model) === isGr3(model);
     set({ info, raw, model, fwName: info.filename, fwBusy: false, copyInfo: {}, copySel: [],
       ...(!sameFamily ? { slots: emptySlots(), activeSlot: 'CY' as const, soft: false, dateStamp: false, monoUnlock: false } : {}),
       ...(info.family === 'gr3x' ? { page: sameFamily ? state.page : 'ratio' as const, bridgeOpen: false, bridgeAfter: undefined,
@@ -323,7 +325,7 @@ export const bridgeLoaded = (s: State = state): boolean => !!s.info?.bridge;
 /** What a write or export does while the bridge firmware is open: offer the official download instead. */
 export function askForOfficial(): void { setOnlineOpen(true, 'bridge-loaded'); }
 export function setBridgeOpen(bridgeOpen: boolean): void {
-  if (bridgeOpen && (state.model === 'GR3X_HDF' || (state.info && !state.info.capabilities.bridge))) return;
+  if (bridgeOpen && (isGr3(state.model) || (state.info && !state.info.capabilities.bridge))) return;
   set({ bridgeOpen });
 }
 
@@ -376,7 +378,7 @@ export function removePreset(id: SlotKey): void {
 /** Every slot key: the two Cinema slots, then the added ones. */
 /** The slots of the open firmware (GR IV: Cinema Yellow / Green and the added slots; GR IIIx: its nine films). */
 export function allSlotKeys(s: State = state): SlotKey[] {
-  const gr3x = s.info ? s.info.family === 'gr3x' : s.model === 'GR3X_HDF';
+  const gr3x = s.info ? s.info.family === 'gr3x' : isGr3(s.model);
   return [...availableSlots(s), ...(gr3x ? [] : s.extras.map((x) => x.key))];
 }
 /** The name an added slot gets in the camera: what was typed, else `GR Mod <place>`. */
@@ -826,7 +828,11 @@ async function firmwareToCard(volume: Volume, file: Uint8Array): Promise<number>
   return runPlan(volume.root, card.planFirmwareCard(await listing(volume.root), file, await freshStamp(volume.root), firmwareFilename()));
 }
 
-const firmwareFilename = (): card.FirmwareFilename => state.info?.filename === 'fwdc243b.bin' ? 'fwdc243b.bin' : card.FIRMWARE_FILE;
+/** The update file name the open firmware's camera looks for (GR IV fwdc248b, GR IIIx fwdc243b, GR III fwdc239b). */
+const firmwareFilename = (): card.FirmwareFilename => {
+  const name = state.info?.filename;
+  return (card.FIRMWARE_FILES as readonly string[]).includes(name ?? '') ? name as card.FirmwareFilename : card.FIRMWARE_FILE;
+};
 
 export async function outputFirmware(dest: Dest, stock = false): Promise<void> {
   if (!state.info?.models.includes(state.model)) return;
@@ -885,7 +891,7 @@ export async function outputFirmware(dest: Dest, stock = false): Promise<void> {
  * firmware open, the official one is downloaded first and the write continues after it.
  */
 export async function outputBridge(dest: Dest): Promise<void> {
-  if (state.model === 'GR3X_HDF' || (state.info && !state.info.capabilities.bridge)) return;
+  if (isGr3(state.model) || (state.info && !state.info.capabilities.bridge)) return;
   if (state.busy || state.fwBusy) return;
   if (!state.info) { set({ bridgeAfter: dest }); setOnlineOpen(true, 'bridge-base'); return; }
   const sourceInfo = state.info, sourceModel = state.model;

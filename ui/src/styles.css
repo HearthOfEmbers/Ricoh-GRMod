@@ -470,6 +470,8 @@ button.fw-rel:disabled { cursor: default; }
 
 .gr3x-notice { margin: 0 24px 12px; padding: 14px 16px; border: 1px solid #a78348; border-radius: 10px; background: #a7834812; }
 .gr3x-notice p { margin: 6px 0 12px; line-height: 1.5; }
+.gr3x-notice.experimental { margin-top: 12px; border-color: var(--red, #d64545); background: color-mix(in srgb, var(--red, #d64545) 10%, transparent); }
+.gr3x-notice.experimental p { margin-bottom: 0; }
 .gr3x-notice .btn + .btn { margin-left: 8px; }
 
 /* IIIx feature coverage remains readable without GR IV slot cards. */
