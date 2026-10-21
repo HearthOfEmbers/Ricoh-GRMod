@@ -74,7 +74,7 @@ describe.skipIf(!have)('added slots: firmware files', () => {
   it('builds 1 to 20 slots alone or with everything else; the engine recognises and verifies them', async () => {
     const eng = await Engine.open(raw());
     for (const [n, opts] of [[1, {}], [20, { adjSoftFocus: true, dateStamp: true, monoUnlock: true }]] as const) {
-      const slots = Array.from({ length: n }, (_, k) => ({ ...slotSpec(eng, k), name: `Look ${k + 1}`, halation: k % 3 === 0 ? true : k % 3 === 1 ? 'weak' as const : undefined }));
+      const slots = Array.from({ length: n }, (_, k) => ({ ...slotSpec(eng, k), name: `Look ${k + 1}`, halation: k % 3 === 2 ? undefined : true }));
       const ratios = n === 20 ? [{ name: '65:24', ratio: '65:24' }] : [];
       const b = await eng.buildFirmware([], ratios, [], { ...opts, extraSlots: slots });
       expect(Object.values(b.checks).every((v) => v === true)).toBe(true);
@@ -147,7 +147,7 @@ describe.skipIf(!have)('added slots: firmware files', () => {
 
   it('halation: built for the slots that have it (with the date imprint), read back, a change gives another file', async () => {
     const eng = await Engine.open(raw());
-    const slots: ExtraSlotSpec[] = [{ ...slotSpec(eng, 0), halation: true }, slotSpec(eng, 1), { ...slotSpec(eng, 2), halation: 'weak' }];
+    const slots: ExtraSlotSpec[] = [{ ...slotSpec(eng, 0), halation: true }, slotSpec(eng, 1), { ...slotSpec(eng, 2), halation: true }];
     const b = await eng.buildFirmware([], [], [], { dateStamp: true, extraSlots: slots });
     expect(Object.values(b.checks).every((v) => v === true)).toBe(true);
     expect((await eng.inspect(b.file)).verified).toBe(true);
@@ -156,7 +156,7 @@ describe.skipIf(!have)('added slots: firmware files', () => {
     const rtos = secs.find((x) => x.name === 'RTOS')!;
     const icons = secs.find((x) => x.name === 'ICONBIN')!;
     const back = aspect.readExtraSlots(d.slice(rtos.offset, rtos.offset + rtos.size), d.subarray(icons.offset, icons.offset + icons.size), 3)!;
-    expect(back.map((x) => x.halation)).toEqual([true, undefined, 'weak']);
+    expect(back.map((x) => x.halation)).toEqual([true, undefined, true]);
     // each slot's own light, from its look
     const patch = new Patch(d.slice(rtos.offset, rtos.offset + rtos.size));
     expect(aspect.readHalationLight(patch, 34)).toEqual(aspect.halationLight(slots[0].curves, slots[0].postQ9));
@@ -204,16 +204,16 @@ describe.skipIf(!have)('added slots: firmware files', () => {
       return new Patch(d.slice(sec.offset, sec.offset + sec.size));
     };
     // alone: the development step's hook is installed for it
-    const a = await eng.buildFirmware([{ slot: 'CY', preset, halation: 'weak' }, { slot: 'CG', preset }], [], [], {});
+    const a = await eng.buildFirmware([{ slot: 'CY', preset, halation: true }, { slot: 'CG', preset }], [], [], {});
     expect((await eng.inspect(a.file)).verified).toBe(true);
     const pa = rtosOf(a.file);
-    expect([...aspect.readHalation(pa, 34, 0)!.entries()]).toEqual([[18, 'weak']]);
+    expect([...aspect.readHalation(pa, 34, 0)!]).toEqual([18]);
     expect(pa.word(0x539113f8) >>> 24).toBe(0xea);
     expect(aspect.readHalationLight(pa, 18)).toEqual(aspect.halationLight(x.curves, x.postQ9));
     // with added slots and the date imprint
     const b = await eng.buildFirmware([{ slot: 'CY', preset }, { slot: 'CG', preset, halation: true }], [], [], { dateStamp: true, extraSlots: [{ ...slotSpec(eng, 0), halation: true }, slotSpec(eng, 2)] });
     expect((await eng.inspect(b.file)).verified).toBe(true);
-    expect([...aspect.readHalation(rtosOf(b.file), 34, 2)!.entries()].sort()).toEqual([[19, 'normal'], [34, 'normal']]);
+    expect([...aspect.readHalation(rtosOf(b.file), 34, 2)!].sort()).toEqual([19, 34]);
     // without a preset there is no Halation slider (Toning is Cinema's own)
     let err = '';
     try { await eng.buildFirmware([{ slot: 'CY', halation: true }], [], [], {}); } catch (e) { err = (e as { code?: string }).code ?? ''; }
@@ -278,9 +278,9 @@ describe.skipIf(!have)('added slots: firmware files', () => {
     const at = (d: Uint8ClampedArray, x: number, y: number): number[] => Array.from(d.slice((y * w + x) * 4, (y * w + x) * 4 + 3));
     expect(at(own, 212, 150)[0]).toBeGreaterThan(at(fixed, 212, 150)[0] + 20);
     expect(at(own, 212, 150)[0]).toBeGreaterThan(at(own, 212, 150)[1] + 40);
-    // weak: less
+    // the camera's Weak: less
     const weak = img();
-    aspect.halateRgba(weak, w, h, 2, dim, 'weak');
+    aspect.halateRgba(weak, w, h, 1, dim);
     expect(at(weak, 212, 150)[0]).toBeLessThan(at(own, 212, 150)[0]);
     expect(at(weak, 212, 150)[0]).toBeGreaterThan(30);
   });

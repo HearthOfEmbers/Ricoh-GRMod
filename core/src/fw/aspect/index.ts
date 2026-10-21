@@ -18,5 +18,5 @@ export { FACTORY_PICTURES, PREVIEW_HEIGHT, PREVIEW_WIDTH, SHUTDOWN_HEIGHT, SHUTD
 export type { ShutdownPictureSpec } from './shutdown';
 export { findResInsertion, readRes, resFile } from './res';
 export { Patch } from './build';
-export { HALATION, HALATION_NAMES, halateRgba, halateYcc, halationGains, halationIcon, halationLight, halationLut, halationScale, paramBytes, PLAIN_LIGHT, readHalation, readHalationLight, strengthOf } from './halation';
-export type { HalationLight, HalationLook, HalationSetting, HalationStrength } from './halation';
+export { HALATION, HALATION_NAMES, halateRgba, halateYcc, halationGains, halationIcon, halationLight, halationLut, halationScale, paramBytes, PLAIN_LIGHT, readHalation, readHalationLight } from './halation';
+export type { HalationLight, HalationLook } from './halation';

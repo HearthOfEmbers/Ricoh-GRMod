@@ -32,7 +32,7 @@ import { DATESTAMP_BYTE, installDateStamp } from './datestamp';
 import { installDateStampMenu } from './datestamp-menu';
 import { installMonoUnlock } from './monounlock';
 import { CINEMA_STYLES, installExtraSlots, installHalation } from './slots';
-import { halationLight, strengthOf } from './halation';
+import { halationLight } from './halation';
 import type { HalationLook } from './halation';
 import type { ExtraSlotSpec } from './slots';
 import { installShutdownMenu } from './shutdown';
@@ -122,7 +122,7 @@ export interface ExtensionFeatures {
    * Halation for Cinema Yellow / Green (0.8.2): only for a slot whose curves were replaced by a
    * preset (its Toning then does nothing and becomes the Halation slider, see `halation.ts`).
    */
-  cinemaHalation?: Partial<Record<'CY' | 'CG', true | 'weak'>>;
+  cinemaHalation?: Partial<Record<'CY' | 'CG', true>>;
   /**
    * Power-off pictures chosen in the camera's End Screen menu (see `shutdown.ts`): the pictures,
    * and the four factory pictures of the payload's RES section (for their thumbnails).
@@ -1028,7 +1028,7 @@ export function installRatios(rtos: Uint8Array, iconbin: Uint8Array, ratios: rea
 export function installExtensions(rtos: Uint8Array, iconbin: Uint8Array, ratios: readonly RatioEntry[], features: ExtensionFeatures, revision: BuildRevision = BUILD_REVISION, test: TestOptions = {}): AspectResult {
   const slots = features.extraSlots ?? [];
   const shutdown = features.shutdown && features.shutdown.pictures.length > 0 ? features.shutdown : undefined;
-  const cinema = (['CY', 'CG'] as const).filter((id) => features.cinemaHalation?.[id] === true || features.cinemaHalation?.[id] === 'weak');
+  const cinema = (['CY', 'CG'] as const).filter((id) => features.cinemaHalation?.[id] === true);
   const extra = !!features.adjSoftFocus || !!features.dateStamp || !!features.monoUnlock || slots.length > 0 || !!shutdown || !!features.guard || cinema.length > 0;
   if (extra) revision = 3;
   if (revision !== 1 && revision !== 2 && revision !== 3) fail('internal', 'unknown build revision');
@@ -1070,15 +1070,14 @@ export function installExtensions(rtos: Uint8Array, iconbin: Uint8Array, ratios:
   // Halation: added slots that have it, Cinema slots with a preset that are asked to.
   const halation: HalationLook[] = [];
   slots.forEach((x, k) => {
-    const strength = strengthOf(x.halation);
-    if (strength) halation.push({ style: FIRST_ADDED_LOOK + k, strength, light: halationLight(x.curves, x.postQ9) });
+    if (x.halation === true) halation.push({ style: FIRST_ADDED_LOOK + k, light: halationLight(x.curves, x.postQ9) });
   });
   for (const id of cinema) {
     const style = CINEMA_STYLES[id];
     // The engine asks for it only with a preset (curves of its own: Toning does nothing then). The
     // check of a built file installs this on the official image too, to find the hook places.
     const colour = styleColour(patch, style);
-    halation.push({ style, strength: strengthOf(features.cinemaHalation![id])!, light: colour.ownCurves ? halationLight(colour.curves, colour.postQ9) : halationLight() });
+    halation.push({ style, light: colour.ownCurves ? halationLight(colour.curves, colour.postQ9) : halationLight() });
   }
   // Last: the added slots compose with the monochrome looks' visibility check.
   if (slots.length > 0) icons = installExtraSlots(patch, icons, slots, { stashLook: (!!features.dateStamp && !!features.guard) || halation.length > 0 });
@@ -1088,5 +1087,5 @@ export function installExtensions(rtos: Uint8Array, iconbin: Uint8Array, ratios:
   if (features.guard) installSettingsGuard(patch, { slots: slots.length, ratios: ratios.length > 0, adjSoftFocus: !!features.adjSoftFocus });
   if (patch.length % 4 !== 0) fail('internal', 'image length is not a multiple of 4');
   if (BASE + patch.length >= APPEND_LIMIT) fail('too-many-ratios', 'the appended area would reach the RAM area');
-  return { revision, rtos: patch.bytes(), iconbin: icons, ratios: [...ratios], words: patch.words, features: { adjSoftFocus: !!features.adjSoftFocus, ...(features.dateStamp ? { dateStamp: true } : {}), ...(features.monoUnlock ? { monoUnlock: true } : {}), ...(slots.length > 0 ? { extraSlots: [...slots] } : {}), ...(shutdown ? { shutdown } : {}), ...(features.guard ? { guard: true } : {}), ...(cinema.length > 0 ? { cinemaHalation: Object.fromEntries(cinema.map((id) => [id, features.cinemaHalation![id]])) } : {}) } };
+  return { revision, rtos: patch.bytes(), iconbin: icons, ratios: [...ratios], words: patch.words, features: { adjSoftFocus: !!features.adjSoftFocus, ...(features.dateStamp ? { dateStamp: true } : {}), ...(features.monoUnlock ? { monoUnlock: true } : {}), ...(slots.length > 0 ? { extraSlots: [...slots] } : {}), ...(shutdown ? { shutdown } : {}), ...(features.guard ? { guard: true } : {}), ...(cinema.length > 0 ? { cinemaHalation: Object.fromEntries(cinema.map((id) => [id, true])) } : {}) } };
 }

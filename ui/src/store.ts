@@ -22,11 +22,8 @@ export interface SlotState { preset?: PresetState; names: Partial<Record<LangCod
  * An added Image Control slot (style 34, 35, ... in the camera): `key` is `x-` and a random id;
  * `name` as typed (empty: the default name of its place), one name for every language.
  */
-/**
- * A slot's halation (the fixed CineStill 800T look): on (always for an added slot), `weak` (half
- * the gain of the camera's Weak and Strong), and which level the preview shows (0 = off).
- */
-export interface HalationState { on: boolean; preview: 0 | 1 | 2; weak?: boolean }
+/** A slot's halation (the fixed CineStill 800T look): on (always for an added slot), and which level the preview shows (0 = off). */
+export interface HalationState { on: boolean; preview: 0 | 1 | 2 }
 export interface ExtraSlot { key: string; name: string; preset?: PresetState; icon: IconState; halation?: HalationState }
 /** A factory Cinema slot (`CY`, `CG`) or the key of an added slot. */
 export type SlotKey = SlotId | string;
@@ -381,7 +378,7 @@ export function extraSpecs(s: State = state): ExtraSlotSpec[] {
   if (s.model === 'MONO') return [];
   return s.extras.map((x) => {
     const r = x.preset!.result!;
-    return { name: extraName(x, s), matrixQ13: r.matrixQ13, curves: r.curves, ...(r.postQ9 ? { postQ9: r.postQ9 } : {}), icon: x.icon.pixels!, halation: x.halation?.weak ? 'weak' : true };
+    return { name: extraName(x, s), matrixQ13: r.matrixQ13, curves: r.curves, ...(r.postQ9 ? { postQ9: r.postQ9 } : {}), icon: x.icon.pixels!, halation: true };
   });
 }
 
@@ -390,7 +387,7 @@ export function extraSpecs(s: State = state): ExtraSlotSpec[] {
 function validHalation(v: unknown): HalationState | null {
   if (!v || typeof v !== 'object') return null;
   const h = v as Partial<HalationState>;
-  return { on: h.on === true, preview: h.preview === 1 || h.preview === 2 ? h.preview : 0, ...(h.weak === true ? { weak: true } : {}) };
+  return { on: h.on === true, preview: h.preview === 1 || h.preview === 2 ? h.preview : 0 };
 }
 /** A slot's halation: every added slot has it (the camera switches it); a Cinema slot when it is switched on (with a preset). */
 export function halationOf(k: SlotKey, s: State = state): HalationState {
@@ -735,7 +732,7 @@ export function pendingChanges(s: State = state): SlotChange[] {
       if (v && v !== off.names[lang].text && !nameProblem(s.info, id, lang, v)) names[lang] = v;
     }
     if (Object.keys(names).length) { req.names = names; parts.push(`${t('name')} ${Object.values(names).join(' / ')}`); labels.push(`${t('name')} “${Object.values(names)[0]}”`); }
-    if (req.preset && sl.halation?.on) { req.halation = sl.halation.weak ? 'weak' : true; parts.push(sl.halation.weak ? `${t('halation')} (${t('haloSoft')})` : t('halation')); labels.push(t('halation')); }
+    if (req.preset && sl.halation?.on) { req.halation = true; parts.push(t('halation')); labels.push(t('halation')); }
     if (parts.length) out.push({ id, parts, labels, request: req });
   }
   return out;

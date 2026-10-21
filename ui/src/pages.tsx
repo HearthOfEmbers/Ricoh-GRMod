@@ -51,8 +51,7 @@ function PhotoCompare({ params }: { params?: color.SlotParams }) {
   const photo = usePhoto();
   // (primitive selections: the store hook needs a stable value)
   const haloLevel = useStore((s) => { const h = halationOf(s.activeSlot, s); return h.on ? h.preview : 0; });
-  const haloWeak = useStore((s) => !!halationOf(s.activeSlot, s).weak);
-  const halo = haloLevel ? { preview: haloLevel, weak: haloWeak } : undefined;
+  const halo = haloLevel ? { preview: haloLevel } : undefined;
   // where the slot's light starts: its own look decides how bright the highlights end up
   const result = useStore((s) => slotOf(s.activeSlot, s)?.preset?.result);
   const light = useMemo(() => (result ? halationLight(result.curves, result.postQ9) : undefined), [result]);
@@ -61,9 +60,9 @@ function PhotoCompare({ params }: { params?: color.SlotParams }) {
   const after = useMemo(() => {
     if (!base || !halo) return base;
     const out = new ImageData(new Uint8ClampedArray(base.data), base.width, base.height);
-    halateRgba(out.data, out.width, out.height, halo.preview as 1 | 2, light, halo.weak ? 'weak' : 'normal');
+    halateRgba(out.data, out.width, out.height, halo.preview as 1 | 2, light);
     return out;
-  }, [base, haloLevel, haloWeak, light]);
+  }, [base, haloLevel, light]);
   return <Compare photo={photo} after={after} label={t('preset')} />;
 }
 
@@ -303,29 +302,27 @@ function ExtraSlotCard({ x, index }: { x: ExtraSlot; index: number }) {
 }
 
 /**
- * A slot's halation: its strength, and the level the preview shows. The look is fixed (fitted to
- * CineStill 800T); in the camera the level is chosen on the slot's parameter screen ("Halation":
- * Off / Weak / Strong). Every added slot has it; Cinema Yellow / Green only with a preset (their
- * Toning then does nothing and becomes the Halation slider) and when it is switched on here.
+ * A slot's halation, and the level the preview shows. The look is fixed (fitted to CineStill
+ * 800T); in the camera the level is chosen on the slot's parameter screen ("Halation": Off / Weak /
+ * Strong). Every added slot has it; Cinema Yellow / Green only with a preset (their Toning then
+ * does nothing and becomes the Halation slider) and when it is switched on here.
  */
 function HalationProp({ k }: { k: SlotKey }) {
   const on = useStore((s) => halationOf(k, s).on);
-  const weak = useStore((s) => !!halationOf(k, s).weak);
   const preview = useStore((s) => halationOf(k, s).preview);
-  const h = { on, weak, preview };
   const cinema = !k.startsWith('x-');
-  const strength = !h.on ? 'off' : h.weak ? 'weak' : 'normal';
-  const choices = [...(cinema ? [{ value: 'off', label: t('haloOff') }] : []), { value: 'normal', label: t('haloNormal') }, { value: 'weak', label: t('haloSoft') }];
   return (
     <Prop label={t('haloLabel')}>
       <div className="halo">
-        <div className="chips">
-          <Segmented value={strength} onChange={(v) => setHalation(k, v === 'off' ? { on: false } : { on: true, weak: v === 'weak' })} options={choices} />
-        </div>
-        {h.on && (
+        {cinema && (
+          <div className="chips">
+            <Segmented value={on ? 'on' : 'off'} onChange={(v) => setHalation(k, { on: v === 'on' })} options={[{ value: 'off', label: t('haloOff') }, { value: 'on', label: t('haloOn') }]} />
+          </div>
+        )}
+        {on && (
           <div className="chips">
             <span className="muted small">{t('haloPreview')}</span>
-            <Segmented value={String(h.preview)} onChange={(v) => setHalation(k, { preview: Number(v) as 0 | 1 | 2 })} options={[{ value: '0', label: t('haloOff') }, { value: '1', label: t('haloWeak') }, { value: '2', label: t('haloStrong') }]} />
+            <Segmented value={String(preview)} onChange={(v) => setHalation(k, { preview: Number(v) as 0 | 1 | 2 })} options={[{ value: '0', label: t('haloOff') }, { value: '1', label: t('haloWeak') }, { value: '2', label: t('haloStrong') }]} />
           </div>
         )}
         <span className="muted small halo-note">{t(cinema ? 'halationCinemaSub' : 'halationSub')}</span>

@@ -36,7 +36,7 @@ import { linkModule } from './native-link';
 import { LOOK_STASH, STASH_ASM, installLookStash } from './lookstash';
 import { SLOT_PARAMETERS, SLOT_PARAMS_MODULE } from './slotparams-native';
 import { HALATION_LOOKS, HALATION_NAMES, halationIcon, halationScale, installHalationModule, readHalation } from './halation';
-import type { HalationLook, HalationSetting } from './halation';
+import type { HalationLook } from './halation';
 import { FirmwareError } from '../types';
 
 /** Up to 0.8.1: 6. */
@@ -76,9 +76,9 @@ export interface ExtraSlotSpec {
   icon: Uint8Array;
   /**
    * Halation (CineStill 800T, fixed look) for the slot's "Halation" levels Off / Weak / Strong (the
-   * slider of Cinema's Toning): true at normal strength, 'weak' at half; absent or false = none.
+   * slider of Cinema's Toning); absent or false = none.
    */
-  halation?: HalationSetting;
+  halation?: boolean;
 }
 
 /** Text of the parameter name "Halation", icon of its list entry and of its slider scale. */
@@ -287,7 +287,7 @@ export function installExtraSlots(p: Patch, iconbin: Uint8Array, slots: readonly
     if (!s.curves || s.curves.length !== 3) fail('bad-color', `added slot ${k + 1}: curves must be [R, G, B]`);
     const cBytes = s.curves.map((c) => curveBytes(k, c));
     if (s.postQ9 !== undefined) checkPost(k, s.postQ9);
-    if (s.halation !== undefined && typeof s.halation !== 'boolean' && s.halation !== 'weak') fail('bad-halation', `added slot ${k + 1}: halation is on, weak or off`);
+    if (s.halation !== undefined && typeof s.halation !== 'boolean') fail('bad-halation', `added slot ${k + 1}: halation is on or off`);
     const icon = iconBytes(k, s.icon);
 
     const matrix = p.append(mBytes, 4);
@@ -905,10 +905,7 @@ export function readExtraSlots(rtos: Uint8Array, iconbin: Uint8Array, count: num
       out.push({ name, matrixQ13, curves, ...(postQ9 ? { postQ9 } : {}), icon });
     }
     const halation = readHalation(p, EXTRA_FIRST_STYLE, count);
-    if (halation) out.forEach((x, k) => {
-      const h = halation.get(EXTRA_FIRST_STYLE + k);
-      if (h) x.halation = h === 'weak' ? 'weak' : true;
-    });
+    if (halation) out.forEach((x, k) => { if (halation.has(EXTRA_FIRST_STYLE + k)) x.halation = true; });
     return out;
   } catch {
     return null;

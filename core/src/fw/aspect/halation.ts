@@ -9,8 +9,7 @@
  * nothing for those looks: an added slot's curves, and the curves of a Cinema slot with a preset,
  * apply as they are (gamma descriptor byte 5 is 0). Its value travels with the other parameters
  * (own values per slot and set, the frame's record at +0x7A6, RAW development, the maker note).
- * GR Mod chooses per look whether it has halation and how strong it is ("normal" or "weak": the
- * camera's Weak and Strong at half the gain).
+ * GR Mod chooses per look whether it has halation.
  *
  * The effect is applied to the finished pictures, before they are compressed: the module of
  * `tools/halation/halation.c` runs at the start of JpegEncodeMacroProcess::Execute (0x537034B4),
@@ -48,19 +47,16 @@ export const HALATION = {
   wide: 0.012,
   /** Share of the narrow spread. */
   mix: 0.6,
-  /** The camera's Weak and Strong: how strongly the spread light lifts the colours. */
-  gain: [24, 56] as const,
-  /** Gain of the "weak" strength, of the normal one. */
-  weak: 0.5,
+  /**
+   * The camera's Weak and Strong: how strongly the spread light lifts the colours. 0.8.2: Strong as
+   * test 036's "normal" Strong, Weak as its "weak" Strong (half of it), chosen on the camera; up to
+   * 0.8.1 Weak was 25, Strong 60.
+   */
+  gain: [28, 56] as const,
   /** Lift of red, green and blue per unit of light (red first: the red layer is exposed again from behind, a little the green). */
   channels: [1, 0.06, 0.03] as const,
 };
 
-/** How strong a look's halation is: the camera's Weak and Strong as they are, or at half the gain. */
-export type HalationStrength = 'normal' | 'weak';
-/** A look's halation as GR Mod is asked for it: none, normal (true) or weak. */
-export type HalationSetting = boolean | 'weak' | undefined;
-export const strengthOf = (h: HalationSetting): HalationStrength | null => (h === 'weak' ? 'weak' : h === true ? 'normal' : null);
 
 /** JpegEncodeMacroProcess::Execute. */
 const JPEG_EXECUTE = 0x537034b4;
@@ -98,9 +94,8 @@ export function paramBytes(): Uint8Array {
 }
 
 /** The module's gains (table index = light * gain >> 10) of the camera's Weak and Strong. */
-export function halationGains(strength: HalationStrength = 'normal'): [number, number] {
-  const f = strength === 'weak' ? HALATION.weak : 1;
-  return [Math.round(HALATION.gain[0] * 4 * f), Math.round(HALATION.gain[1] * 4 * f)];
+export function halationGains(): [number, number] {
+  return [Math.round(HALATION.gain[0] * 4), Math.round(HALATION.gain[1] * 4)];
 }
 
 /** A look's light: 256 values (0..16384), for the brighter of Y and red of a pixel. */
@@ -172,8 +167,8 @@ export function halationModule(): Uint8Array {
   return raw;
 }
 
-/** A look with halation: its style number, how strong, its light. */
-export interface HalationLook { style: number; strength: HalationStrength; light: HalationLight }
+/** A look with halation: its style number and its light. */
+export interface HalationLook { style: number; light: HalationLight }
 
 /**
  * Install the module at the JPEG encode step for `looks`; `stash` is the word the development
@@ -187,7 +182,7 @@ export function installHalationModule(p: Patch, looks: readonly HalationLook[], 
     if (!(Number.isInteger(l.style) && l.style >= 0 && l.style < HALATION_LOOKS) || map[l.style]) fail('internal', 'halation: style of a look');
     if (!(l.light.table instanceof Uint16Array) || l.light.table.length !== 256 || l.light.table.some((v) => v > E_MAX)) fail('internal', 'halation: light of a look');
     map[l.style] = k + 1;
-    entries.push(u16le([...halationGains(l.strength), ...l.light.table]));
+    entries.push(u16le([...halationGains(), ...l.light.table]));
   });
   const first = p.word(JPEG_EXECUTE);
   let tail: string;
@@ -223,27 +218,22 @@ function contextOf(p: Patch): number | null {
 }
 
 /**
- * The looks of a built image that have halation (style -> strength), or null when none has. Files
- * of 0.7.2..0.8.1 had it for added slots only (`firstStyle` on, `count` of them), at normal strength.
+ * The styles of a built image's looks that have halation, or null when none has. Files of
+ * 0.7.2..0.8.1 had it for added slots only (`firstStyle` on, `count` of them).
  */
-export function readHalation(p: Patch, firstStyle: number, count: number): Map<number, HalationStrength> | null {
+export function readHalation(p: Patch, firstStyle: number, count: number): Set<number> | null {
   try {
     const ctx = contextOf(p);
     if (ctx === null) return null;
     const magic = p.word(ctx + MAGIC_AT);
-    const out = new Map<number, HalationStrength>();
+    const out = new Set<number>();
     if (magic === CTX_MAGIC) {
       const map = p.read(ctx + MAGIC_AT + 4, HALATION_LOOKS);
-      const table = p.word(ctx + 7 * 4), n = p.word(ctx + 8 * 4);
-      const weak = halationGains('weak');
-      map.forEach((e, style) => {
-        if (!e || e > n) return;
-        const g = p.read(table + (e - 1) * 516, 4);
-        out.set(style, (g[0] | (g[1] << 8)) === weak[0] && (g[2] | (g[3] << 8)) === weak[1] ? 'weak' : 'normal');
-      });
+      const n = p.word(ctx + 8 * 4);
+      map.forEach((e, style) => { if (e && e <= n) out.add(style); });
     } else if (magic === CTX_MAGIC_081 || magic === CTX_MAGIC_072) {
       const mask = p.word(ctx + 8 * 4);
-      for (let k = 0; k < count; k++) if ((mask >>> k) & 1) out.set(firstStyle + k, 'normal');
+      for (let k = 0; k < count; k++) if ((mask >>> k) & 1) out.add(firstStyle + k);
     } else return null;
     return out.size ? out : null;
   } catch {
@@ -360,12 +350,12 @@ const lift = (v: number, h: number): number => v + Math.floor(((255 - v) * h * 2
  * The module's computation (halation.c, `halate`) in TypeScript, on a YCbCr 4:2:2 picture (Y and
  * the interleaved CbCr plane, `w` bytes per row each), for GR Mod's preview. Same integer steps.
  */
-export function halateYcc(Y: Uint8Array, C: Uint8Array, w: number, h: number, level: 1 | 2, light: HalationLight = PLAIN_LIGHT, strength: HalationStrength = 'normal'): void {
+export function halateYcc(Y: Uint8Array, C: Uint8Array, w: number, h: number, level: 1 | 2, light: HalationLight = PLAIN_LIGHT): void {
   const P = paramBytes();
   const v = new DataView(P.buffer);
   const tab = light.table;
   const narrow = v.getUint16(0, true), wideR = v.getUint16(2, true), mix = v.getUint16(4, true);
-  const gain = halationGains(strength)[level - 1];
+  const gain = halationGains()[level - 1];
   const lut = halationLut();
   let s = 0;
   while ((w >>> s) > 1024 || (h >>> s) > 1024) s++;
@@ -460,7 +450,7 @@ export function halateYcc(Y: Uint8Array, C: Uint8Array, w: number, h: number, le
 }
 
 /** Halation on an RGBA picture (sRGB, through YCbCr 4:2:2 as in the camera), in place; `light` of the slot (`halationLight`). */
-export function halateRgba(data: Uint8ClampedArray, width: number, height: number, level: 1 | 2, light: HalationLight = PLAIN_LIGHT, strength: HalationStrength = 'normal'): void {
+export function halateRgba(data: Uint8ClampedArray, width: number, height: number, level: 1 | 2, light: HalationLight = PLAIN_LIGHT): void {
   const w = width & ~1;
   if (w < 2 || height < 2) return;
   const Y = new Uint8Array(w * height), C = new Uint8Array(w * height);
@@ -477,7 +467,7 @@ export function halateRgba(data: Uint8ClampedArray, width: number, height: numbe
     C[y * w + x + 1] = Math.max(0, Math.min(255, Math.round(cr / 2)));
   }
   const before = Y.slice(), cbefore = C.slice();
-  halateYcc(Y, C, w, height, level, light, strength);
+  halateYcc(Y, C, w, height, level, light);
   // Only the change is put back, so the rest of the picture keeps its full colour resolution.
   for (let y = 0; y < height; y++) for (let x = 0; x < w; x += 2) {
     const dcb = C[y * w + x] - cbefore[y * w + x], dcr = C[y * w + x + 1] - cbefore[y * w + x + 1];
