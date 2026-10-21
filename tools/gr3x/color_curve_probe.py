@@ -75,7 +75,7 @@ def verify(data, manifest):
     assert cpu.mem_read(ISP - 32, 32) == b'\xa5' * 32
     assert cpu.mem_read(ISP + 0x3400, 32) == b'\xa5' * 32
     return {
-        'schema': 1, 'rtos_sha256': RTOS_SHA, 'native_calls': calls, 'cases': cases,
+        'schema': 1, 'rtos_sha256': hashlib.sha256(data).hexdigest(), 'native_calls': calls, 'cases': cases,
         'three_independent_256_entry_14_bit_input_curves': True,
         'original_curve_interpolation_and_10_bit_isp_encoding': True,
         'native_luminance_combination': True, 'fractional_input_and_highlight_clamp': True,

@@ -39,7 +39,7 @@ def model_probe(data):
 def verify(data):
     p=NativeProbe(data);calls=0
     project=p.call(0x5381fe4c);product=p.call(0x5381fe9c);calls+=2
-    assert (project,product)==(609,78490)
+    assert (project,product)==(p.profile['project'],p.profile['product'])
     key=data[0xd628a0:0xd628aa]
     for valid in (True,False):
         content=bytearray(key+b'\x00')

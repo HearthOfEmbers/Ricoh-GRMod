@@ -119,7 +119,7 @@ function cycleAssembly(): string {
 }
 
 export async function buildGr3xExperiment(raw: Uint8Array) {
-  const { decoded } = await openGr3xOfficial(raw);
+  const { decoded, profile } = await openGr3xOfficial(raw);
   const rtos = decoded.subarray(GR3X_160.rtosOffset, GR3X_160.rtosOffset + GR3X_160.rtosLength);
   for (const [at, expected] of GUARDS) {
     if (hex(rtos.subarray(at - BASE, at - BASE + expected.length / 2)) !== expected) {
@@ -146,7 +146,7 @@ export async function buildGr3xExperiment(raw: Uint8Array) {
   }));
   return {
     schema: 1, kind: 'gr3x-function-experiment' as const,
-    profile: GR3X_160.id, originalRtosSha256: GR3X_160.rtosSha256,
+    profile: profile.id, originalRtosSha256: profile.rtosSha256,
     originalLength: rtos.length, base: BASE, sites,
     append: { address: APPEND, bytes: hex(payload) },
     entries: { directedCycle },

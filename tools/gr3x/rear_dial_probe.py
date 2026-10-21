@@ -3,6 +3,7 @@
 Singleton access, message delivery and one nested focus predicate are stubbed. Native
 guards and message construction run unchanged. Physical control identity is unverified.
 """
+import hashlib
 import argparse
 import json
 import struct
@@ -94,7 +95,7 @@ def verify(data):
             0x53b5c020:'c85f2953d4602953'}
     for at,expected in guards.items():
         assert data[at-BASE:at-BASE+len(expected)//2]==bytes.fromhex(expected)
-    return dict(schema=1,rtos_sha256=RTOS_SHA,router=hex(ROUTER),
+    return dict(schema=1,rtos_sha256=hashlib.sha256(data).hexdigest(),router=hex(ROUTER),
         wrappers={'direction_1':hex(PLUS),'direction_0':hex(MINUS)},
         calls=len(cases),cases=cases,original_router_unmodified=True,
         native_state_guards=True,physical_outer_ring_mapping_verified=False,

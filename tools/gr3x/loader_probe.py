@@ -8,6 +8,7 @@ from pathlib import Path
 from unicorn import arm_const as reg
 from native_probe import NativeProbe,OBJECT,OUTPUT,STACK,BASE
 from adj_probe import put,u32
+from identity import by_container
 
 HEADER=0x62018000
 USER=0x62040000
@@ -41,7 +42,7 @@ def verify(data,boot,official,candidate,build):
     assert candidate[0x38:0x3c]==official[0x38:0x3c]
     assert candidate[0x50:0x54]==official[0x50:0x54]
     dsp,cpu_ver=(struct.unpack_from('>I',candidate,o)[0] for o in (0x38,0x50))
-    assert dsp==cpu_ver==0x013c0b11
+    assert dsp==cpu_ver==by_container(official)['version_word']
     n=LoaderProbe(data);cpu=n.uc;calls=0
     cpu.mem_write(HEADER,candidate[:128])
     for at,v in ((OBJECT+8,USER),(OBJECT+0x38,HEADER),(OBJECT+0x24,COMBINED),

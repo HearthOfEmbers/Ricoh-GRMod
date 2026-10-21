@@ -4,7 +4,8 @@
  * extracted from the verified user's firmware, not copied from the IV port. */
 import { FirmwareError } from '../types';
 import type { FactoryEntry } from '../factory';
-import { gr3xOffset } from './profile';
+import { GR3X_160, gr3xOffset } from './profile';
+import type { Gr3Profile } from './profile';
 
 export const GR3X_FACTORY = {
   format: 0x53d615d8, keyName: 0x538f2d84, key: 0x53d628a0,
@@ -13,7 +14,7 @@ export const GR3X_FACTORY = {
   keyCompare: 0x536bf750, keywordParse: 0x536bdd80,
 } as const;
 
-export function readGr3xFactoryEntry(decoded: Uint8Array): FactoryEntry {
+export function readGr3xFactoryEntry(decoded: Uint8Array, profile: Gr3Profile = GR3X_160): FactoryEntry {
   const word = (va: number) => new DataView(decoded.buffer, decoded.byteOffset).getUint32(gr3xOffset(va), true);
   const ascii = (va: number, n: number, xor = 0) => {
     let s = ''; const at = gr3xOffset(va);
@@ -24,10 +25,13 @@ export function readGr3xFactoryEntry(decoded: Uint8Array): FactoryEntry {
     if (!ok) throw new FirmwareError('unexpected-layout', `IIIx factory entry: ${detail}`);
   };
   check(ascii(GR3X_FACTORY.format, 32) === 'C:\\%08ld.%03ld', 'mode-set format');
-  check(word(GR3X_FACTORY.projectGetter) === 0xe3000261 && word(GR3X_FACTORY.projectGetter + 4) === 0xe12fff1e, 'project getter');
-  check(word(GR3X_FACTORY.productGetter) === 0xe303029a && word(GR3X_FACTORY.productGetter + 4) === 0xe3400001, 'product getter');
+  // The getters return the build's identity: movw/mov r0,#project; bx lr and movw r0,#product&0xffff; movt r0,#product>>16.
+  const projectWord = profile.project === 609 ? 0xe3000261 : profile.project === 588 ? 0xe3a00f93 : 0;
+  const movw = (v: number) => (0xe3000000 | ((v & 0xf000) << 4) | (v & 0xfff)) >>> 0;
+  check(word(GR3X_FACTORY.projectGetter) === projectWord && word(GR3X_FACTORY.projectGetter + 4) === 0xe12fff1e, 'project getter');
+  check(word(GR3X_FACTORY.productGetter) === movw(profile.product & 0xffff) && word(GR3X_FACTORY.productGetter + 4) === (0xe3400000 | (profile.product >>> 16)) >>> 0, 'product getter');
   const project = word(0x53002030), product = word(0x53002034);
-  check(project === 609 && product === 78490, 'header/getter identity mismatch');
+  check(project === profile.project && product === profile.product, 'header/getter identity mismatch');
   const keyPath = ascii(GR3X_FACTORY.keyName, 15, 0x29);
   check(keyPath === 'C:\\DEVELOP.MOD', 'key filename');
   const keyword = ascii(GR3X_FACTORY.keywords + 0x140, 32);

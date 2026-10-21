@@ -28,7 +28,7 @@ export async function buildGr3xTestFirmware(raw: Uint8Array, softFocus: readonly
 
 async function buildContainer(raw: Uint8Array, purpose: 'research' | 'hardware-test', softFocus: readonly Gr3xSoftFocusRequest[] = [], looks?: Gr3xLookOptions) {
   const manifest = looks ? await buildGr3xImageControls(raw, looks) : await buildGr3xAdjResearch(raw);
-  const { fw, decoded } = await openGr3xOfficial(raw);
+  const { fw, decoded, profile } = await openGr3xOfficial(raw);
   const sections = sectionsOf(decoded);
   const rtos = sections.find(s => s.name === 'RTOS')!;
   const icon = sections.find(s => s.name === 'ICONBIN')!;
@@ -37,7 +37,7 @@ async function buildContainer(raw: Uint8Array, purpose: 'research' | 'hardware-t
   const revision = looks ? (looks.displayRevision === 3 ? 'T6' : looks.displayRevision === 1 ? 'T5' : 'T5-L1') : softFocus.length ? 'T4-SF1' : 'T4';
   const recipe = looks ? encodeGr3xLookRecipe(looks) : new Uint8Array();
   const record = new TextEncoder().encode(purpose === 'research'
-    ? 'GR3X-ADJ9-RESEARCH-NOT-FOR-CAMERA\0' : `GR3X-HDF-160-ADJ9-${revision}-HARDWARE-UNTESTED\0`);
+    ? 'GR3X-ADJ9-RESEARCH-NOT-FOR-CAMERA\0' : `${profile.tag}-ADJ9-${revision}-HARDWARE-UNTESTED\0`);
   const rtosGrowth = roundFrame(addition.length + recipe.length + record.length + 4);
   const iconGrowth = roundFrame(pixels.length);
   const rtosEnd = rtos.offset + rtos.size, iconEnd = icon.offset + icon.size;
@@ -92,14 +92,14 @@ async function buildContainer(raw: Uint8Array, purpose: 'research' | 'hardware-t
     bytes: built.out, manifest, decodedSha256: await sha256Hex(out), changedFrames: built.reencoded, changedBytes,
     report: {
       schema: 1, kind: purpose === 'research' ? 'gr3x-adj-research-container' : 'gr3x-adj9-test-firmware',
-      profile: GR3X_160.id, purpose,
+      profile: profile.id, camera: profile.camera, experimental: profile.experimental, purpose,
       revision: purpose === 'research' ? 'research' : revision,
       softFocus: softFocus.map(r => ({ ...r })),
       imageControls: looks && 'addedLooks' in manifest ? manifest.addedLooks.map(s => ({
         id: s.id, name: s.name, source: s.source, nativeBase: s.nativeBase,
       })) : [],
-      filename: purpose === 'research' ? 'GR3x-1.60-ADJ9.NOT-FOR-CAMERA.bin' : GR3X_160.filename,
-      inputSha256: GR3X_160.sha256, outputSha256: await sha256Hex(built.out),
+      filename: purpose === 'research' ? `${profile.tag}-ADJ9.NOT-FOR-CAMERA.bin` : profile.filename,
+      inputSha256: profile.sha256, outputSha256: await sha256Hex(built.out),
       outputBytes: built.out.length, decodedBytes: out.length,
       rtosGrowth, iconGrowth, reencodedFrames: built.reencoded.length,
       firmwareGenerated: true, hardwareTested: false, cameraUpdateCandidate: purpose === 'hardware-test',

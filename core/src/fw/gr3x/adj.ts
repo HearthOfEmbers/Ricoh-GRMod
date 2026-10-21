@@ -47,7 +47,7 @@ function fail(message: string): never { throw new FirmwareError('unexpected-layo
 
 export async function buildGr3xAdjResearch(raw: Uint8Array) {
   const geometry = await buildGr3xExperiment(raw);
-  const { decoded } = await openGr3xOfficial(raw);
+  const { decoded, profile } = await openGr3xOfficial(raw);
   const p = GR3X_160, m = GR3X_ADJ;
   const rtos = decoded.subarray(p.rtosOffset, p.rtosOffset + p.rtosLength);
   const iconSection = sectionsOf(decoded).find(s => s.name === 'ICONBIN');
@@ -162,8 +162,8 @@ export async function buildGr3xAdjResearch(raw: Uint8Array) {
   const iconAddition = new Uint8Array(iconOffset - originalIcons.length);
   at = 0; for (const px of pixels) { iconAddition.set(px, at); at += px.length; }
   return {
-    schema: 1, kind: 'gr3x-adj-patchset' as const, profile: p.id,
-    originalRtosSha256: p.rtosSha256, originalLength: p.rtosLength, base: BASE,
+    schema: 1, kind: 'gr3x-adj-patchset' as const, profile: profile.id,
+    originalRtosSha256: profile.rtosSha256, originalLength: p.rtosLength, base: BASE,
     sites, append: { address: geometry.append.address, bytes: hex(payload) }, geometry,
     entries: { ...geometry.entries, ratioText, ratioIcon, fnCycle, ...imageEntries, ...developEntries, ...afEntries, ...mapEntries, ...liveEntries, ...rawEntries, ...shadingEntries, ...fullRawEntries },
     catalogs: { order, textRoots, textColumns: columns, iconRoot, iconCount: m.iconCount + additions.length },

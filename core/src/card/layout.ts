@@ -12,13 +12,13 @@
  * Files that are in the way are never deleted; they are moved into `GRMOD\parked-<stamp>\`.
  */
 export const FIRMWARE_FILE = 'fwdc248b.bin';
-export const FIRMWARE_FILES = [FIRMWARE_FILE, 'fwdc243b.bin'] as const;
+export const FIRMWARE_FILES = [FIRMWARE_FILE, 'fwdc243b.bin', 'fwdc239b.bin'] as const;
 export type FirmwareFilename = typeof FIRMWARE_FILES[number];
 export const SCRIPT_DIR = 'script';
 export const SCRIPT_FILE = 'startup.ttl';
 export const FACTORY_ENTRY_FILES = ['00078560.636', 'DEVELOP.MOD'] as const;
 /** Both supported families' entry files must be parked before an update. */
-const ALL_FACTORY_ENTRY_FILES = [...FACTORY_ENTRY_FILES, '00078490.609'] as const;
+const ALL_FACTORY_ENTRY_FILES = [...FACTORY_ENTRY_FILES, '00078490.609', '00078350.588'] as const;
 export const INDEX_FILE = 'GBRIDX.TXT';
 export const PAUSE_FILE = 'GBRSTOP.TXT';
 export const PARK_ROOT = 'GRMOD';

@@ -60,7 +60,7 @@ import type { SlotParams } from '../color';
 import { JpegError, checkShutdownJpeg, decodeBaselineJpeg, encodeExactJpeg, inspectJpeg } from '../jpeg';
 import type { Sampling } from '../jpeg';
 import { MODEL_INFO, rotationScript } from '../wallpaper';
-import { GR3X_160, openGr3xOfficial, requireGr3xPort } from '../fw/gr3x/profile';
+import { GR3X_160, gr3ProfileOf, openGr3xOfficial, requireGr3xPort } from '../fw/gr3x/profile';
 import { planGr3xRatio } from '../fw/gr3x/geometry';
 import { GFX_RATIOS } from '../fw/gr3x/geometry';
 import { buildGr3xTestFirmware } from '../fw/gr3x/research-package';
@@ -95,6 +95,8 @@ export interface ShutdownResource {
 export interface FirmwareInfo {
   family: 'gr4' | 'gr3x';
   filename: string;
+  /** Support without any camera test yet (GR III 2.10). */
+  experimental?: boolean;
   models: CameraModel[];
   factoryRatios: string[];
   capabilities: { build: boolean; presets: boolean; wallpaper: boolean; factoryEntry: boolean; bridge: boolean };
@@ -335,8 +337,8 @@ export class Engine {
    * was made from, with `info.bridge` set); throws `FirmwareError('unsupported-firmware')` otherwise.
    */
   static async open(input: Uint8Array): Promise<Engine> {
-    if (input.length === GR3X_160.size && await sha256Hex(input) === GR3X_160.sha256) {
-      const { decoded } = await openGr3xOfficial(input);
+    if (await gr3ProfileOf(input)) {
+      const { decoded, profile } = await openGr3xOfficial(input);
       const target = MODEL_INFO.GR3X_HDF.target.toLowerCase();
       const resource = listResources(decoded).find(r => r.path.toLowerCase() === target);
       if (!resource || resource.length !== 7264) throw new FirmwareError('unexpected-layout', 'IIIx shutdown resource changed');
@@ -351,17 +353,19 @@ export class Engine {
         throw new FirmwareError('unexpected-layout', 'IIIx shutdown JPEG format changed');
       }
       const info: FirmwareInfo = {
-        family: 'gr3x', filename: GR3X_160.filename, models: ['GR3X_HDF'],
-        factoryRatios: [...GR3X_160.factoryRatios],
-        capabilities: { build: true, presets: true, wallpaper: true, factoryEntry: true, bridge: false },
+        family: 'gr3x', filename: profile.filename, models: [profile.model], experimental: profile.experimental,
+        factoryRatios: [...profile.factoryRatios],
+        // Power-off images and the factory-menu entry reached the camera through a start-up script.
+        // GR Mod 0.8 dropped that route, and it was never tested on these cameras: not offered.
+        capabilities: { build: true, presets: true, wallpaper: false, factoryEntry: false, bridge: false },
         features: { softFocus: 'clarity', dateStamp: false, monoUnlock: false },
-        version: GR3X_160.version, sha256: GR3X_160.sha256, bridge: false,
+        version: profile.version, sha256: profile.sha256, bridge: false,
         slots: GR3X_FILM_IDS.map((id, i) => ({
           id, defaultName: GR3X_FILM_NAMES[i], icon: lookResources.film.slice(),
           names: Object.fromEntries(LANGS.map(l => [l, { text: GR3X_FILM_NAMES[i], capacity: 24 }])) as SlotInfoView['names'],
         })), tiles: lookResources.tiles, contentArea: CONTENT_AREA,
         allowed: Object.fromEntries(LANGS.map(l => [l, GR3X_LOOK_CHARS])) as Record<LangCode, string>,
-        shutdown: { GR3X_HDF: { size: resource.length, sampling: samplingOf(data), data } }, factoryEntry: readGr3xFactoryEntry(decoded),
+        shutdown: { [profile.model]: { size: resource.length, sampling: samplingOf(data), data } }, factoryEntry: readGr3xFactoryEntry(decoded, profile),
       };
       return new Engine(input.slice(), decoded, info, lookResources.matrix, null);
     }
@@ -430,7 +434,7 @@ export class Engine {
   async inspect(raw: Uint8Array): Promise<FirmwareSummary> {
     const sha256 = await sha256Hex(raw);
     if (this.layout === null) {
-      const official = sha256 === GR3X_160.sha256 && raw.length === GR3X_160.size;
+      const official = sha256 === this.info.sha256 && raw.length === this.raw.length;
       let candidate: FirmwareBuild | null = null;
       let softFocus: ClarityChange[] = [];
       let looks: Gr3xLookOptions | null = null;

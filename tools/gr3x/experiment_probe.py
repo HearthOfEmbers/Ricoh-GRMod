@@ -10,6 +10,11 @@ from fractions import Fraction
 from pathlib import Path
 from unicorn import UC_HOOK_MEM_WRITE
 from native_probe import NativeProbe, BASE, OBJECT, OUTPUT, PREVIEW, RTOS_SHA, MUTEX
+from identity import PROFILES
+def by_rtos_sha(sha):
+    for p in PROFILES:
+        if p['rtos_sha256']==sha: return p
+    raise ValueError('Experiment identity does not match a known RTOS')
 from rear_dial_probe import RearDialProbe, SELECTOR, DATA
 
 if not __debug__: raise RuntimeError('Validation requires Python assertions; run without -O')
@@ -43,7 +48,7 @@ class ExperimentProbe(NativeProbe):
 
     def install(self,data,manifest):
         if (manifest['schema'],manifest['kind'],manifest['profile'],manifest['originalRtosSha256'],
-            manifest['originalLength'],manifest['base']) != (1,'gr3x-function-experiment','gr3x-hdf-1.60',RTOS_SHA,len(data),BASE):
+            manifest['originalLength'],manifest['base']) != (1,'gr3x-function-experiment',by_rtos_sha(manifest['originalRtosSha256'])['id'],manifest['originalRtosSha256'],len(data),BASE):
             raise ValueError('Experiment identity does not match the original RTOS')
         if manifest['firmwareGenerated'] or manifest['hardwareTested'] or manifest['rearDialPatched']:
             raise ValueError('Unexpected experiment scope')
@@ -184,7 +189,7 @@ def verify(data,manifest,patched=None):
     except ValueError: pass
     else: raise AssertionError('Incorrect hook site accepted')
     cycle=verify_cycle(data,manifest)
-    return dict(schema=1,rtos_sha256=RTOS_SHA,
+    return dict(schema=1,rtos_sha256=hashlib.sha256(data).hexdigest(),
                 manifest_sha256=hashlib.sha256(json.dumps(manifest,sort_keys=True).encode()).hexdigest(),
                 calls=counts,total_calls=sum(counts.values())+cycle['calls'],photo_rows=rows,directed_cycle=cycle,
                 callee_saved_cpu_vfp_and_stack=True,output_canaries=True,

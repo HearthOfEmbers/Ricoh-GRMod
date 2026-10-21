@@ -38,6 +38,7 @@ const (
 
 // Models maps the model keys of the interface to the names Ricoh uses.
 var Models = map[string]string{
+	"GR3_HDF":  "GR III HDF",
 	"GR3X_HDF": "GR IIIx HDF",
 	"STANDARD": "GR IV",
 	"HDF":      "GR IV HDF",
@@ -49,7 +50,23 @@ func baseModelFor(model string) string {
 	if model == "GR3X_HDF" {
 		return "GR IIIx"
 	}
+	if model == "GR3_HDF" {
+		return "GR III"
+	}
 	return "GR IV"
+}
+
+// pinned are the exact releases GR Mod's GR III / IIIx support is built on. Ricoh's current
+// release for these cameras (GR III 2.20, GR IIIx 1.70, October 2026) is a different program
+// with every address moved, so the latest file must not be offered for them: these older
+// archives are fetched by name instead (the engine checks the SHA-256 of the file inside).
+var pinned = map[string]Release{
+	"GR3_HDF": {Name: "GR III", Applies: "RICOH GR III / GR III Street Edition / GR III Diary Edition / GR III HDF",
+		Version: "2.10", Date: "2025/10/23", File: "gr3_v210.zip",
+		Page: "/english/support/digital/gr3_s.html", URL: "/resources/japan/support/download/digital/FIRMWARE/gr3_v210.zip"},
+	"GR3X_HDF": {Name: "GR IIIx", Applies: "RICOH GR IIIx / GR IIIx Urban Edition / GR IIIx HDF",
+		Version: "1.60", Date: "2025/10/23", File: "gr3x_v160.zip",
+		Page: "/english/support/digital/gr3x_s.html", URL: "/resources/japan/support/download/digital/FIRMWARE/gr3x_v160.zip"},
 }
 
 // ErrNoRelease means the site lists no firmware for the model.
@@ -261,6 +278,15 @@ func (c *Client) Latest(ctx context.Context, model string) (*Release, error) {
 	base, err := c.base()
 	if err != nil {
 		return nil, err
+	}
+	if p, ok := pinned[model]; ok {
+		rel := p
+		rel.Model = model
+		pageURL := base.ResolveReference(&url.URL{Path: p.Page})
+		fileURL := base.ResolveReference(&url.URL{Path: p.URL})
+		rel.Page, rel.URL = pageURL.String(), fileURL.String()
+		rel.Size = c.size(ctx, base, fileURL)
+		return &rel, nil
 	}
 	indexURL := base.ResolveReference(&url.URL{Path: indexPath})
 	index, err := c.page(ctx, base, indexURL)

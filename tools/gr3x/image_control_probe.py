@@ -190,7 +190,7 @@ def verify(data, base, extra):
         calls += 4
     calls += len(NATIVE)
     return {
-        'schema': 1, 'rtos_sha256': RTOS_SHA, 'native_calls': calls,
+        'schema': 1, 'rtos_sha256': hashlib.sha256(data).hexdigest(), 'native_calls': calls,
         'extra_menu_items': len(ids), 'original_looks_and_custom_1_2_labels_preserved': True,
         'movie_and_raw_development_menus_unchanged': True,
         'all_21_languages_preserve_original_and_ratio_entries': True,

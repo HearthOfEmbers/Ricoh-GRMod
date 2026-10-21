@@ -234,7 +234,7 @@ def verify(data, base, manifest):
             assert matrix_process(patched) == matrix_process(stock)
             transition_cases += 1
             calls += 8
-    return dict(schema=1, rtos_sha256=RTOS_SHA, native_calls=calls, adapter_cases=adapter_cases,
+    return dict(schema=1, rtos_sha256=hashlib.sha256(data).hexdigest(), native_calls=calls, adapter_cases=adapter_cases,
                 sequential_look_transition_cases=transition_cases,
                 native_looks_restored_after_each_imported_look=True,
                 audited_property_consumers=len(manifest['lookEntries']['adapters']),

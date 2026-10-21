@@ -52,9 +52,9 @@ try {
     throw new Error('Validation is not bound to this candidate');
   }
   await copyFile(join(here, '../../docs/' + (softFocus.length ? 'GR3X_FEATURES_TEST.txt' : 'GR3X_ADJ9_TEST.txt')), join(target, '请先阅读.txt'));
-  await writeFile(join(target, 'SHA256SUMS.txt'), result.report.outputSha256 + '  fwdc243b.bin\n', { flag: 'wx' });
-  await rename(join(target, 'UNVALIDATED.bin'), join(target, 'fwdc243b.bin'));
-  console.log(JSON.stringify({ directory: target, filename: 'fwdc243b.bin', sha256: result.report.outputSha256,
+  await writeFile(join(target, 'SHA256SUMS.txt'), result.report.outputSha256 + '  ' + result.report.filename + '\n', { flag: 'wx' });
+  await rename(join(target, 'UNVALIDATED.bin'), join(target, result.report.filename));
+  console.log(JSON.stringify({ directory: target, filename: result.report.filename, sha256: result.report.outputSha256,
     bytes: result.bytes.length, revision: result.report.revision, nativeFunctionCases: summary.native_function_cases,
     hardwareTested: false, cameraOrCardWritten: false }));
 } finally {

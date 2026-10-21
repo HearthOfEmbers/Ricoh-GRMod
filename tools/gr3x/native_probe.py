@@ -12,6 +12,8 @@ from unicorn import Uc, UC_ARCH_ARM, UC_MODE_ARM, UC_HOOK_CODE, UC_PROT_READ, UC
 from unicorn import arm_const as reg
 
 BASE = 0x53000000
+from identity import by_rtos
+# The IIIx value; reports use the hash of the RTOS actually probed (identity.by_rtos).
 RTOS_SHA = '0f11b0d28bc67932d044c5d01bc0314844a756057c89984278c73a23449a24c6'
 OBJECT, OUTPUT = 0x62010000, 0x62030000
 STACK, STOP = 0x610ff000, 0x620ff000
@@ -23,8 +25,7 @@ MUTEX = (0x536ae71c, 0x536ae870)
 
 class NativeProbe:
     def __init__(self, data):
-        if hashlib.sha256(data).hexdigest() != RTOS_SHA:
-            raise ValueError('Unknown IIIx RTOS; refusing fixed addresses')
+        self.profile = by_rtos(data)  # raises for anything but the exact IIIx 1.60 / GR III 2.10 RTOS
         self.data = data
         self.uc = Uc(UC_ARCH_ARM, UC_MODE_ARM)
         rom_bytes = (len(data)+4095) & ~4095
@@ -129,7 +130,7 @@ if __name__ == '__main__':
         if 'assertion failed' not in str(exc): raise
         rejected = True
     if not rejected: raise ValueError('Invalid aspect ID did not hit the original assertion')
-    report = dict(rtos_sha256=RTOS_SHA, dimensions=len(rows), previews=len(previews), dng_windows=len(dng),
+    report = dict(rtos_sha256=n.profile['rtos_sha256'], dimensions=len(rows), previews=len(previews), dng_windows=len(dng),
                   symbol_guards=len(profile['symbols']), invalid_id_rejected=rejected,
                   baseline_match=True, hardware_tested=False, firmware_generated=False,
                   scope='Original native functions only. ISP, JPEG encode, DNG serialization and boot are not emulated.')

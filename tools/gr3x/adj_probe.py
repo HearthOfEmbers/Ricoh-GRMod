@@ -12,6 +12,7 @@ from pathlib import Path
 from unicorn import UC_PROT_READ, UC_PROT_EXEC, UC_HOOK_MEM_WRITE
 from unicorn import arm_const as reg
 from native_probe import BASE, RTOS_SHA, STOP, OBJECT, MUTEX
+from identity import RTOS_SHAS, by_id
 from rear_dial_probe import RearDialProbe, SELECTOR, DATA, USER
 from experiment_probe import verify as verify_geometry, SITES, RATIOS
 
@@ -35,7 +36,10 @@ class AdjProbe(RearDialProbe):
         super().__init__(data)
         self.ui=[]; self.backend=[]
         assert manifest['kind'] in ('gr3x-adj-patchset','gr3x-adj-research','gr3x-image-control-patchset') and manifest['schema']==1
-        assert manifest['originalRtosSha256']==RTOS_SHA and manifest['base']==BASE
+        # Archived IIIx fixtures (T2/T3) are also replayed on GR III 2.10: the two RTOS images are the
+        # same program (identity bytes aside), and every site's expected word is checked on install.
+        assert manifest['originalRtosSha256'] in RTOS_SHAS and manifest['base']==BASE
+        if 'profile' in manifest: assert by_id(manifest['profile'])['rtos_sha256']==manifest['originalRtosSha256']
         assert manifest['originalLength']==len(data) and not manifest.get('flashable',False)
         assert not manifest['firmwareGenerated'] and not manifest['rearDialPatched']
         assert [(r['ratio'],r['id']) for r in manifest['ratios']]==RATIOS
@@ -160,7 +164,7 @@ def verify(data,manifest):
         n.call(0x53227114,VIEW);calls+=1
         expected=order[(order.index(start)+1)%9] if start in order else order[0]
         assert bytes(cpu.mem_read(DATA+0x4c2,1))==bytes([expected])
-    return dict(schema=1,rtos_sha256=RTOS_SHA,manifest_sha256=hashlib.sha256(json.dumps(manifest,sort_keys=True).encode()).hexdigest(),
+    return dict(schema=1,rtos_sha256=hashlib.sha256(data).hexdigest(),manifest_sha256=hashlib.sha256(json.dumps(manifest,sort_keys=True).encode()).hexdigest(),
         calls=calls,native_adj_count_all_five_slots=True,native_adj_and_menu_select=True,
         native_selected_check=True,native_fn_cycle=True,native_ratio_id_lookups=True,
         native_icon_dimensions=True,native_rgba_icon_copy=True,icon_buffer_canaries=True,

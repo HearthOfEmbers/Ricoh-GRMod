@@ -13,15 +13,16 @@ if not __debug__: raise RuntimeError('Run without Python -O')
 
 def verify(original,new,manifest,build,reference):
     sys.path.insert(0,str(reference.resolve()))
+    from identity import by_container
     from gr4_editor.codec.container import inspect_container,sum32
     from gr4_editor.codec.frames import decode_payload,section_rows
-    assert hashlib.sha256(original).hexdigest()=='708e79f3b7b96a7e1581b4acf4c412233050a1832718ef7f06c8397db1b431c7'
+    profile=by_container(original)
     o=inspect_container(original);n=inspect_container(new)
-    assert o['project']==n['project']==609 and n['additive_sum32']==0
+    assert o['project']==n['project']==profile['project'] and n['additive_sum32']==0
     assert o['metadata_length']==n['metadata_length']==0
     old,_=decode_payload(original[128:o['payload_end']],o['decoded_size'])
     dec,frames=decode_payload(new[128:n['payload_end']],n['decoded_size'])
-    assert hashlib.sha256(old).hexdigest()=='c4bfc09d1148deec2155b21bd3d63be8085cf835cbe5e5cde4832747f519e630'
+    assert hashlib.sha256(old).hexdigest()==profile['decoded_sha256']
     assert hashlib.sha256(new).hexdigest()==build['outputSha256'] and sum32(dec)==0
     old_sections=section_rows(old);new_sections=section_rows(dec)
     assert [s['name'] for s in old_sections]==[s['name'] for s in new_sections]
@@ -63,7 +64,7 @@ def verify(original,new,manifest,build,reference):
     revision=build.get('revision','T4-SF1' if soft else 'T4')
     assert revision in ('research','T4','T4-SF1','T5','T5-L1','T6')
     if revision.startswith('T5') or revision=='T6':assert manifest['kind']=='gr3x-image-control-patchset'
-    marker=(f'GR3X-HDF-160-ADJ9-{revision}-HARDWARE-UNTESTED\0'.encode()
+    marker=(f"{profile['tag']}-ADJ9-{revision}-HARDWARE-UNTESTED\0".encode()
             if build.get('cameraUpdateCandidate') else b'GR3X-ADJ9-RESEARCH-NOT-FOR-CAMERA\0')
     assert dec[rt['end']-4-len(marker):rt['end']-4]==marker
     padding=app+len(payload)
@@ -86,7 +87,7 @@ def verify(original,new,manifest,build,reference):
     assert not any(dec[padding:rt['end']-4-len(marker)])
     return dict(schema=1,decoder='DoYitNow/gr-custom-tool codec at 0c15c8f9a97b464ac23ab1641740a8263e0068b0',
         output_sha256=n['sha256'],output_bytes=len(new),decoded_sha256=hashlib.sha256(dec).hexdigest(),
-        decoded_bytes=len(dec),frames=len(frames),project=609,empty_model_area_preserved=True,
+        decoded_bytes=len(dec),frames=len(frames),project=profile['project'],profile=profile['id'],empty_model_area_preserved=True,
         original_non_grown_sections_identical=True,original_icon_pixels_preserved=True,
         patch_sites=len(manifest['sites']),all_patch_sites_match=True,
         original_rtos_outside_declared_edits_preserved=True,negative_clarity_rows=soft,

@@ -1,20 +1,59 @@
 // SPDX-License-Identifier: GPL-2.0-only
-/** GR IIIx 1.60 is shared by the standard, Urban and HDF cameras. This port targets HDF;
- * a firmware file cannot prove which physical variant is connected. No GR IV patch address
- * is used here. The UI and test CLI share one fixed-nine recipe; unrelated features stay disabled. */
+/** GR IIIx 1.60 is shared by the standard, Urban and HDF cameras; GR III 2.10 by the standard,
+ * Street, Diary and HDF cameras. Both are the same build of one program: every function and data
+ * address is identical, and the two images differ only in ~30 identity bytes (camera name, project
+ * and product number, version, build time, the RTC epoch year). The IIIx port is therefore used
+ * unchanged on GR III 2.10; GR III is EXPERIMENTAL (no camera test yet). A firmware file cannot
+ * prove which physical variant is connected. No GR IV patch address is used here. */
 import { Firmware, FirmwareError, sectionsOf, sha256Hex } from '../container';
 
+export interface Gr3Profile {
+  readonly id: string; readonly model: 'GR3X_HDF' | 'GR3_HDF'; readonly camera: string; readonly tag: string;
+  readonly version: string; readonly internalVersion: string; readonly versionWord: number;
+  readonly filename: string; readonly size: number; readonly decodedSize: number;
+  readonly sha256: string; readonly decodedSha256: string; readonly rtosSha256: string;
+  readonly project: number; readonly product: number;
+  readonly rtosOffset: number; readonly rtosLength: number; readonly rtosBase: number;
+  readonly ramSource: number; readonly ramBase: number; readonly ramLength: number;
+  readonly factoryRatios: readonly ['3:2', '1:1'];
+  readonly buildEnabled: boolean; readonly buildRecipe: string; readonly experimental: boolean;
+}
+
 export const GR3X_160 = {
-  id: 'gr3x-hdf-1.60', version: '1.60', internalVersion: '1.60.11.17',
+  id: 'gr3x-hdf-1.60', model: 'GR3X_HDF', camera: 'GR IIIx', tag: 'GR3X-HDF-160',
+  version: '1.60', internalVersion: '1.60.11.17', versionWord: 0x013c0b11,
   filename: 'fwdc243b.bin', size: 30391788, decodedSize: 59718388,
   sha256: '708e79f3b7b96a7e1581b4acf4c412233050a1832718ef7f06c8397db1b431c7',
   decodedSha256: 'c4bfc09d1148deec2155b21bd3d63be8085cf835cbe5e5cde4832747f519e630',
   rtosSha256: '0f11b0d28bc67932d044c5d01bc0314844a756057c89984278c73a23449a24c6',
-  project: 609, rtosOffset: 0x10870, rtosLength: 17520064, rtosBase: 0x53000000,
+  project: 609, product: 78490, rtosOffset: 0x10870, rtosLength: 17520064, rtosBase: 0x53000000,
   ramSource: 0x5407b540, ramBase: 0x55000000, ramLength: 0x3a080,
   factoryRatios: ['3:2', '1:1'],
-  buildEnabled: true, buildRecipe: 'fixed-adj9-T4',
-} as const;
+  buildEnabled: true, buildRecipe: 'fixed-adj9-T4', experimental: false,
+} as const satisfies Gr3Profile;
+
+/** GR III 2.10 (fwdc239b.bin). Layout fields must equal GR3X_160's: they are asserted below and in
+ * the tests, and every address in this directory relies on it. */
+export const GR3_210 = {
+  ...GR3X_160,
+  id: 'gr3-hdf-2.10', model: 'GR3_HDF', camera: 'GR III', tag: 'GR3-HDF-210',
+  version: '2.10', internalVersion: '2.10.21.27', versionWord: 0x020a151b,
+  filename: 'fwdc239b.bin', size: 30391780,
+  sha256: 'd6a3c9c288d784080e7b283222ecdd8752adfeed6faa36dab44f73115354bfd4',
+  decodedSha256: '53da690797f35ad6dc2c429d8ca1d0de8e333c211ed959816813982cd093b703',
+  rtosSha256: '8a4eafcad2716e0b21e9909264e1242e534f0e39e05cba82a53546ceb4070b67',
+  project: 588, product: 78350, experimental: true,
+} as const satisfies Gr3Profile;
+
+export const GR3_PROFILES: readonly Gr3Profile[] = [GR3X_160, GR3_210];
+
+/** The profile whose exact official file this is (size and SHA-256), or null. */
+export async function gr3ProfileOf(raw: Uint8Array): Promise<Gr3Profile | null> {
+  const candidates = GR3_PROFILES.filter(p => p.size === raw.length);
+  if (!candidates.length) return null;
+  const sha = await sha256Hex(raw);
+  return candidates.find(p => p.sha256 === sha) ?? null;
+}
 
 export const GR3X_SYMBOLS = {
   dimensions: { address: 0x536a2a30, evidence: 'native-executed' },
@@ -44,10 +83,16 @@ export function gr3xOffset(va: number): number {
   return p.rtosOffset + va - p.rtosBase;
 }
 
-export async function openGr3xOfficial(raw: Uint8Array): Promise<{ fw: Firmware; decoded: Uint8Array }> {
-  const p = GR3X_160;
-  if (raw.length !== p.size || await sha256Hex(raw) !== p.sha256) {
-    throw new FirmwareError('unsupported-firmware', 'GR IIIx HDF requires the exact official 1.60 fwdc243b.bin');
+export async function openGr3xOfficial(raw: Uint8Array): Promise<{ fw: Firmware; decoded: Uint8Array; profile: Gr3Profile }> {
+  const p = await gr3ProfileOf(raw);
+  if (!p) {
+    throw new FirmwareError('unsupported-firmware', 'GR III / IIIx support requires the exact official GR IIIx 1.60 fwdc243b.bin or GR III 2.10 fwdc239b.bin');
+  }
+  // The shared addresses are only valid for this exact layout.
+  const L = GR3X_160;
+  if (p.rtosOffset !== L.rtosOffset || p.rtosLength !== L.rtosLength || p.rtosBase !== L.rtosBase || p.decodedSize !== L.decodedSize ||
+      p.ramSource !== L.ramSource || p.ramBase !== L.ramBase || p.ramLength !== L.ramLength) {
+    throw new FirmwareError('unexpected-layout', `${p.camera} layout differs from the verified shared layout`);
   }
   const fw = new Firmware(raw);
   const decoded = fw.decoded;
@@ -55,16 +100,21 @@ export async function openGr3xOfficial(raw: Uint8Array): Promise<{ fw: Firmware;
   if (fw.project !== p.project || decoded.length !== p.decodedSize || await sha256Hex(decoded) !== p.decodedSha256 ||
       !rtos || rtos.offset !== p.rtosOffset || rtos.size !== p.rtosLength ||
       await sha256Hex(decoded.subarray(rtos.offset, rtos.offset + rtos.size)) !== p.rtosSha256) {
-    throw new FirmwareError('unexpected-layout', 'GR IIIx container or RTOS does not match the verified baseline');
+    throw new FirmwareError('unexpected-layout', `${p.camera} container or RTOS does not match the verified baseline`);
   }
   const view = new DataView(decoded.buffer, decoded.byteOffset, decoded.byteLength);
   const startup = [p.ramSource, p.ramBase, p.ramLength];
   if (startup.some((v, i) => view.getUint32(p.rtosOffset + 0x450 + i * 4, true) !== v)) {
-    throw new FirmwareError('unexpected-layout', 'GR IIIx startup data map changed');
+    throw new FirmwareError('unexpected-layout', `${p.camera} startup data map changed`);
   }
-  return { fw, decoded };
+  // The RTOS header carries the identity the camera's updater and mode-set files use.
+  if (view.getUint32(p.rtosOffset + 0x2030, true) !== p.project || view.getUint32(p.rtosOffset + 0x2034, true) !== p.product ||
+      view.getUint32(p.rtosOffset + 0x2038, false) !== p.versionWord) {
+    throw new FirmwareError('unexpected-layout', `${p.camera} RTOS header identity mismatch`);
+  }
+  return { fw, decoded, profile: p };
 }
 
 export function requireGr3xPort(feature: string): never {
-  throw new FirmwareError('gr3x-port-incomplete', `GR IIIx HDF 1.60: ${feature} is not ported; this branch supports fixed ADJ9, clarity soft focus and nine T6 CUBE film slots`);
+  throw new FirmwareError('gr3x-port-incomplete', `GR III / IIIx: ${feature} is not ported; supported are fixed ADJ9, clarity soft focus and nine CUBE film slots`);
 }

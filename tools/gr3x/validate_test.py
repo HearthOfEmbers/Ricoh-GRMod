@@ -28,6 +28,11 @@ def main():
     sha=hashlib.sha256(candidate).hexdigest()
     assert build['cameraUpdateCandidate'] and build['outputSha256']==sha
     assert build['hardwareTested'] is False and all(build['checks'].values())
+    # The candidate's manifest must have been made from exactly this official image.
+    from identity import by_container,by_rtos
+    profile=by_container(original);assert by_rtos(data)==profile
+    assert manifest['originalRtosSha256']==profile['rtos_sha256'] and manifest['profile']==profile['id']
+    assert build['profile']==profile['id'] and build['inputSha256']==profile['container_sha256'] and build['filename']==profile['filename']
     results={}
     for name,run in (
         ('adj',lambda:adj(data,manifest)),
