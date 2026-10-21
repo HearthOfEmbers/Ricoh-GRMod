@@ -948,39 +948,53 @@ function installPlaybackDecode(patch: Patch): void {
 }
 
 // --------------------------------------------------------------------------------------------
-// Not in the reference (0.8.2, builds with the settings guard): live view repainted around the
-// picture when its rectangle changes.
+// Not in the reference (0.8.2, builds with the settings guard): live view painted around the
+// picture of an added ratio in every display buffer.
 //
-// The live-view display (UpdateFillVramSequence 0x53639A10) lays the picture out in its buffer
-// (0x53647498: width +0xBD6, x = (buffer width - width) / 2, ...) and then (0x53647138) paints the
-// area around it once per display buffer: a fill job is made only while the buffer's "painted"
-// byte (config [r4+0x330] + 0x118 + buffer) is 0, and those bytes are cleared only when live view
-// starts again. Between factory ratios that is the case; between 1:1 and an added ratio of the
-// same hardware family (4:5: picture 384 wide at x 168, after 1:1's 480 at x 120) it is not, and
-// the strips 120..168 and 552..600 kept the last 1:1 picture (reported on 0.8.1 with 4:5).
-// At the flag test the rectangle the job would paint around (w, h at +0xBA0, x, y at +0xBAC) is
-// compared with the one the buffers were last painted for; when it differs, the four bytes are
-// cleared (as the firmware does at a start) so that every buffer is painted again. Analysed
-// statically and in the emulator (the layout), not yet confirmed on the camera.
+// The live-view display (UpdateFillVramSequence 0x53639A10, once per display object) lays the
+// picture out in its buffer (0x53647498: width +0xBD6, x = (buffer width - width) / 2, ...) and then
+// (0x53647138) makes one fill job, for the current display buffer only, painting the area around
+// the picture; and only while that buffer's "painted" byte (config [r4+0x330] + 0x118 + buffer
+// [r4+0x31C]) is 0. Those bytes are cleared only when live view starts again. With an added ratio
+// narrower than 1:1 (4:5: picture 384 wide at x 168) the strips beside the picture were left with
+// whatever earlier modes put there (0.8.1: old picture; test 036, which repainted only when the
+// rectangle changed: buffers that were not current then keep it, and the edges flicker as the
+// display goes through its buffers; reported on the camera, 4:5 only).
+//  - The layout's entry remembers the aspect it lays out (r1) in a word before the heap.
+//  - At the painted-byte test: for an added ratio (identity >= FIRST_CUSTOM_ID) the current
+//    buffer's byte is cleared every time, so every buffer is painted when it is current; for a
+//    factory ratio the bytes are cleared only when the rectangle (w, h at +0xBA0, x, y at +0xBAC)
+//    differs from the one the buffers were last painted for, as the firmware's own start does.
+// Analysed statically and in the emulator (layout, buffer sizes, the flags), not yet confirmed on
+// the camera.
 
+const LAYOUT = 0x53647498;
 const FILL_FLAG_TEST = 0x53647248;
 /** The rectangle the buffers were last painted for: two words in the 44 bytes before the heap. */
 const LAST_FILL_RECT = 0x558372e8;
+/** The aspect the live-view layout last laid out. */
+const LV_ASPECT = 0x558372f4;
 
 function installLiveViewRepaint(patch: Patch): void {
+  expectWord(patch, LAYOUT, 0xe1a0c00d); // mov ip,sp
   expectWord(patch, FILL_FLAG_TEST, 0xe594331c); // ldr r3,[r4,#0x31c]
   expectWord(patch, FILL_FLAG_TEST + 4, 0xe0800003); // add r0,r0,r3
   expectWord(patch, FILL_FLAG_TEST + 8, 0xe5d03118); // ldrb r3,[r0,#0x118]
+  const layout = patch.append((at) => assembleWords(
+    `movw ip,#${LV_ASPECT & 65535};movt ip,#${LV_ASPECT >>> 16};str r1,[ip];mov ip,sp;b #${LAYOUT + 4}`, at), 16);
+  patch.setWord(LAYOUT, branchWord(LAYOUT, layout), 'live view: remember the aspect being laid out');
   const stub = patch.append((at) => assembleWords(
     `push {r1,r2,r3,ip}
-     ldr r2,[r4,#0xba0];ldr r3,[r4,#0xbac]
+     movw ip,#${LV_ASPECT & 65535};movt ip,#${LV_ASPECT >>> 16};ldr r1,[ip];cmp r1,#${FIRST_CUSTOM_ID};blo rect
+     ldr r2,[r4,#0x31c];add r2,r0,r2;mov r1,#0;strb r1,[r2,#0x118];b same
+     rect:ldr r2,[r4,#0xba0];ldr r3,[r4,#0xbac]
      movw ip,#${LAST_FILL_RECT & 65535};movt ip,#${LAST_FILL_RECT >>> 16}
      ldr r1,[ip];cmp r1,r2;ldreq r1,[ip,#4];cmpeq r1,r3;beq same
      str r2,[ip];str r3,[ip,#4]
      mov r1,#0;strb r1,[r0,#0x118];strb r1,[r0,#0x119];strb r1,[r0,#0x11a];strb r1,[r0,#0x11b]
      same:pop {r1,r2,r3,ip}
      ldr r3,[r4,#0x31c];b #${FILL_FLAG_TEST + 4}`, at), 16);
-  patch.setWord(FILL_FLAG_TEST, branchWord(FILL_FLAG_TEST, stub), 'live view: paint around the picture again when its rectangle changes');
+  patch.setWord(FILL_FLAG_TEST, branchWord(FILL_FLAG_TEST, stub), 'live view: paint around the picture of an added ratio in every display buffer');
   extendZeroFill(patch);
 }
 
