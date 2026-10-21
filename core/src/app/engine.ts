@@ -118,6 +118,8 @@ export interface SlotRequest {
   preset?: { matrixQ13: ArrayLike<number>; curves: [ArrayLike<number>, ArrayLike<number>, ArrayLike<number>]; postQ9?: ArrayLike<number> };
   icon?: Uint8Array;
   names?: Partial<Record<LangCode, string>>;
+  /** Halation (0.8.2): needs a preset (its Toning becomes the Halation slider). True at normal strength, 'weak' at half. */
+  halation?: true | 'weak';
 }
 
 /** Soft focus on one negative clarity setting: its row of the clarity table gets the gains of `strength`. */
@@ -193,10 +195,15 @@ export interface BuildOptions {
   dateStamp?: boolean;
   /** The six black-and-white looks of the GR IV Monochrome. */
   monoUnlock?: boolean;
-  /** Added Image Control slots (1 to 6), after the factory ones. */
+  /** Added Image Control slots (1 to 20), after the factory ones. */
   extraSlots?: ExtraSlotSpec[];
   /** Power-off pictures (1 to 8) chosen in the camera's End Screen menu; see `encodeShutdownPicture`. */
   shutdownPictures?: ShutdownPictureSpec[];
+  /**
+   * The settings guard and what comes with it from 0.8.2 (see `aspect/guard.ts`); default true.
+   * False only to build files as GR Mod 0.8.1 and earlier did (regression tests).
+   */
+  guard?: boolean;
   /** Test builds only: a fixed setting byte (1 short, 3 long style) instead of the camera menu. */
   dateStampFixed?: number;
   /** Test builds only: print the encoder configuration on the 720x480 picture. */
@@ -443,6 +450,14 @@ export class Engine {
       if (!slots) return { ...unknown, kind: 'modified' };
       features.extraSlots = slots;
     }
+    // Halation of Cinema Yellow / Green (0.8.2): from the image as well.
+    const halation = aspect.readHalation(new aspect.Patch(dec.slice(RTOS_OFFSET, rtosEnd + rtosGrowth)), aspect.EXTRA_FIRST_STYLE, extraCount);
+    const cinemaHalation: Partial<Record<'CY' | 'CG', true | 'weak'>> = {};
+    for (const [id, style] of [['CY', 18], ['CG', 19]] as const) {
+      const h = halation?.get(style);
+      if (h) cinemaHalation[id] = h === 'weak' ? 'weak' : true;
+    }
+    if (Object.keys(cinemaHalation).length > 0) features.cinemaHalation = cinemaHalation;
     // Power-off pictures: names and identities from the image, JPEGs from RES.
     const pictureCount = readShutdownCount(dec.subarray(RTOS_OFFSET, rtosEnd + rtosGrowth)) ?? 0;
     if (pictureCount > 0 || resInsert) {
@@ -601,7 +616,13 @@ export class Engine {
   async buildFirmware(requests: SlotRequest[], ratios: readonly RatioSpec[] = [], softFocus: readonly SoftFocusRequest[] = [], options: BuildOptions = {}): Promise<FirmwareBuild> {
     if (this.info.bridge) throw new FirmwareError('bridge-firmware', 'open the official firmware: the bridge firmware is not a base for builds');
     const edits: SlotEdit[] = [];
+    const cinemaHalation: Partial<Record<'CY' | 'CG', true | 'weak'>> = {};
     for (const r of requests) {
+      if (r.halation !== undefined) {
+        if (r.halation !== true && r.halation !== 'weak') throw new FirmwareError('bad-halation', `${r.slot}: halation is on or weak`);
+        if (!r.preset) throw new FirmwareError('bad-halation', `${r.slot}: halation needs a preset`);
+        cinemaHalation[r.slot] = r.halation;
+      }
       const e: SlotEdit = { slot: r.slot };
       if (r.preset) e.color = { matrixQ13: r.preset.matrixQ13, curves: r.preset.curves, ...(r.preset.postQ9 ? { postQ9: r.preset.postQ9 } : {}) };
       if (r.icon) e.icon = r.icon;
@@ -623,7 +644,8 @@ export class Engine {
     if (dateStamp && clarity.length > 0) throw new FirmwareError('bad-clarity', 'the date imprint cannot be combined with the clarity-table soft focus of 0.4.x');
     if (extraSlots.length > 0 && clarity.length > 0) throw new FirmwareError('bad-clarity', 'added slots cannot be combined with the clarity-table soft focus of 0.4.x');
     if (edits.length === 0 && ratios.length === 0 && clarity.length === 0 && !adjSoftFocus && !dateStamp && !monoUnlock && extraSlots.length === 0 && pictures.length === 0) throw new FirmwareError('bad-edit', 'nothing to change');
-    const features = { adjSoftFocus, ...(dateStamp ? { dateStamp } : {}), ...(monoUnlock ? { monoUnlock } : {}), ...(extraSlots.length > 0 ? { extraSlots } : {}), ...(pictures.length > 0 ? { shutdown: { pictures, factory: aspect.factoryShutdownJpegs(this.decoded) } } : {}) };
+    if (Object.keys(cinemaHalation).length > 0 && clarity.length > 0) throw new FirmwareError('bad-clarity', 'halation cannot be combined with the clarity-table soft focus of 0.4.x');
+    const features = { adjSoftFocus, guard: clarity.length === 0 && options.guard !== false, ...(Object.keys(cinemaHalation).length > 0 ? { cinemaHalation } : {}), ...(dateStamp ? { dateStamp } : {}), ...(monoUnlock ? { monoUnlock } : {}), ...(extraSlots.length > 0 ? { extraSlots } : {}), ...(pictures.length > 0 ? { shutdown: { pictures, factory: aspect.factoryShutdownJpegs(this.decoded) } } : {}) };
     const test = options && options.dateStampFixed ? { dateStampFixed: options.dateStampFixed, dateStampDiag: !!options.dateStampDiag } : {};
     const { decoded: _decoded, ...rest } = await buildFirmware(this.raw, edits, ratios, clarity, features, test);
     return rest;

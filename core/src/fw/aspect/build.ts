@@ -31,9 +31,13 @@ import { installAdjSoftFocus } from './softfocus';
 import { DATESTAMP_BYTE, installDateStamp } from './datestamp';
 import { installDateStampMenu } from './datestamp-menu';
 import { installMonoUnlock } from './monounlock';
-import { installExtraSlots } from './slots';
+import { CINEMA_STYLES, installExtraSlots, installHalation } from './slots';
+import { halationLight, strengthOf } from './halation';
+import type { HalationLook } from './halation';
 import type { ExtraSlotSpec } from './slots';
 import { installShutdownMenu } from './shutdown';
+import { FIRST_ADDED_LOOK, installSettingsGuard } from './guard';
+import { LOOK_STASH, extendZeroFill, installLookStash, monoLook, monoTable, styleColour } from './lookstash';
 import type { ShutdownPictureSpec } from './shutdown';
 
 export const BASE = 0x53000000;
@@ -112,13 +116,20 @@ export interface ExtensionFeatures {
   dateStamp?: boolean;
   /** The six looks of the GR IV Monochrome (see `monounlock.ts`). */
   monoUnlock?: boolean;
-  /** Added Image Control slots, 1 to 6 (see `slots.ts`). */
+  /** Added Image Control slots, 1 to 20 (see `slots.ts`; up to 0.8.1 at most 6). */
   extraSlots?: readonly ExtraSlotSpec[];
+  /**
+   * Halation for Cinema Yellow / Green (0.8.2): only for a slot whose curves were replaced by a
+   * preset (its Toning then does nothing and becomes the Halation slider, see `halation.ts`).
+   */
+  cinemaHalation?: Partial<Record<'CY' | 'CG', true | 'weak'>>;
   /**
    * Power-off pictures chosen in the camera's End Screen menu (see `shutdown.ts`): the pictures,
    * and the four factory pictures of the payload's RES section (for their thumbnails).
    */
   shutdown?: { pictures: readonly ShutdownPictureSpec[]; factory: readonly Uint8Array[] };
+  /** Put back setting values this firmware does not know (see `guard.ts`). Every build from 0.8.2 on. */
+  guard?: boolean;
 }
 
 /** For test builds only: a fixed setting byte (1 short, 3 long style) instead of the camera menu. */
@@ -937,6 +948,43 @@ function installPlaybackDecode(patch: Patch): void {
 }
 
 // --------------------------------------------------------------------------------------------
+// Not in the reference (0.8.2, builds with the settings guard): live view repainted around the
+// picture when its rectangle changes.
+//
+// The live-view display (UpdateFillVramSequence 0x53639A10) lays the picture out in its buffer
+// (0x53647498: width +0xBD6, x = (buffer width - width) / 2, ...) and then (0x53647138) paints the
+// area around it once per display buffer: a fill job is made only while the buffer's "painted"
+// byte (config [r4+0x330] + 0x118 + buffer) is 0, and those bytes are cleared only when live view
+// starts again. Between factory ratios that is the case; between 1:1 and an added ratio of the
+// same hardware family (4:5: picture 384 wide at x 168, after 1:1's 480 at x 120) it is not, and
+// the strips 120..168 and 552..600 kept the last 1:1 picture (reported on 0.8.1 with 4:5).
+// At the flag test the rectangle the job would paint around (w, h at +0xBA0, x, y at +0xBAC) is
+// compared with the one the buffers were last painted for; when it differs, the four bytes are
+// cleared (as the firmware does at a start) so that every buffer is painted again. Analysed
+// statically and in the emulator (the layout), not yet confirmed on the camera.
+
+const FILL_FLAG_TEST = 0x53647248;
+/** The rectangle the buffers were last painted for: two words in the 44 bytes before the heap. */
+const LAST_FILL_RECT = 0x558372e8;
+
+function installLiveViewRepaint(patch: Patch): void {
+  expectWord(patch, FILL_FLAG_TEST, 0xe594331c); // ldr r3,[r4,#0x31c]
+  expectWord(patch, FILL_FLAG_TEST + 4, 0xe0800003); // add r0,r0,r3
+  expectWord(patch, FILL_FLAG_TEST + 8, 0xe5d03118); // ldrb r3,[r0,#0x118]
+  const stub = patch.append((at) => assembleWords(
+    `push {r1,r2,r3,ip}
+     ldr r2,[r4,#0xba0];ldr r3,[r4,#0xbac]
+     movw ip,#${LAST_FILL_RECT & 65535};movt ip,#${LAST_FILL_RECT >>> 16}
+     ldr r1,[ip];cmp r1,r2;ldreq r1,[ip,#4];cmpeq r1,r3;beq same
+     str r2,[ip];str r3,[ip,#4]
+     mov r1,#0;strb r1,[r0,#0x118];strb r1,[r0,#0x119];strb r1,[r0,#0x11a];strb r1,[r0,#0x11b]
+     same:pop {r1,r2,r3,ip}
+     ldr r3,[r4,#0x31c];b #${FILL_FLAG_TEST + 4}`, at), 16);
+  patch.setWord(FILL_FLAG_TEST, branchWord(FILL_FLAG_TEST, stub), 'live view: paint around the picture again when its rectangle changes');
+  extendZeroFill(patch);
+}
+
+// --------------------------------------------------------------------------------------------
 
 export function validateRatioName(name: string): 'empty' | 'too-long' | 'bad-char' | null {
   if (typeof name !== 'string' || name.trim() === '') return 'empty';
@@ -980,7 +1028,8 @@ export function installRatios(rtos: Uint8Array, iconbin: Uint8Array, ratios: rea
 export function installExtensions(rtos: Uint8Array, iconbin: Uint8Array, ratios: readonly RatioEntry[], features: ExtensionFeatures, revision: BuildRevision = BUILD_REVISION, test: TestOptions = {}): AspectResult {
   const slots = features.extraSlots ?? [];
   const shutdown = features.shutdown && features.shutdown.pictures.length > 0 ? features.shutdown : undefined;
-  const extra = !!features.adjSoftFocus || !!features.dateStamp || !!features.monoUnlock || slots.length > 0 || !!shutdown;
+  const cinema = (['CY', 'CG'] as const).filter((id) => features.cinemaHalation?.[id] === true || features.cinemaHalation?.[id] === 'weak');
+  const extra = !!features.adjSoftFocus || !!features.dateStamp || !!features.monoUnlock || slots.length > 0 || !!shutdown || !!features.guard || cinema.length > 0;
   if (extra) revision = 3;
   if (revision !== 1 && revision !== 2 && revision !== 3) fail('internal', 'unknown build revision');
   if (rtos.length !== OFFICIAL_RTOS_LENGTH || iconbin.length !== OFFICIAL_ICONBIN_LENGTH) fail('unexpected-layout', 'RTOS or ICONBIN does not have the official length');
@@ -1006,18 +1055,38 @@ export function installExtensions(rtos: Uint8Array, iconbin: Uint8Array, ratios:
     installState(patch, ratios, menu.activeBitmap);
     installImageIdentity(patch, ratios);
     if (revision >= 2) installPlaybackDecode(patch);
+    if (features.guard) installLiveViewRepaint(patch);
   }
   if (features.adjSoftFocus) icons = installAdjSoftFocus(patch, icons);
   if (features.monoUnlock) installMonoUnlock(patch);
   if (features.dateStamp) {
     const fixed = test.dateStampFixed;
-    installDateStamp(patch, fixed ? patch.append([fixed, 0, 0, 0], 4) : DATESTAMP_BYTE, !!test.dateStampDiag);
+    // From 0.8.2 (builds with the guard) the imprint goes by the picture's look.
+    const look = features.guard ? { stash: LOOK_STASH, monoLooks: monoTable(patch, slots.map((x) => monoLook(x.matrixQ13, x.curves, x.postQ9)), FIRST_ADDED_LOOK) } : undefined;
+    installDateStamp(patch, fixed ? patch.append([fixed, 0, 0, 0], 4) : DATESTAMP_BYTE, !!test.dateStampDiag, look);
     if (!fixed) icons = installDateStampMenu(patch, icons);
+    if (look && slots.length === 0) installLookStash(patch);
+  }
+  // Halation: added slots that have it, Cinema slots with a preset that are asked to.
+  const halation: HalationLook[] = [];
+  slots.forEach((x, k) => {
+    const strength = strengthOf(x.halation);
+    if (strength) halation.push({ style: FIRST_ADDED_LOOK + k, strength, light: halationLight(x.curves, x.postQ9) });
+  });
+  for (const id of cinema) {
+    const style = CINEMA_STYLES[id];
+    // The engine asks for it only with a preset (curves of its own: Toning does nothing then). The
+    // check of a built file installs this on the official image too, to find the hook places.
+    const colour = styleColour(patch, style);
+    halation.push({ style, strength: strengthOf(features.cinemaHalation![id])!, light: colour.ownCurves ? halationLight(colour.curves, colour.postQ9) : halationLight() });
   }
   // Last: the added slots compose with the monochrome looks' visibility check.
-  if (slots.length > 0) icons = installExtraSlots(patch, icons, slots);
+  if (slots.length > 0) icons = installExtraSlots(patch, icons, slots, { stashLook: (!!features.dateStamp && !!features.guard) || halation.length > 0 });
+  if (halation.length > 0) icons = installHalation(patch, icons, halation);
   if (shutdown) icons = installShutdownMenu(patch, icons, shutdown.pictures, shutdown.factory);
+  // Last: wraps every other settings save/load and user-mode recall hook.
+  if (features.guard) installSettingsGuard(patch, { slots: slots.length, ratios: ratios.length > 0, adjSoftFocus: !!features.adjSoftFocus });
   if (patch.length % 4 !== 0) fail('internal', 'image length is not a multiple of 4');
   if (BASE + patch.length >= APPEND_LIMIT) fail('too-many-ratios', 'the appended area would reach the RAM area');
-  return { revision, rtos: patch.bytes(), iconbin: icons, ratios: [...ratios], words: patch.words, features: { adjSoftFocus: !!features.adjSoftFocus, ...(features.dateStamp ? { dateStamp: true } : {}), ...(features.monoUnlock ? { monoUnlock: true } : {}), ...(slots.length > 0 ? { extraSlots: [...slots] } : {}), ...(shutdown ? { shutdown } : {}) } };
+  return { revision, rtos: patch.bytes(), iconbin: icons, ratios: [...ratios], words: patch.words, features: { adjSoftFocus: !!features.adjSoftFocus, ...(features.dateStamp ? { dateStamp: true } : {}), ...(features.monoUnlock ? { monoUnlock: true } : {}), ...(slots.length > 0 ? { extraSlots: [...slots] } : {}), ...(shutdown ? { shutdown } : {}), ...(features.guard ? { guard: true } : {}), ...(cinema.length > 0 ? { cinemaHalation: Object.fromEntries(cinema.map((id) => [id, features.cinemaHalation![id]])) } : {}) } };
 }

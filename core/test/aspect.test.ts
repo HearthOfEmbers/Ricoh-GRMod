@@ -331,7 +331,8 @@ describe.skipIf(!have)('aspect: firmware files', () => {
     const eng = await Engine.open(raw);
     const s1 = await eng.inspect(file1);
     expect([s1.kind, s1.verified, s1.ratios.map((r) => r.name)]).toEqual(['modified', true, ['65:24', 'Scope']]);
-    const now = await eng.buildFirmware([], specs);
+    // as GR Mod 0.8.1 built it; from 0.8.2 every build also has the settings guard (revision 3)
+    const now = await eng.buildFirmware([], specs, [], { guard: false });
     expect(Buffer.compare(now.file, file1)).not.toBe(0);
     const s2 = await eng.inspect(now.file);
     expect([s2.kind, s2.verified, s2.ratios.length]).toEqual(['modified', true, 2]);
@@ -375,11 +376,13 @@ describe.skipIf(!have)('aspect: firmware files', () => {
     expect(dBoth.length).toBe(dRatio.length);
     const growth = dRatio.length - DECODED_SIZE;
     let differing = 0;
-    for (let i = 0; i < RTOS_OFFSET + RTOS_LENGTH; i++) {
+    // (the section headers before RTOS differ by the growth of each build)
+    for (let i = RTOS_OFFSET; i < RTOS_OFFSET + RTOS_LENGTH; i++) {
       if (dBoth[i] !== dRatio[i]) {
         differing++;
         if (dBoth[i] !== dColour[i]) throw new Error(`combined payload differs from both at 0x${i.toString(16)}`);
-      } else if (dColour[i] !== dec[i] && dBoth[i] !== dColour[i]) throw new Error(`a colour edit was lost at 0x${i.toString(16)}`);
+      } else if (dColour[i] !== dec[i] && dRatio[i] === dec[i] && dBoth[i] !== dColour[i]) throw new Error(`a colour edit was lost at 0x${i.toString(16)}`);
+      // (where the ratio build also changed a byte, both carry the settings guard's hooks, whose targets differ)
     }
     expect(differing).toBeGreaterThan(1000);
     for (let i = RTOS_OFFSET + RTOS_LENGTH; i < dBoth.length - 4; i++) {
