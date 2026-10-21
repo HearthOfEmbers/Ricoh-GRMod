@@ -85,7 +85,10 @@ function OnlineDialog() {
     return () => { window.removeEventListener('keydown', key); abort.current?.abort(); };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const rel = look.state === 'ready' ? look.rel : null;
+  const latest = look.state === 'ready' ? look.rel : null;
+  // When Ricoh's page offers a newer release, the one this program builds on is still on the site.
+  const fallback = latest && latest.version !== FIRMWARE_VERSION && latest.fallback?.version === FIRMWARE_VERSION ? latest.fallback : null;
+  const rel = fallback ?? latest;
   const supported = !!rel && rel.version === FIRMWARE_VERSION;
   const start = async (): Promise<void> => {
     if (!rel || !supported || progress) return;
@@ -96,13 +99,13 @@ function OnlineDialog() {
       host.firmwareProgress().then((p) => { if (p.active && !ac.signal.aborted) setProgress({ received: p.received, total: p.total || rel.size }); }).catch(() => undefined);
     }, 250);
     try {
-      const f = await host.firmwareDownload(model, ac.signal);
+      const f = await host.firmwareDownload(model, fallback ? fallback.version : undefined, ac.signal);
       clearInterval(timer);
       if (ac.signal.aborted) return;
       setProgress({ received: rel.size || 1, total: rel.size || 1 });
       if (await adoptFirmware(f.name, f.version, f.data)) setOnlineOpen(false);
     } catch (e) {
-      if (!(e instanceof HostError && e.code === 'cancelled') && !ac.signal.aborted) toast(`${t('fwNetError')}${e instanceof HostError && e.code !== 'network' && e.code !== 'offline' ? ` · ${e.code}` : ''}`, 'error');
+      if (!(e instanceof HostError && e.code === 'cancelled') && !ac.signal.aborted) toast(`${t(e instanceof HostError && e.code === 'checksum' ? 'fwChecksum' : 'fwNetError')}${e instanceof HostError && e.code !== 'network' && e.code !== 'offline' && e.code !== 'checksum' ? ` · ${e.code}` : ''}`, 'error');
     } finally {
       clearInterval(timer);
       if (abort.current === ac) { abort.current = null; setProgress(null); }
@@ -121,6 +124,19 @@ function OnlineDialog() {
         {look.state === 'loading' && <div className="fw-rel idle"><span className="spinner small" /><span className="muted">{t('fwLooking')}</span></div>}
         {look.state === 'none' && <div className="fw-rel idle"><span className="muted">{t('fwNone')}</span></div>}
         {look.state === 'error' && <div className="fw-rel idle"><span className="muted">{t('fwNetError')}</span><span className="grow" /><button type="button" className="btn small" onClick={() => setAttempt((n) => n + 1)}>{t('retry')}</button></div>}
+        {fallback && latest && (
+          <>
+            <p className="dialog-warn">{t('fwNewer', { v: latest.version })}</p>
+            <div className="fw-rel newer" aria-disabled="true">
+              <span className="fw-ico">{Ico.chip}</span>
+              <span className="fw-text">
+                <b>{modelLabel(model)}<span className="fw-ver">{latest.version}</span></b>
+                <small>{[latest.date, latest.size > 0 ? fmtSize(latest.size) : ''].filter(Boolean).join('  ·  ')}</small>
+              </span>
+              <span className="chip warn">{t('fwUnsupported')}</span>
+            </div>
+          </>
+        )}
         {rel && (
           <button type="button" className={`fw-rel ${progress ? 'busy' : ''}`} disabled={!supported || !!progress} onClick={() => { void start(); }} title={supported ? t('download') : undefined}>
             <span className="fw-ico">{Ico.chip}</span>
@@ -135,7 +151,7 @@ function OnlineDialog() {
           </button>
         )}
         <div className="dialog-actions spread">
-          {rel && <button type="button" className="fw-license" onClick={() => { void host.firmwarePage(model); }}>{t('fwLicense')}{Ico.external}</button>}
+          {rel && <button type="button" className="fw-license" onClick={() => { void host.firmwarePage(model, fallback ? fallback.version : undefined); }}>{t('fwLicense')}{Ico.external}</button>}
           <span className="grow" />
           <button type="button" className="btn" onClick={close}>{t('cancel')}</button>
         </div>

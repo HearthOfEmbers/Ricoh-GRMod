@@ -1,16 +1,20 @@
 // Package ricoh finds and downloads the current firmware update of a GR IV
 // model from RICOH IMAGING's own download pages.
 //
-// Nothing is hard-coded but the site and the page that lists the firmware of
-// all digital cameras: the model's page, the version, the date and the file
-// are read from the site every time, so a new release is offered as soon as
-// Ricoh publishes it. Every request stays on the site's host.
+// The model's page, the version, the date and the file are read from the
+// site every time, so a new release is shown as soon as Ricoh publishes it.
+// The one thing hard-coded besides the site and its list page is Supported:
+// the release this program builds on, which stays on the site at a fixed
+// address after newer ones replace it on the pages. Every request stays on
+// the site's host.
 package ricoh
 
 import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"html"
@@ -49,6 +53,9 @@ const baseModel = "GR IV"
 // ErrNoRelease means the site lists no firmware for the model.
 var ErrNoRelease = errors.New("no firmware is listed for this model")
 
+// ErrChecksum means a downloaded archive is not the one expected.
+var ErrChecksum = errors.New("the archive is not the expected file")
+
 // ErrUnknownModel is returned for a model key that is not in Models.
 var ErrUnknownModel = errors.New("unknown model")
 
@@ -72,6 +79,42 @@ type Release struct {
 	Size int64 `json:"size"`
 	// URL is the address of the archive.
 	URL string `json:"url"`
+	// SHA256 is the expected SHA-256 of the archive (hex), "" when unknown.
+	// Download refuses an archive that does not match.
+	SHA256 string `json:"-"`
+}
+
+// Archive is a release that is no longer on the model's page but still on
+// the site at a fixed address.
+type Archive struct {
+	Version string
+	// Date is the release date as printed on the page.
+	Date string
+	// Path is the archive's address on the site.
+	Path string
+	// Size and SHA256 of the archive.
+	Size   int64
+	SHA256 string
+	// Models are the model keys (see Models) the release is for.
+	Models []string
+	// Applies is the page's list of products for that release.
+	Applies string
+	// Page is the model's download page (with the licence), on the site.
+	Page string
+}
+
+// Supported is the release this program builds on: GR IV / GR IV HDF 1.11
+// (2026/02/13). Checked 2026-10-21: still served at this address, whose
+// archive holds the fwdc248b.bin with SHA-256 a2f664df…655f.
+var Supported = Archive{
+	Version: "1.11",
+	Date:    "2026/02/13",
+	Path:    "/resources/japan/support/download/digital/FIRMWARE/gr4_v111.zip",
+	Size:    34478368,
+	SHA256:  "ded47aa6385886e4b1f8f41f8551866ab0f1ecd0aef89934a43ef0e456539e8f",
+	Models:  []string{"STANDARD", "HDF"},
+	Applies: "RICOH GR IV / RICOH GR IV HDF",
+	Page:    "/english/support/digital/gr4_s.html",
 }
 
 // Client talks to the site.
@@ -81,6 +124,15 @@ type Client struct {
 	// HTTP is the client to use; nil selects http.DefaultClient. Redirects
 	// are followed by that client; the final address is checked here.
 	HTTP *http.Client
+	// Pinned replaces Supported (tests).
+	Pinned *Archive
+}
+
+func (c *Client) pinned() *Archive {
+	if c.Pinned != nil {
+		return c.Pinned
+	}
+	return &Supported
 }
 
 func (c *Client) base() (*url.URL, error) {
@@ -195,10 +247,25 @@ func rows(page string) []row {
 	return out
 }
 
-// indexEntry finds the row of the list whose first cell is exactly `name`.
+// names reports whether the first cell of a row of the list names the model:
+// "GR IV", or one of a list such as "GR IV / GR IV HDF" (the list page since
+// 2026-10-21).
+func names(cell, name string) bool {
+	if strings.EqualFold(cell, name) {
+		return true
+	}
+	for _, part := range strings.Split(cell, "/") {
+		if strings.EqualFold(strings.TrimSpace(part), name) {
+			return true
+		}
+	}
+	return false
+}
+
+// indexEntry finds the row of the list whose first cell names `name`.
 func indexEntry(list []row, name string) (href, version string, ok bool) {
 	for _, r := range list {
-		if !strings.EqualFold(r.cells[0], name) || r.href == "" {
+		if !names(r.cells[0], name) || r.href == "" {
 			continue
 		}
 		for i := len(r.cells) - 1; i >= 1; i-- {
@@ -307,6 +374,34 @@ func (c *Client) Latest(ctx context.Context, model string) (*Release, error) {
 	return nil, ErrNoRelease
 }
 
+// Fallback is the supported release for a model when the site offers
+// another version, or offers nothing (latest == nil); nil when the model is
+// not one the supported release is for, or when latest is that release.
+func (c *Client) Fallback(model string, latest *Release) (*Release, error) {
+	a := c.pinned()
+	covered := false
+	for _, m := range a.Models {
+		covered = covered || m == model
+	}
+	if !covered || (latest != nil && latest.Version == a.Version) {
+		return nil, nil
+	}
+	base, err := c.base()
+	if err != nil {
+		return nil, err
+	}
+	fileURL := base.ResolveReference(&url.URL{Path: a.Path})
+	page := base.ResolveReference(&url.URL{Path: a.Page}).String()
+	name := baseModel
+	if latest != nil {
+		page = latest.Page
+	}
+	return &Release{
+		Model: model, Name: name, Applies: a.Applies, Version: a.Version, Date: a.Date,
+		Page: page, File: path.Base(a.Path), Size: a.Size, URL: fileURL.String(), SHA256: a.SHA256,
+	}, nil
+}
+
 // size finds out how large the archive is without fetching it: from the
 // answer to a HEAD request or, where that carries no length (the site's
 // content network leaves it out), from a request for the first byte only.
@@ -409,6 +504,12 @@ func (c *Client) Download(ctx context.Context, rel *Release, progress func(recei
 	}
 	if total > 0 && received != total {
 		return "", nil, fmt.Errorf("download ended after %d of %d bytes", received, total)
+	}
+	if rel.SHA256 != "" {
+		sum := sha256.Sum256(buf.Bytes())
+		if !strings.EqualFold(hex.EncodeToString(sum[:]), rel.SHA256) {
+			return "", nil, ErrChecksum
+		}
 	}
 	return Unpack(buf.Bytes())
 }

@@ -13,13 +13,14 @@ const zh = {
   firmware: '固件', model: '机型', language: '相机语言', noFirmware: '未导入',
   dropFirmware: '拖入 fwdc248b.bin', dropFirmwareSub: '或点击选择文件', opening: '正在读取固件…',
   badFirmware: '只支持官方 1.11 版 fwdc248b.bin', writeStock: '写入原厂固件', exportStock: '导出原厂固件',
-  fwBridge: '桥接固件…', fwBridgeValue: '1.12 桥接', bridgeTitle: '1.12 桥接固件', bridgeAttention: '注意！此功能仅提供给刷入官方最新固件失败的用户。',
-  bridgeBody: '对于此类用户，可以通过刷入桥接固件的方式解决更新失败问题。刷入桥接固件后，请按住 MENU 键的同时按下开机键，刷入 1.12 固件，成功后，取出存储卡，回到 GR Mod，在左下角在线下载官方最新固件，并按照正常流程操作新增功能即可。',
-  bridgeWait: '请阅读 {n} 秒', bridgeMono: '不适用于 GR IV Monochrome', bridgeOpened: '这是 1.12 桥接固件，不能用来写入新功能，请在线下载官方最新固件',
+  fwBridge: '桥接固件…', fwBridgeValue: '1.12 桥接', bridgeTitle: '1.12 桥接固件', bridgeAttention: '注意！此功能仅提供给刷入官方 1.11 固件失败的用户。',
+  bridgeBody: '对于此类用户，可以通过刷入桥接固件的方式解决更新失败问题。刷入桥接固件后，请按住 MENU 键的同时按下开机键，刷入 1.12 固件，成功后，取出存储卡，回到 GR Mod，在左下角在线下载官方 1.11 固件，并按照正常流程操作新增功能即可。',
+  bridgeWait: '请阅读 {n} 秒', bridgeMono: '不适用于 GR IV Monochrome', bridgeOpened: '这是 1.12 桥接固件，不能用来写入新功能，请在线下载官方 1.11 固件',
   bridgeLoaded: '当前打开的是 1.12 桥接固件，它只用来让相机升到 1.12，不能用来写入新功能。', bridgeLoadedAction: '在线下载官方固件',
-  bridgeNeedOfficial: '当前打开的是 1.12 桥接固件，不能用来写入。请先下载官方最新固件。', bridgeNeedBase: '生成桥接固件需要官方 1.11 固件，下载后会继续写入桥接固件。', copyBridge: '1.12 桥接固件',
+  bridgeNeedOfficial: '当前打开的是 1.12 桥接固件，不能用来写入。请先下载官方 1.11 固件。', bridgeNeedBase: '生成桥接固件需要官方 1.11 固件，下载后会继续写入桥接固件。', copyBridge: '1.12 桥接固件',
   fwPick: '选择文件…', fwOnline: '在线下载…', fwOnlineTitle: '在线下载固件', fwOnlineLink: '在线下载', fwLooking: '正在查询…', fwNone: '官网暂无该机型的固件', fwNetError: '无法连接理光官网', retry: '重试',
   fwUnsupported: '暂不支持', fwDownloading: '正在下载…', fwDownloaded: '已下载固件 {v}', fwLicense: '下载即表示同意理光的软件许可协议', download: '下载',
+  fwNewer: '官网最新为 {v}，GR Mod 暂不支持。相机升级到 {v} 后无法再刷入 GR Mod 固件，请暂时不要升级。', fwChecksum: '下载的文件与官方 1.11 不一致，请重试',
   preset: '预设', dropPreset: '拖入 .xmp / .cube', converting: '转换中…', remove: '移除', replace: '更换',
   name: '名称', icon: '图标', iconKeep: '原图标', iconText: '文字', iconImage: '图片', styleFilm: '胶片', stylePlain: '纯色', chooseImage: '选择图片',
   preview: '预览', deltaE: '色差', original: '原始', previewPhoto: '照片', previewSwatch: '色卡', compare: '前后对比', choosePhoto: '选择预览照片', changePhoto: '更换预览照片',
@@ -124,13 +125,14 @@ const en: typeof zh = {
   firmware: 'Firmware', model: 'Model', language: 'Camera language', noFirmware: 'Not loaded',
   dropFirmware: 'Drop fwdc248b.bin', dropFirmwareSub: 'or click to choose', opening: 'Reading firmware…',
   badFirmware: 'Only the official 1.11 fwdc248b.bin is supported', writeStock: 'Write factory firmware', exportStock: 'Export factory firmware',
-  fwBridge: 'Bridge firmware…', fwBridgeValue: '1.12 bridge', bridgeTitle: '1.12 bridge firmware', bridgeAttention: 'Attention! This is only for cameras that fail to install the latest official firmware.',
-  bridgeBody: 'Such cameras can get past the failed update by installing the bridge firmware first. After writing the bridge firmware, hold MENU while pressing the power button to install the 1.12 firmware. When it has finished, take the card out, come back to GR Mod, download the latest official firmware (bottom left) and add the new features the usual way.',
-  bridgeWait: 'Please read · {n} s', bridgeMono: 'Not for the GR IV Monochrome', bridgeOpened: 'This is the 1.12 bridge firmware: nothing can be built on it. Download the latest official firmware',
+  fwBridge: 'Bridge firmware…', fwBridgeValue: '1.12 bridge', bridgeTitle: '1.12 bridge firmware', bridgeAttention: 'Attention! This is only for cameras that fail to install the official 1.11 firmware.',
+  bridgeBody: 'Such cameras can get past the failed update by installing the bridge firmware first. After writing the bridge firmware, hold MENU while pressing the power button to install the 1.12 firmware. When it has finished, take the card out, come back to GR Mod, download the official 1.11 firmware (bottom left) and add the new features the usual way.',
+  bridgeWait: 'Please read · {n} s', bridgeMono: 'Not for the GR IV Monochrome', bridgeOpened: 'This is the 1.12 bridge firmware: nothing can be built on it. Download the official 1.11 firmware',
   bridgeLoaded: 'The open firmware is the 1.12 bridge firmware. It only takes the camera to 1.12 and cannot carry new features.', bridgeLoadedAction: 'Download official firmware',
-  bridgeNeedOfficial: 'The open firmware is the 1.12 bridge firmware, which cannot be written with new features. Download the latest official firmware first.', bridgeNeedBase: 'The bridge firmware is made from the official 1.11 firmware. Once it is downloaded, the bridge firmware is written.', copyBridge: '1.12 bridge firmware',
+  bridgeNeedOfficial: 'The open firmware is the 1.12 bridge firmware, which cannot be written with new features. Download the official 1.11 firmware first.', bridgeNeedBase: 'The bridge firmware is made from the official 1.11 firmware. Once it is downloaded, the bridge firmware is written.', copyBridge: '1.12 bridge firmware',
   fwPick: 'Choose a file…', fwOnline: 'Download…', fwOnlineTitle: 'Download firmware', fwOnlineLink: 'Download', fwLooking: 'Looking…', fwNone: 'Ricoh lists no firmware for this model', fwNetError: 'Cannot reach the Ricoh site', retry: 'Retry',
   fwUnsupported: 'Not supported yet', fwDownloading: 'Downloading…', fwDownloaded: 'Firmware {v} downloaded', fwLicense: 'Downloading means accepting the Ricoh software licence agreement', download: 'Download',
+  fwNewer: 'Ricoh now offers {v}, which GR Mod does not support yet. A camera updated to {v} no longer accepts GR Mod firmware: please do not update it for now.', fwChecksum: 'The downloaded file is not the official 1.11. Please try again.',
   preset: 'Preset', dropPreset: 'Drop .xmp / .cube', converting: 'Converting…', remove: 'Remove', replace: 'Replace',
   name: 'Name', icon: 'Icon', iconKeep: 'Original', iconText: 'Text', iconImage: 'Image', styleFilm: 'Film', stylePlain: 'Plain', chooseImage: 'Choose image',
   preview: 'Preview', deltaE: 'ΔE', original: 'Original', previewPhoto: 'Photo', previewSwatch: 'Swatches', compare: 'Before / after', choosePhoto: 'Choose a preview photo', changePhoto: 'Change preview photo',
@@ -224,7 +226,7 @@ export type Key = keyof typeof zh;
 const dict = (navigator.language || 'zh').toLowerCase().startsWith('zh') ? zh : en;
 export function t(key: Key, vars?: Record<string, string | number>): string {
   let s: string = dict[key] ?? key;
-  if (vars) for (const k of Object.keys(vars)) s = s.replace(`{${k}}`, String(vars[k]));
+  if (vars) for (const k of Object.keys(vars)) s = s.split(`{${k}}`).join(String(vars[k]));
   return s;
 }
 export const LANG_LABEL: Record<string, string> = {
