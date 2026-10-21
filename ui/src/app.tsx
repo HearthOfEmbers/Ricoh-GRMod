@@ -25,7 +25,7 @@ function Sidebar() {
       <nav>
         <button className={`nav ${page === 'ic' ? 'on' : ''}`} data-tour="nav-ic" onClick={() => setPage('ic')}>{Ico.aperture}<span>{t('navIC')}</span></button>
         <button className={`nav ${page === 'ratio' ? 'on' : ''}`} data-tour="nav-ratio" onClick={() => setPage('ratio')}>{Ico.ratio}<span>{t('navRatio')}</span></button>
-        <button className={`nav ${page === 'wall' ? 'on' : ''}`} data-tour="nav-wall" onClick={() => setPage('wall')}>{Ico.image}<span>{t('navWall')}</span></button>
+        {!isGr3(model) && <button className={`nav ${page === 'wall' ? 'on' : ''}`} data-tour="nav-wall" onClick={() => setPage('wall')}>{Ico.image}<span>{t('navWall')}</span></button>}
       </nav>
       <div className="grow" />
       <button className={`nav low ${page === 'copies' ? 'on' : ''}`} data-tour="nav-copies" onClick={() => setPage('copies')}>{Ico.archive}<span>{t('navCopies')}</span></button>
@@ -135,6 +135,7 @@ function ExperimentalBanner() {
 
 export function App() {
   const page = useStore((s) => s.page);
+  const gr3 = useStore((s) => isGr3(s.model));
   const ready = useStore((s) => s.ready);
   if (!host.available) return <div className="nohost">{t('hostMissing')}</div>;
   return (
@@ -143,7 +144,7 @@ export function App() {
       <main className="main">
         <BridgeBanner />
         <ExperimentalBanner />
-        <div className="stage">{ready ? (page === 'ratio' ? <RatioPage /> : page === 'wall' ? <WallpaperPage /> : page === 'copies' ? <CopiesPage /> : <ImageControlPage />) : <div className="page"><span className="spinner" /></div>}</div>
+        <div className="stage">{ready ? (page === 'ratio' ? <RatioPage /> : page === 'wall' && !gr3 ? <WallpaperPage /> : page === 'copies' ? <CopiesPage /> : <ImageControlPage />) : <div className="page"><span className="spinner" /></div>}</div>
         <OutputBar />
       </main>
       <CropEditor />

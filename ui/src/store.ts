@@ -250,7 +250,10 @@ export function endTour(): void {
 }
 
 // ------------------------------------------------------------------ settings
-export function setPage(page: Page): void { set({ page }); scheduleSave(); if (page === 'copies') void refreshCopies(); }
+export function setPage(page: Page): void {
+  if (page === 'wall' && isGr3(state.model)) return; // no power-off pictures for GR III / IIIx
+  set({ page }); scheduleSave(); if (page === 'copies') void refreshCopies();
+}
 export function setLang(lang: LangCode): void { set({ lang }); scheduleSave(); }
 export function setModel(model: CameraModel): void {
   if (state.busy || state.fwBusy || model === state.model) return;
@@ -848,8 +851,10 @@ export async function outputFirmware(dest: Dest, stock = false): Promise<void> {
   if (!stock && (hasNameErrors() || hasRatioErrors())) return;
   if (!stock && hasExtraErrors()) { toast(t('extraIncomplete'), 'error'); return; }
   const extras = stock ? [] : extraSpecs();
-  if (!stock && state.wall.length > 0 && !menuReady()) { toast(t('wallMenuIncomplete'), 'error'); return; }
-  const pictures = stock ? [] : menuPictures();
+  // GR III / IIIx have no power-off pictures in GR Mod: pictures left from a GR IV project are not sent
+  const noPictures = stock || state.info?.family === 'gr3x';
+  if (!noPictures && state.wall.length > 0 && !menuReady()) { toast(t('wallMenuIncomplete'), 'error'); return; }
+  const pictures = noPictures ? [] : menuPictures();
   if (!stock && changes.length === 0 && ratios.length === 0 && !soft && !dateStamp && !monoUnlock && extras.length === 0 && pictures.length === 0) { toast(t('nothingToDo'), 'info'); return; }
   if (stock && !(await askOfficial([t('copyOfficial')]))) return;
   if (dest.kind === 'card' && !stock) {
