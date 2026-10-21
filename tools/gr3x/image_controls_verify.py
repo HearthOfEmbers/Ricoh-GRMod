@@ -12,10 +12,15 @@ from pathlib import Path
 from unicorn import arm_const as reg
 from image_control_probe import (LookProbe, NATIVE, COMMON, CONTEXT, GAMMA_OBJECT,
                                  GAMMA_BUFFERS, DATA, MODEL, OBJECT, OUTPUT, u32, put)
+from rear_dial_probe import SELECTOR
 from native_probe import BASE, STACK, RTOS_SHA
 from color_curve_probe import COMPOSE, ISP, INPUTS, OUTPUTS, interpolate
 
 MATRIX_OBJECT = 0x620c0000
+USERDATA_COPY = 0x620d0000
+# Standard's parameters (its native default getters answer); filter-custom setters are not look-indexed.
+STANDARD_PARAMETERS = (0x77d, 0x77e, 0x77f, 0x780, 0x781, 0x782, 0x784, 0x793, 0x794)
+FILTER_SETTERS = (0x532c1cf4, 0x532c2038, 0x532c237c)
 
 
 def matrix_process(probe):
@@ -129,6 +134,7 @@ def verify(data, base, manifest):
                0x532bfbfc,0x532c0270,0x532c056c,0x532c0700,0x532c0894,0x532c09a8,
                0x532c0b3c,0x532c0da8,0x532c141c,0x532c1780,0x532c19dc,
                0x532c1cf4,0x532c2038,0x532c237c]
+    shared_parameter_cases = 0
     for bank in range(3):
         for identity in NATIVE + list(mapping):
             patched.menu_state(0, bank); stock.menu_state(0, bank)
@@ -136,7 +142,41 @@ def verify(data, base, manifest):
             assert patched.uc.mem_read(DATA + 0x1c2 + bank * 2, 1) == bytes([identity])
             assert (1, 0x82) in patched.queue
             slot = next((s for s in slots if s['id'] == identity), None)
-            if slot:
+            if slot and manifest.get('sharedParameters'):
+                # T6: a film is Standard for parameter storage. Compare against a twin probe
+                # that selected Standard: look switch, default getters and every setter must
+                # leave identical stored data, live values and property commits.
+                twin = LookProbe(data, manifest); twin.menu_state(0, bank)
+                for probe in (patched, twin):
+                    probe.uc.mem_write(DATA + 0x1c8, bytes(((i * 7) % 9) for i in range(0x1c8, 0x600)))
+                    probe.uc.mem_write(USERDATA_COPY, bytes(((i * 5) % 9) for i in range(0xb28)))
+                    put(probe.uc, SELECTOR + 0x24, USERDATA_COPY)
+                patched.menu_state(0, bank)
+                for probe in (patched, twin):
+                    probe.uc.mem_write(DATA + 0x1c8, bytes(((i * 7) % 9) for i in range(0x1c8, 0x600)))
+                    put(probe.uc, SELECTOR + 0x24, USERDATA_COPY)
+                patched.call(0x532c26c0, OBJECT, identity); twin.call(0x532c26c0, OBJECT, 11)
+                def state(probe):
+                    live = bytearray(probe.uc.mem_read(u32(probe.uc, MODEL), 0x1040))
+                    stored = bytearray(probe.uc.mem_read(DATA, 0x1000))
+                    for at in (0x77c, 0xf9c): live[at] = 0
+                    for at in (0x1c2, 0x1c4, 0x1c6): stored[at] = 0
+                    return bytes(live), bytes(stored) + bytes(probe.uc.mem_read(USERDATA_COPY, 0xb28))
+                assert state(patched) == state(twin), slot['name']
+                assert patched.uc.mem_read(u32(patched.uc, MODEL) + 0x77c, 1) == bytes([identity])
+                for getter in manifest['lookEntries']['defaults']:
+                    if getter['offset'] in STANDARD_PARAMETERS:
+                        assert patched.call(getter['address'], OBJECT, identity) == twin.call(getter['address'], OBJECT, 11)
+                        calls += 2
+                for setter in setters:
+                    if setter in FILTER_SETTERS: continue
+                    for value in (0, 3, 8):
+                        patched.queue = []; twin.queue = []
+                        assert patched.call(setter, OBJECT, value) == twin.call(setter, OBJECT, value)
+                        assert patched.queue == twin.queue and state(patched) == state(twin), hex(setter)
+                        calls += 2
+                shared_parameter_cases += 1
+            elif slot:
                 for pointer in (u32(patched.uc, MODEL), u32(patched.uc, MODEL + 4)):
                     assert patched.uc.mem_read(pointer + 0x77c, 1) == bytes([identity])
                     assert patched.uc.mem_read(pointer + 0x77d, 26) == bytes(slot['parameters'])
@@ -230,6 +270,21 @@ def verify(data, base, manifest):
             descriptor(patched, identity, params)
             assert list(patched.uc.mem_read(COMMON + 0x77d, 26))[:22] == params[:22]
             stale_cases += 1; calls += 1
+    # T6: films render with the live (Standard's) parameters, like Standard, plus their own
+    # matrix record and curves.
+    if manifest.get('sharedParameters'):
+        import random
+        rng = random.Random(11)
+        for slot in slots:
+            for params in ([rng.randrange(9) for _ in range(9)] + slot['parameters'][9:] for _ in range(4)):
+                wanted = descriptor(stock, 11, params)
+                actual = descriptor(patched, slot['id'], params)
+                expected = bytearray(wanted[0])
+                if slot['record']:
+                    struct.pack_into('<I', expected, 8, slot['record'])
+                assert actual[0] == expected and actual[1] == wanted[1], slot['name']
+                assert list(patched.uc.mem_read(COMMON + 0x77d, 9)) == params[:9]
+                stale_cases += 1; calls += 2
     # Exercise ordered changes without rebuilding the emulator. The gamma object
     # and its identity persist across calls, so first/last and same-slot returns
     # cannot leave the preceding film's curves or matrix selected.
@@ -254,6 +309,7 @@ def verify(data, base, manifest):
             calls += 8
     return dict(schema=1, rtos_sha256=hashlib.sha256(data).hexdigest(), native_calls=calls, adapter_cases=adapter_cases,
                 sequential_look_transition_cases=transition_cases, stale_parameter_cases=stale_cases,
+                shared_parameter_cases=shared_parameter_cases, shared_parameters=bool(manifest.get('sharedParameters')),
                 native_looks_restored_after_each_imported_look=True,
                 audited_property_consumers=len(manifest['lookEntries']['adapters']),
                 original_menu_and_look_descriptors_preserved=True,

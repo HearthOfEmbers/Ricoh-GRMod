@@ -8,7 +8,7 @@ import { FirmwareError } from '../types';
 import { buildGr3xLookMenuResearch } from './image-control-research';
 import type { Gr3xResearchLook } from './image-control-research';
 import { GR3X_160, openGr3xOfficial } from './profile';
-import { GR3X_TONE_READS } from './look-addresses';
+import { GR3X_PARAMETER_SETTER_LOOKS, GR3X_STANDARD_ACTIVE_CHECKS, GR3X_STANDARD_ACTIVE_CHECKS_SET0, GR3X_TONE_READS } from './look-addresses';
 import { quantizeSlot } from '../../color/camera';
 import type { SlotParams } from '../../color/camera';
 import type { QuantizedSlot } from '../../color/camera';
@@ -40,6 +40,8 @@ const DEFAULTS = [
   [0x532c8570, 0x790], [0x532c8bd4, 0x793], [0x532c9360, 0x794],
   [0x532c9744, 0x795], [0x532c9a20, 0x796],
 ] as const;
+/** CommonProperty offsets of the parameters Standard has (its default getters answer, 2.10/1.60). */
+const STANDARD_PARAMETERS: readonly number[] = [0x77d, 0x77e, 0x77f, 0x780, 0x781, 0x782, 0x784, 0x793, 0x794];
 // CommonProperty 0x77d..0x796, including the native neutral filter/enum values.
 const neutral = () => Uint8Array.from([
   4,4,4,4,4,4,1,4,0,1,4,0,0,0,0,0,0,0,0,0,0,4,4,4,0,0,
@@ -156,12 +158,17 @@ export async function buildGr3xImageControls(raw: Uint8Array, options: Gr3xLookO
   });
   // The aggregate is CommonProperty[0x6c4..0x819]. Preserve the private tone ID,
   // replacing only its fixed look parameters before the original queued commit.
-  const aggregate = code(`push {r0-r3,ip,lr};ldrb r2,[r6,#0xb8];` +
+  // T6 (displayRevision 3): film parameters are adjustable and shared with Standard. The
+  // camera only stores Image Control parameters for its own looks, so a film reads and writes
+  // Standard's stored values (per Image Control set) and renders through Standard's path with
+  // its own matrix/curves. Earlier revisions keep fixed parameters (reproducible T5/T5-L1).
+  const adjustable = extended;
+  const aggregate = adjustable ? undefined : code(`push {r0-r3,ip,lr};ldrb r2,[r6,#0xb8];` +
     slots.map(s => `cmp r2,#${s.id};beq slot${s.id};`).join('') +
     `b done;` + slots.map(s => `slot${s.id}:${addr(1, s.parameterAddress)}
       add r0,r6,#0xb9;mov r2,#26;bl #0x5313fd80;b done;`).join('') +
     `done:pop {r0-r3,ip,lr};mov r1,r6;b #0x53279a0c;`);
-  patch(0x53279a08, 0xe1a01006, branchWord(0x53279a08, aggregate), 'image control: fixed preset parameters in native property transaction');
+  if (aggregate !== undefined) patch(0x53279a08, 0xe1a01006, branchWord(0x53279a08, aggregate), 'image control: fixed preset parameters in native property transaction');
   // RAW development safely falls back to each original base. It does not
   // pretend an imported film can be reconstructed from the native EXIF enum.
   const rawEnum = code(map(1) + 'sub r1,r1,#11;b #0x53288d60;');
@@ -171,9 +178,13 @@ export async function buildGr3xImageControls(raw: Uint8Array, options: Gr3xLookO
   // Native default getters assert on unknown IDs. Fixed new presets have their
   // own values; every other ID still executes the original validation.
   const defaults = DEFAULTS.map(([at, offset]) => {
-    const entry = code(slots.map(s => `cmp r1,#${s.id};moveq r0,#${s.parameters[offset - 0x77d]};bxeq lr;`).join('') +
+    // Only parameters Standard has (its native default getter answers) follow Standard;
+    // the others keep the fixed value, as Standard's getter would assert.
+    const entry = adjustable && STANDARD_PARAMETERS.includes(offset) ? code(map(1) + `mov ip,sp;b #${at + 4};`)
+      : code(slots.map(s => `cmp r1,#${s.id};moveq r0,#${s.parameters[offset - 0x77d]};bxeq lr;`).join('') +
       `mov ip,sp;b #${at + 4};`);
-    patch(at, 0xe1a0c00d, branchWord(at, entry), 'image control: fixed new-slot default parameter');
+    patch(at, 0xe1a0c00d, branchWord(at, entry), adjustable && STANDARD_PARAMETERS.includes(offset) ? 'image control: film parameter default is Standard\'s'
+      : 'image control: fixed new-slot default parameter');
     return { address: at, offset, entry };
   });
   // Films render through the native Standard path, which reads the live parameter bytes
@@ -181,12 +192,37 @@ export async function buildGr3xImageControls(raw: Uint8Array, options: Gr3xLookO
   // values there (it cannot store parameters for an added look), which washed out the
   // colours on GR III T6 until the next settings transaction. Every descriptor build now
   // restores the film's fixed parameters first, before any consumer reads them.
-  const enforce = code(`push {r0-r3,ip,lr};ldrb r2,[r7,#0x77c];` +
+  const enforce = adjustable ? undefined : code(`push {r0-r3,ip,lr};ldrb r2,[r7,#0x77c];` +
     slots.map(s => `cmp r2,#${s.id};beq slot${s.id};`).join('') +
     `b done;` + slots.map(s => `slot${s.id}:${addr(1, s.parameterAddress)}add r0,r7,#0x700;add r0,r0,#0x7d;mov r2,#26;bl #0x5313fd80;b done;`).join('') +
     `done:pop {r0-r3,ip,lr};b #0x536db7d8;`);
-  patch(0x536dc124, branchWord(0x536dc124, 0x536db7d8, 14, true),
+  if (enforce !== undefined) patch(0x536dc124, branchWord(0x536dc124, 0x536db7d8, 14, true),
     branchWord(0x536dc124, enforce, 14, true), 'image control: films always render with their fixed parameters');
+  // Parameter setters (SetSaturation etc.) take the current look from 0x53549ee8 and do
+  // nothing for an unknown one; for a film they now act on Standard.
+  const setters = adjustable ? GR3X_PARAMETER_SETTER_LOOKS.map(at => {
+    const entry = code(`push {lr};bl #0x53549ee8;` + map(0) + `pop {pc};`);
+    patch(at, branchWord(at, 0x53549ee8, 14, true), branchWord(at, entry, 14, true), 'image control: film parameter write uses Standard storage');
+    return { address: at, entry };
+  }) : [];
+  // After a stored write, each Standard setter updates the live value only when the stored
+  // look of the active set is Standard (ldrb [..,#0x1c2/0x1c4/0x1c6]; cmp #11).
+  const activeChecks = adjustable ? GR3X_STANDARD_ACTIVE_CHECKS.map(([at, word]) => {
+    const dst = (word >>> 12) & 15, src = (word >>> 16) & 15, offset = word & 0xfff;
+    const scratch = [0,1,2,3].find(r => r !== dst && r !== src)!;
+    const entry = code(`push {r${scratch}};mrs r${scratch},cpsr;ldrb r${dst},[r${src},#${offset}];` +
+      map(dst) + `msr cpsr_f,r${scratch};pop {r${scratch}};b #${at + 4};`);
+    patch(at, word, branchWord(at, entry), 'image control: a film counts as Standard for the live-value update');
+    return { address: at, entry, sourceRegister: src, destinationRegister: dst };
+  }) : [];
+  const activeChecksSet0 = adjustable ? GR3X_STANDARD_ACTIVE_CHECKS_SET0.map(at => {
+    // ldr r3,[r3,#0x1c0] reads the active set (byte 0) and set 0's stored look (byte 2).
+    const entry = code(`push {r0,r1};mrs r0,cpsr;ldr r3,[r3,#0x1c0];and r1,r3,#0xff0000;` +
+      slots.map(s => `cmp r1,#${s.id << 16};biceq r3,r3,#0xff0000;orreq r3,r3,#${s.nativeBase << 16};`).join('') +
+      `msr cpsr_f,r0;pop {r0,r1};b #${at + 4};`);
+    patch(at, 0xe59331c0, branchWord(at, entry), 'image control: a film counts as Standard for the live-value update (set 0)');
+    return { address: at, entry };
+  }) : [];
   const descriptor = code(`push {r1-r3,ip};ldrb r2,[r7,#0x77c];` +
     slots.filter(s => s.record).map(s => `cmp r2,#${s.id};beq slot${s.id};`).join('') +
     `b done;` + slots.filter(s => s.record).map(s => `slot${s.id}:${addr(3, s.record)}str r3,[r4,#8];` +
@@ -211,13 +247,14 @@ export async function buildGr3xImageControls(raw: Uint8Array, options: Gr3xLookO
     ...menu, kind: 'gr3x-image-control-patchset' as const, sites,
     append: { address: menu.append.address, bytes: hex(payload) },
     addedLooks: slots, renderingImplemented: true as const,
-    lookEntries: { aggregate, rawEnum, restriction, enforce, descriptor, gamma, defaults, adapters },
+    lookEntries: { aggregate, rawEnum, restriction, enforce, descriptor, gamma, defaults, adapters, setters, activeChecks, activeChecksSet0 },
+    sharedParameters: adjustable,
     // A patch-set is not a firmware update. Packaging and native regression checks
     // are separate; camera behavior remains unverified until the user tests it.
     flashable: false as const, cameraUpdateCandidate: false as const, hardwareTested: false,
     blockers: ['native look-path regression suite', 'physical camera test and persistent storage'],
     limitations: ['GR IV Monochrome-inspired replicas, not original GR IV algorithms',
-      'fixed new-slot parameters', 'RAW development/EXIF use native base identities',
+      ...(adjustable ? ['film parameters are shared with Standard (per Image Control set)'] : ['fixed new-slot parameters']), 'RAW development/EXIF use native base identities',
       'CUBE matrix/curve approximation; camera color accuracy needs sample verification'],
   };
 }

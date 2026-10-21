@@ -96,3 +96,26 @@ export const GR3X_TONE_READS = [
   [0x53700538, 0xe5d4e77c], // ldrb lr, [r4, #0x77c]
   [0x53700590, 0xe5d4277c], // ldrb r2, [r4, #0x77c]
 ] as const;
+
+// Image Control parameter setters (SetSaturation etc.): the call that fetches the current
+// look before the per-look jump table. Unknown looks fall through without writing.
+export const GR3X_PARAMETER_SETTER_LOOKS = [
+  0x532bd7a4, 0x532bdcf8, 0x532be24c, 0x532be8c0, 0x532bef34, 0x532bf5a8, 0x532bfc1c, 0x532c0290,
+  0x532c058c, 0x532c0720, 0x532c08b4, 0x532c09c8, 0x532c0b5c, 0x532c0dc8, 0x532c143c, 0x532c17a0,
+  0x532c19fc,
+] as const;
+
+// "Is Standard the stored look of the active set" checks in Standard's per-set parameter
+// setters (they decide whether the live value is updated too). Sets 1 and 2: byte compare.
+export const GR3X_STANDARD_ACTIVE_CHECKS = [
+  [0x5325de4c, 0xe5d331c4], [0x5325e0ec, 0xe5d331c4], [0x5325e38c, 0xe5d331c4],
+  [0x5325e77c, 0xe5d331c4], [0x5325eb6c, 0xe5d331c4], [0x5325ef5c, 0xe5d331c4],
+  [0x5325f34c, 0xe5d331c4], [0x5325fa4c, 0xe5d331c4], [0x5325fe3c, 0xe5d331c4],
+  [0x532603ec, 0xe5d331c6], [0x5326068c, 0xe5d331c6], [0x5326092c, 0xe5d331c6],
+  [0x53260d1c, 0xe5d331c6], [0x5326110c, 0xe5d331c6], [0x532614fc, 0xe5d331c6],
+  [0x532618ec, 0xe5d331c6], [0x53261fec, 0xe5d331c6], [0x532623dc, 0xe5d331c6],
+] as const;
+// Set 0: ldr r3,[r3,#0x1c0]; bic; bic; cmp r3,#0xb0000 (active set 0 and stored look 11).
+export const GR3X_STANDARD_ACTIVE_CHECKS_SET0 = [
+  0x5325b9f0, 0x5325bc78, 0x5325bf00, 0x5325c2cc, 0x5325c698, 0x5325ca64, 0x5325ce30, 0x5325d4f0, 0x5325d8bc,
+] as const;
