@@ -5,7 +5,8 @@ from unicorn import arm_const as reg
 from native_probe import OBJECT,OUTPUT,STACK
 from adj_probe import AdjProbe,put,u32,VIEW
 from rear_dial_probe import USER,MODEL,USERDATA,DATA,SELECTOR
-from pipeline_probe import CUSTOM,crop,rect
+from pipeline_probe import crop,rect
+from ratio_menu import parse
 
 def branch(at,target,link=False):return (0xeb000000 if link else 0xea000000)|(((target-at-8)//4)&0xffffff)
 SHIM=0x54100000
@@ -35,7 +36,8 @@ class StateProbe(AdjProbe):
 def verify(data,manifest):
     n=StateProbe(data,manifest);cpu=n.uc;calls=0
     entries=manifest['entries'];rows=manifest['ratios'];ids=[r['id'] for r in rows]
-    dims={r['id']:crop(6000,4000,*map(int,r['ratio'].split(':'))) for r in rows}
+    fr={i:parse(r) for r,_,i in n.menu.rows}
+    dims={i:crop(6000,4000,f.numerator,f.denominator) for i,f in fr.items()}
     codes={i:1 if i==0 else 2 if i==3 else i-1 for i in ids}
     for source in ids:
         n.state(source);n.model();put(cpu,OBJECT+0x24,OUTPUT);put(cpu,OBJECT+0x18,MODEL)
@@ -82,7 +84,7 @@ def verify(data,manifest):
             assert n.call(0x5354a778,USER)==identity;calls+=1
             for pointer in (u32(cpu,MODEL),u32(cpu,MODEL+4)):
                 assert cpu.mem_read(pointer+0x7b6,1)[0]==identity
-    for identity,nu,de in CUSTOM:
+    for identity,nu,de in n.menu.custom:
         # Common-property gating must match native 3:2 even in the restricted mode.
         for mode in (0,1,2,3):
             for current in (0,1):

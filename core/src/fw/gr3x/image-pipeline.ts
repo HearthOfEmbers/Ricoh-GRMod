@@ -5,14 +5,17 @@
 import { branchWord, wordsToBytes } from '../aspect/arm';
 import { alignedCrop, parseRatio } from '../aspect/geometry';
 import type { Rect } from '../aspect/geometry';
-import { GR3X_BASE_SIZES, GFX_RATIOS } from './geometry';
-import { EXPERIMENT_IDS } from './experimental';
+import { GR3X_BASE_SIZES, gr3xCustoms, gr3xMaxId } from './geometry';
+import type { Gr3xMenuRatio } from './geometry';
+import { gr3xImm } from './experimental';
 
 export interface Gr3xProgram {
   code(source: string): number;
   patch(address: number, expected: number, replacement: number, reason: string): void;
   append(bytes: Uint8Array): number;
   next(): number;
+  /** The ratio menu being built: native entries and the added ratios (identities 4..). */
+  menu: readonly Gr3xMenuRatio[];
 }
 
 export const IMAGE_IDENTITY = {
@@ -22,32 +25,33 @@ export const IMAGE_IDENTITY = {
 } as const;
 
 export function installGr3xImageIdentity(p: Gr3xProgram) {
+  const max = gr3xMaxId(p.menu);
   const write = p.code(`
-    cmp r3,#4; blo native; cmp r3,#10; bhi native
+    cmp r3,#4; blo native; cmp r3,#${max}; bhi native
     mov r2,r3; b #0x53604a80
     native: cmp r3,#3; b #0x53604a64
   `);
   const read = p.code(`
-    cmp r0,#4; blo native; cmp r0,#10; bhi native
+    cmp r0,#4; blo native; cmp r0,#${max}; bhi native
     ldr r2,[r4,#12]; strb r0,[r2,#0x7b6]; b #0x535ed480
     native: cmp r0,#3; b #0x535ed45c
   `);
   p.patch(IMAGE_IDENTITY.writeGate, 0xe3530003, branchWord(IMAGE_IDENTITY.writeGate, write), 'photo: preserve custom aspect on write');
   p.patch(IMAGE_IDENTITY.readGate, 0xe3500003, branchWord(IMAGE_IDENTITY.readGate, read), 'photo: preserve custom aspect on read');
   const playback = p.code(`
-    ldrb ip,[r8,#0x7b6]; cmp ip,#4; blo classifier; cmp ip,#10; movls sl,ip; bls custom
-    classifier: cmp sl,#4; blo native; cmp sl,#10; bhi native
+    ldrb ip,[r8,#0x7b6]; cmp ip,#4; blo classifier; cmp ip,#${max}; movls sl,ip; bls custom
+    classifier: cmp sl,#4; blo native; cmp sl,#${max}; bhi native
     custom: mov ip,sl; b #0x534c2050
     native: cmp sl,#3; b #0x534c2034
   `);
   p.patch(0x534c2030, 0xe35a0003, branchWord(0x534c2030, playback), 'playback: prefer the aspect recorded in the photo');
   const classify = p.code(`
-    ldrb r1,[r7,#0x7b6]; cmp r1,#4; blo native; cmp r1,#10; movls r0,r1; bxls lr
+    ldrb r1,[r7,#0x7b6]; cmp r1,#4; blo native; cmp r1,#${max}; movls r0,r1; bxls lr
     native: b #0x534d2954
   `);
   p.patch(0x534d59a8, branchWord(0x534d59a8, 0x534d2954, 14, true), branchWord(0x534d59a8, classify, 14, true), 'playback: preserve photo identity during size classification');
   const aspect = p.code(`
-    cmp r0,#4; blo native; cmp r0,#10; bls #0x534d2988
+    cmp r0,#4; blo native; cmp r0,#${max}; bls #0x534d2988
     native: cmp r0,#3; b #0x534d296c
   `);
   p.patch(0x534d2968, 0xe3500003, branchWord(0x534d2968, aspect), 'playback: pass through known custom identities');
@@ -55,16 +59,17 @@ export function installGr3xImageIdentity(p: Gr3xProgram) {
 }
 
 const addr = (reg: string, value: number) => `movw ${reg},#${value & 65535};movt ${reg},#${value >>> 16};`;
-const CUSTOM = GFX_RATIOS.flatMap((ratio, index) => {
-  const id = EXPERIMENT_IDS[index];
-  if (id < 4) return [];
-  const [n, d] = ratio.split(':').map(Number), parsed = parseRatio(ratio);
-  const screen = alignedCrop(720, 480, parsed)!, thumb = alignedCrop(160, 120, parsed)!;
-  const sizes = GR3X_BASE_SIZES.map(([w, h]) => alignedCrop(w, h, parsed)!);
-  return [{ id, ratio, n, d, screen, thumb, sizes }];
-});
+function customsOf(menu: readonly Gr3xMenuRatio[]) {
+  return gr3xCustoms(menu).map(({ id, ratio, n, d }) => {
+    const parsed = parseRatio(ratio);
+    const screen = alignedCrop(720, 480, parsed)!, thumb = alignedCrop(160, 120, parsed)!;
+    const sizes = GR3X_BASE_SIZES.map(([w, h]) => alignedCrop(w, h, parsed)!);
+    return { id, ratio, n, d, screen, thumb, sizes };
+  });
+}
 
 export function installGr3xDevelopAndPlayback(p: Gr3xProgram) {
+  const CUSTOM = customsOf(p.menu), max = gr3xMaxId(p.menu);
   const replay: number[][] = [];
   for (const r of CUSTOM) {
     for (const size of r.sizes) replay.push([size.width, size.height,
@@ -112,7 +117,7 @@ export function installGr3xDevelopAndPlayback(p: Gr3xProgram) {
   CUSTOM.forEach((r, i) => view.setFloat32(i * 4, Math.hypot(r.screen.width, r.screen.height) / Math.hypot(720, 480), true));
   const coeffTable = p.append(coefficients);
   const coefficient = p.code(`
-    cmp r0,#4; blo native; cmp r0,#10; bhi native
+    cmp r0,#4; blo native; cmp r0,#${max}; bhi native
     push {r0,ip}; sub r0,r0,#4; ${addr('ip', coeffTable)} add ip,ip,r0,lsl #2
     vldr s15,[ip]; pop {r0,ip}; cmp r7,#0; bne #0x535030e0; b #0x535030d4
     native: cmp r0,#1; b #0x5350311c
@@ -131,7 +136,7 @@ export function installGr3xDevelopAndPlayback(p: Gr3xProgram) {
       return `ratio${r.id}:` + exact.map(([w, h, v]) =>
         `movw r6,#${w};cmp r4,r6;movw r6,#${h};cmpeq r5,r6;movweq r0,#${v.width};movweq r1,#${v.height};beq done;` +
         `movw r6,#${v.width};cmp r4,r6;movw r6,#${v.height};cmpeq r5,r6;beq unchanged;`).join('') +
-        `mov r6,#${r.n};mov r7,#${r.d};b fit;`;
+        `${gr3xImm('r6', r.n)};${gr3xImm('r7', r.d)};b fit;`;
     }).join('')}
     unchanged: mov r0,r4;mov r1,r5;b done
     fit: mul r0,r4,r7;mul r1,r5,r6;subs r2,r0,r1;rsbmi r2,r2,#0
@@ -146,7 +151,7 @@ export function installGr3xDevelopAndPlayback(p: Gr3xProgram) {
   // IIIx differs substantially from IV here: r1 is the identity, lr is the
   // descriptor and the source dimensions are halfwords at +0x78/+0x7a.
   const develop = p.code(`
-    cmp r1,#4;blo native;cmp r1,#10;bhi native
+    cmp r1,#4;blo native;cmp r1,#${max};bhi native
     push {r4-r10,lr};ldrh r4,[lr,#0x78];ldrh r5,[lr,#0x7a]
     mov r2,r1;mov r0,r4;mov r1,r5;bl #${cropSize}
     mov r3,r0;mov r0,r1;sub r1,r4,r3;sub r2,r5,r0
@@ -160,6 +165,7 @@ export function installGr3xDevelopAndPlayback(p: Gr3xProgram) {
 }
 
 export function installGr3xAutofocus(p: Gr3xProgram) {
+  const CUSTOM = customsOf(p.menu);
   const entries: number[] = [];
   for (const [site, kind] of [[0x532afc0c, 'rectangle'], [0x532afe44, 'size'], [0x532afe74, 'small']] as const) {
     let source = CUSTOM.map(r => `cmp r0,#${r.id};beq ratio${r.id};`).join('') + `cmp r0,#0;b #${site + 4};`;

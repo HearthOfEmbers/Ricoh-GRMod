@@ -14,7 +14,8 @@ from unicorn import arm_const as reg
 from native_probe import BASE, RTOS_SHA, STOP, OBJECT, MUTEX
 from identity import RTOS_SHAS, by_id
 from rear_dial_probe import RearDialProbe, SELECTOR, DATA, USER
-from experiment_probe import verify as verify_geometry, SITES, RATIOS
+from experiment_probe import verify as verify_geometry, SITES
+from ratio_menu import menu as menu_of
 
 if not __debug__: raise RuntimeError('Run validation without Python -O')
 
@@ -42,7 +43,8 @@ class AdjProbe(RearDialProbe):
         if 'profile' in manifest: assert by_id(manifest['profile'])['rtos_sha256']==manifest['originalRtosSha256']
         assert manifest['originalLength']==len(data) and not manifest.get('flashable',False)
         assert not manifest['firmwareGenerated'] and not manifest['rearDialPatched']
-        assert [(r['ratio'],r['id']) for r in manifest['ratios']]==RATIOS
+        self.menu=menu_of(manifest)
+        assert menu_of(manifest['geometry']).rows==self.menu.rows
         assert {s['address'] for s in manifest['sites']}>=PATCH_ADDRESSES
         assert len(manifest['sites'])==len({s['address'] for s in manifest['sites']})
         at=manifest['append']['address']; payload=bytes.fromhex(manifest['append']['bytes'])
@@ -104,20 +106,21 @@ class CombinedGeometryProbe(AdjProbe):
 
 def verify(data,manifest):
     n=AdjProbe(data,manifest);cpu=n.uc;catalog=manifest['catalogs'];calls=0
-    rows=manifest['ratios'];order=[r['id'] for r in rows]
-    assert bytes(cpu.mem_read(catalog['order'],9))==bytes(order)
+    rows=manifest['ratios'];m=n.menu;order=m.order;count=len(order);customs=len(m.custom)
+    assert bytes(cpu.mem_read(catalog['order'],count))==bytes(order)
     added=len(manifest.get('addedLooks',[]))
-    assert (catalog['textColumns'],catalog['iconCount'])==(793+added,678+added)
+    assert (catalog['textColumns'],catalog['iconCount'])==(786+customs+added,671+customs+added)
     for lang in range(21):
         old_root=u32(cpu,0x55002bac+lang*4);new_root=u32(cpu,catalog['textRoots']+lang*4)
         assert bytes(cpu.mem_read(old_root,786*4))==bytes(cpu.mem_read(new_root,786*4))
         for row in rows:
             record=u32(cpu,new_root+row['textId']*4);desc=bytes(cpu.mem_read(record,8))
             units,lines,unused,text=struct.unpack('<BBHI',desc)
-            assert (units,lines,unused)==(len(row['ratio'])+1,1,0)
-            assert bytes(cpu.mem_read(text,units*2)).decode('utf-16le')==row['ratio']+'\0'
+            name=m.names[row['id']]
+            assert (units,lines,unused)==(len(name)+1,1,0)
+            assert bytes(cpu.mem_read(text,units*2)).decode('utf-16le')==name+'\0'
     assert bytes(cpu.mem_read(0x550020fc,671*4))==bytes(cpu.mem_read(catalog['iconRoot'],671*4))
-    pixels=bytes.fromhex(manifest['iconAddition']['bytes']);assert len(pixels)==7*9600+added*6400
+    pixels=bytes.fromhex(manifest['iconAddition']['bytes']);assert len(pixels)==customs*9600+added*6400
     for index,row in enumerate(r for r in rows if r['id']>=4):
         desc=u32(cpu,catalog['iconRoot']+row['iconId']*4)
         w,h,offset=struct.unpack('<HHI',cpu.mem_read(desc,8))
@@ -133,9 +136,9 @@ def verify(data,manifest):
         assert bytes(cpu.mem_read(DEST,32))==b'\xa5'*32
         assert bytes(cpu.mem_read(DEST+32,9600))==bytes(expected)
         assert bytes(cpu.mem_read(DEST+32+9600,32))==b'\xa5'*32
-    for at in (0x5319fea0,0x531b3aac):assert n.call(at,VIEW)==9;calls+=1
+    for at in (0x5319fea0,0x531b3aac):assert n.call(at,VIEW)==count;calls+=1
     for slot in range(5):
-        n.state(0,slot);assert n.call(0x531a31ac,VIEW)==9;calls+=1
+        n.state(0,slot);assert n.call(0x531a31ac,VIEW)==count;calls+=1
         for index,row in enumerate(rows):
             n.state(0,slot);n.call(0x531a3408,VIEW,index);calls+=1
             assert n.ui==[(0x53394758,CHILD,index),(0x533a1734,CHILD,row['iconId'])]
@@ -159,10 +162,10 @@ def verify(data,manifest):
         for at,expected in ((0x53209fb8,60),(0x53209fec,40)):
             assert n.call(at,VIEW,row['iconId'])==expected
             calls+=1
-    for start in order+[1,2,11,255]:
+    for start in order+sorted({1,2,m.max_id+1,11,255}):
         n.state(start)
         n.call(0x53227114,VIEW);calls+=1
-        expected=order[(order.index(start)+1)%9] if start in order else order[0]
+        expected=order[(order.index(start)+1)%count] if start in order else order[0]
         assert bytes(cpu.mem_read(DATA+0x4c2,1))==bytes([expected])
     return dict(schema=1,rtos_sha256=hashlib.sha256(data).hexdigest(),manifest_sha256=hashlib.sha256(json.dumps(manifest,sort_keys=True).encode()).hexdigest(),
         calls=calls,native_adj_count_all_five_slots=True,native_adj_and_menu_select=True,
@@ -175,7 +178,7 @@ def verify(data,manifest):
         scope='ARM menu functions only; singleton, widget, queue and UserData backend substitutes. No real UI, storage, camera boot or complete image encoding.')
 
 def verify_image_identity(data,manifest):
-    n=AdjProbe(data,manifest);cases=0
+    n=AdjProbe(data,manifest);cases=0;top=n.menu.max_id
     # Execute both original byte-field backends, for inline and indirect storage.
     # The whole byte domain is checked: new valid IDs round-trip; other IDs still
     # invoke the native diagnostic and fall back exactly as before.
@@ -191,9 +194,9 @@ def verify_image_identity(data,manifest):
             try:n.call(0x53604a44,VIEW,CHILD)
             except ValueError as exc:
                 assert 'Original assertion failed' in str(exc);failed=True
-            assert failed==(identity>10)
+            assert failed==(identity>top)
             encoded=bytes(n.uc.mem_read(field,1))[0]
-            assert encoded==({0:1,1:0,2:2,3:3}.get(identity,identity) if identity<=10 else 0)
+            assert encoded==({0:1,1:0,2:2,3:3}.get(identity,identity) if identity<=top else 0)
             assert bytes(n.uc.mem_read(field+1,3))==b'\xa5'*3
             # Feed every possible file value, including malformed/unknown values.
             n.uc.mem_write(field,bytes([identity]))
@@ -203,9 +206,9 @@ def verify_image_identity(data,manifest):
             try:n.call(0x535ed438,CONTEXT,CHILD)
             except ValueError as exc:
                 assert 'Original assertion failed' in str(exc);failed=True
-            assert failed==(identity>10)
+            assert failed==(identity>top)
             decoded=bytes(n.uc.mem_read(SOURCE+0x7b6,1))[0]
-            assert decoded==({0:1,1:0,2:2,3:3}.get(identity,identity) if identity<=10 else 1)
+            assert decoded==({0:1,1:0,2:2,3:3}.get(identity,identity) if identity<=top else 1)
             assert bytes(n.uc.mem_read(SOURCE,0x7b6))==b'\xa5'*0x7b6
             assert bytes(n.uc.mem_read(SOURCE+0x7b7,0x49))==b'\xa5'*0x49
             cases+=2

@@ -119,3 +119,18 @@ export const GR3X_STANDARD_ACTIVE_CHECKS = [
 export const GR3X_STANDARD_ACTIVE_CHECKS_SET0 = [
   0x5325b9f0, 0x5325bc78, 0x5325bf00, 0x5325c2cc, 0x5325c698, 0x5325ca64, 0x5325ce30, 0x5325d4f0, 0x5325d8bc,
 ] as const;
+
+// Own film parameters (T6d). "Look of photo set n" setters (UserDataModel*, look): each is
+// `ldr r3,[r0,#4]; ... strb r1,[r3,#0x1c2+2n]; bl 0x532750f8` (push the record to the live values).
+export const GR3X_PHOTO_STYLE_SETTERS = [0x5327b394, 0x5327b3b4, 0x5327b3d4] as const;
+// UserDataModel::LoadData and its only call (in the settings object's constructor).
+export const GR3X_LOAD_DATA = 0x5324b284;
+export const GR3X_LOAD_CALL = 0x5324b754;
+// UserDataModel::SaveData and its only call, a tail branch of the power-off handler.
+export const GR3X_SAVE_DATA = 0x5323f274;
+export const GR3X_SAVE_CALL = 0x5322b0a8;
+// Start-up zero fill: the literal of its end (ldr r2 at 0x530003ac). The 12 bytes from there to
+// the heap base are not referenced; the first word becomes the table pointer.
+export const GR3X_ZERO_FILL_END = 0x53000460;
+export const GR3X_GAP = 0x55804374;
+export const GR3X_HEAP_BASE = 0x55804380;

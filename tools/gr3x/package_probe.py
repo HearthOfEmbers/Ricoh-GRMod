@@ -64,8 +64,10 @@ def verify(original,new,manifest,build,reference):
     revision=build.get('revision','T4-SF1' if soft else 'T4')
     assert revision in ('research','T4','T4-SF1','T5','T5-L1','T6')
     if revision.startswith('T5') or revision=='T6':assert manifest['kind']=='gr3x-image-control-patchset'
-    marker=(f"{profile['tag']}-ADJ9-{revision}-HARDWARE-UNTESTED\0".encode()
-            if build.get('cameraUpdateCandidate') else b'GR3X-ADJ9-RESEARCH-NOT-FOR-CAMERA\0')
+    from ratio_menu import menu as menu_of, is_t4
+    m=menu_of(manifest);entries=len(m.order)
+    marker=(f"{profile['tag']}-ADJ{entries}-{revision}-HARDWARE-UNTESTED\0".encode()
+            if build.get('cameraUpdateCandidate') else f'GR3X-ADJ{entries}-RESEARCH-NOT-FOR-CAMERA\0'.encode())
     assert dec[rt['end']-4-len(marker):rt['end']-4]==marker
     padding=app+len(payload)
     if revision.startswith('T5') or revision=='T6':
@@ -83,6 +85,15 @@ def verify(original,new,manifest,build,reference):
         else:
             assert recipe['schema']==(1 if revision=='T5' else 2) and len(recipe['films'])<=2
             assert len(manifest['addedLooks'])==2+6*recipe['monoReplicas']
+        padding=start+length
+    if not is_t4(m):
+        # The ratio list follows the film recipe; it must name exactly the manifest's added ratios.
+        magic=b'GR3X-RATIO-RECIPE\0'
+        assert dec[padding:padding+len(magic)]==magic
+        length=struct.unpack_from('<I',dec,padding+len(magic))[0];assert length<=4096
+        start=padding+len(magic)+4
+        recipe=json.loads(dec[start:start+length])
+        assert recipe=={'schema':1,'ratios':[{'ratio':m.ratios[i],'name':m.names[i]} for i,_,_ in m.custom]},recipe
         padding=start+length
     assert not any(dec[padding:rt['end']-4-len(marker)])
     return dict(schema=1,decoder='DoYitNow/gr-custom-tool codec at 0c15c8f9a97b464ac23ab1641740a8263e0068b0',

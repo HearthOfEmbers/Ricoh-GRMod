@@ -42,8 +42,8 @@ describe.skipIf(!input)('IIIx ADJ research container integrity and isolation', (
     expect(await sha256Hex(raw)).toBe(GR3X_160.sha256);
     expect(await sha256Hex(result.bytes)).toBe(result.report.outputSha256);
     const engine = await Engine.open(raw);
-    await expect(engine.buildFirmware([], [{ ratio: '65:24', name: '65:24' }]))
-      .rejects.toMatchObject({ code: 'gr3x-fixed-nine-only' });
+    await expect(engine.buildFirmware([], []))
+      .rejects.toMatchObject({ code: 'too-many-ratios' });
     expect(await engine.inspect(result.bytes)).toMatchObject({ kind: 'unknown', verified: false });
   });
   it('builds a fixed-nine camera-update candidate without raising the version or claiming hardware validation', async () => {
@@ -66,8 +66,9 @@ describe.skipIf(!input)('IIIx ADJ research container integrity and isolation', (
     expect(await engine.inspect(built.file)).toMatchObject({ kind: 'modified', verified: true });
     const damaged = built.file.slice(); damaged[damaged.length - 100] ^= 1;
     expect(await engine.inspect(damaged)).toMatchObject({ kind: 'unknown', verified: false });
-    await expect(engine.buildFirmware([], ratios, [], { dateStamp: true })).rejects.toMatchObject({ code: 'gr3x-fixed-nine-only' });
-    await expect(engine.buildFirmware([], ratios.slice().reverse())).rejects.toMatchObject({ code: 'gr3x-fixed-nine-only' });
+    await expect(engine.buildFirmware([], ratios, [], { dateStamp: true })).rejects.toMatchObject({ code: 'gr3x-unsupported' });
+    // Another order is another (custom) menu, not the tested T4 one.
+    expect((await engine.buildFirmware([], ratios.slice().reverse())).sha256).not.toBe(candidate.report.outputSha256);
     // Consumers cannot mutate the cached candidate through the returned file.
     built.file[0] ^= 1;
     expect(await sha256Hex((await engine.buildFirmware([], ratios)).file)).toBe(candidate.report.outputSha256);

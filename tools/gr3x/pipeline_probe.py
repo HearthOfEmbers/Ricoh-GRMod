@@ -12,7 +12,10 @@ from native_probe import NativeProbe, BASE, OBJECT, OUTPUT, STACK, STOP
 from adj_probe import AdjProbe, VIEW, SOURCE, DEST, CHILD, put
 from rear_dial_probe import SELECTOR
 
+from ratio_menu import menu as menu_of
+# T4 identities; a probe takes its own list from the manifest's menu (custom(manifest)).
 CUSTOM = [(4,4,3),(5,16,9),(6,65,24),(7,17,6),(8,3,4),(9,7,6),(10,5,4)]
+def custom(manifest): return menu_of(manifest).custom
 BASE_SIZES = [(6000,4000),(4800,3200),(3360,2240),(1920,1280)]
 
 def crop(w,h,n,d):
@@ -28,13 +31,14 @@ def regs(cpu):return [cpu.reg_read(getattr(reg,'UC_ARM_REG_R'+str(i))) for i in 
 
 def verify(data,manifest):
     n=AdjProbe(data,manifest);cpu=n.uc;old=NativeProbe(data);calls=0
+    top=n.menu.max_id
     # Execute the real call-site wrapper: metadata must survive size-based
     # classification, while non-custom metadata retains the native classifier.
     for identity in range(256):
         cpu.mem_write(SOURCE+0x7b6,bytes([identity]))
         for size in ((6000,4000),(6000,2216),(3000,4000),(4000,4000)):
             for machine in (n,old):machine.uc.mem_write(OUTPUT,struct.pack('<2I',*size))
-            expected=identity if 4<=identity<=10 else old.call(0x534d2954,OUTPUT)
+            expected=identity if 4<=identity<=top else old.call(0x534d2954,OUTPUT)
             cpu.reg_write(reg.UC_ARM_REG_CPSR,0x13);cpu.reg_write(reg.UC_ARM_REG_SP,STACK)
             cpu.reg_write(reg.UC_ARM_REG_R0,OUTPUT);cpu.reg_write(reg.UC_ARM_REG_R7,SOURCE)
             cpu.emu_start(0x534d59a8,0x534d59ac,count=10000)
@@ -42,19 +46,19 @@ def verify(data,manifest):
             assert cpu.reg_read(reg.UC_ARM_REG_R7)==SOURCE
             assert cpu.reg_read(reg.UC_ARM_REG_SP)==STACK
             calls+=1
-        for classified in range(11):
+        for classified in range(top+1):
             saved=[0x12340000+i for i in range(13)]
             saved[8]=SOURCE;saved[10]=classified
             for i,v in enumerate(saved):cpu.reg_write(getattr(reg,'UC_ARM_REG_R'+str(i)),v)
             cpu.reg_write(reg.UC_ARM_REG_CPSR,0x13);cpu.reg_write(reg.UC_ARM_REG_SP,STACK)
             cpu.emu_start(0x534c2030,0x534c2050,count=1000)
             expected=list(saved)
-            if 4<=identity<=10:expected[10]=identity
+            if 4<=identity<=top:expected[10]=identity
             expected[12]=[0,2,1,3][expected[10]] if expected[10]<4 else expected[10]
             assert regs(cpu)==expected,(identity,classified,regs(cpu),expected)
             assert cpu.reg_read(reg.UC_ARM_REG_SP)==STACK
             calls+=1
-    for identity,num,den in CUSTOM:
+    for identity,num,den in n.menu.custom:
         screen=rect(720,480,num,den);thumb=rect(160,120,num,den)
         for size in BASE_SIZES:
             output=crop(*size,num,den)

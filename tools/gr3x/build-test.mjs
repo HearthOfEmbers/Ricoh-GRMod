@@ -22,11 +22,14 @@ if (!input || !directory || !python || !reference || extra.length > 1 || (extra.
   process.exit(2);
 }
 const { buildGr3xTestFirmware } = await import('../../core/src/fw/gr3x/research-package.ts');
+const { planGr3xMenu, GR3X_T4_MENU } = await import('../../core/src/fw/gr3x/geometry.ts');
+// GR3X_RATIOS='[{"ratio":"2.39:1","name":"Scope"},…]' builds another ratio list (default: the T4 seven).
+const menu = process.env.GR3X_RATIOS ? planGr3xMenu(JSON.parse(process.env.GR3X_RATIOS)) : GR3X_T4_MENU;
 const { openGr3xOfficial } = await import('../../core/src/fw/gr3x/profile.ts');
 const { sectionsOf } = await import('../../core/src/fw/container.ts');
 const raw = new Uint8Array(await readFile(input));
 const softFocus = extra.length ? [{ level: -1, strength: 'weak' }, { level: -2, strength: 'medium' }, { level: -3, strength: 'strong' }] : [];
-const result = await buildGr3xTestFirmware(raw, softFocus);
+const result = await buildGr3xTestFirmware(raw, softFocus, undefined, menu);
 const { decoded } = await openGr3xOfficial(raw);
 const target = resolve(directory), here = dirname(fileURLToPath(import.meta.url));
 await mkdir(target); // Never overwrite an existing release or the official input.

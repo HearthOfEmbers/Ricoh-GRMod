@@ -32,7 +32,7 @@ def descriptor(p,identity,previous,explicit):
     return bytes(cpu.mem_read(OBJECT+0x2f6,12)),list(p.diagnostics)
 
 def verify(data,manifest):
-    p=AdjProbe(data,manifest);original=NativeProbe(data);calls=0
+    p=AdjProbe(data,manifest);original=NativeProbe(data);calls=0;m=p.menu
     # The original branch's failure for an added ID is observable independently.
     stale=[]
     for previous in range(4):
@@ -43,19 +43,24 @@ def verify(data,manifest):
         for previous in (0,1,2,3,255):
             for explicit in (0,1):
                 actual,diagnostics=descriptor(p,identity,previous,explicit)
+                if identity>m.max_id:
+                    # Not in this menu: the native path and its diagnostic, as in the original.
+                    expected,native=descriptor(original,identity,previous,explicit)
+                    assert diagnostics and native and actual==expected,(identity,previous,explicit)
+                    calls+=2;continue
                 assert not diagnostics,(identity,previous,explicit,diagnostics)
                 if identity<4:
                     expected,diagnostics=descriptor(original,identity,previous,explicit)
                     assert actual==expected and not diagnostics
                 else:
-                    family=1 if identity in (5,6,7) else 3
+                    family=1 if identity in m.wide else 3
                     expected,diagnostics=descriptor(original,family,previous,explicit)
                     assert actual==expected and not diagnostics,(identity,previous,explicit,actual,expected)
                 calls+=2
     full=original.dng_window(0,1.0)['window']
     assert full==dict(width=6000,height=4000,left=68,top=40)
     rawcases=0
-    for identity in (4,0,5,6,7,8,3,9,10):
+    for identity in m.order:
         for magnification in (1.0,1.25,1.785714269):
             p.uc.mem_write(OBJECT,b'\x00'*0x1000)
             p.uc.mem_write(OBJECT+0x88,struct.pack('<I',OUTPUT))

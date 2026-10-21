@@ -5,7 +5,7 @@ import struct
 from pathlib import Path
 from unicorn import arm_const as reg
 from adj_probe import AdjProbe, u32, put
-from pipeline_probe import CUSTOM, rect
+from pipeline_probe import rect
 from native_probe import STACK
 
 MAP, COPY = 0x62080000,0x62081000
@@ -32,7 +32,10 @@ class MeteringProbe(AdjProbe):
         else:super()._hook(cpu,at,size,user)
 
 def verify(data,manifest):
-    n=MeteringProbe(data,manifest);cpu=n.uc;calls=0
+    n=MeteringProbe(data,manifest);cpu=n.uc;calls=0;m=n.menu
+    # map.c keeps seven rows; rows after the last added ratio hold the full 3:2 view.
+    views=[(i,num,den,rect(720,480,num,den)) for i,num,den in m.custom]+[(i,1,1,[0,0,720,480]) for i in range(m.max_id+1,11)]
+    assert [v[0] for v in views]==list(range(4,11))
     for owner in (MAP,COPY):
         cpu.mem_write(owner,b'\xa5'*336)
         n.call(0x5365d754,owner);n.call(0x5365d900,owner);calls+=2
@@ -62,8 +65,7 @@ def verify(data,manifest):
                 fields=[0,0,*starts,*([bw*countx//strip_count]*3),0,0,0,0,0,0]
                 cpu.mem_write(strip,struct.pack('<14H',*fields))
                 originals[index]=(primary,record,raw);strips[index]=fields
-        for identity,num,den in CUSTOM:
-            screen=rect(720,480,num,den)
+        for identity,num,den,screen in views:
             out=n.call(manifest['entries']['mapView'],MAP,identity);calls+=1
             assert out==first+36+(identity-4)*VIEW_BYTES
             for index,(primary,old,raw) in originals.items():
@@ -90,7 +92,7 @@ def verify(data,manifest):
         # The original deep clone executes before rebinding every appended view.
         n.call(0x5365e2dc,COPY,MAP);calls+=1
         copied_first=u32(cpu,COPY+4)
-        for identity,_,_ in CUSTOM:
+        for identity,_,_,_ in views:
             src=first+36+(identity-4)*VIEW_BYTES;dst=copied_first+36+(identity-4)*VIEW_BYTES
             assert bytes(cpu.mem_read(dst+304,12*36))==bytes(cpu.mem_read(src+304,12*36))
             assert u32(cpu,dst+0x90)==u32(cpu,COPY+0x90)!=u32(cpu,MAP+0x90)
@@ -100,7 +102,7 @@ def verify(data,manifest):
         assert n.call(manifest['entries']['mapView'],MAP,identity)==MAP;calls+=1
     # Every interior wrapper must preserve live registers and flags, except its
     # explicitly displaced instruction and documented custom index normalization.
-    for identity in (0,1,4,5,6,7,8,9,10):
+    for identity in (0,1,*[i for i,_,_ in m.custom]):
         view=first+36+(identity-4)*VIEW_BYTES if identity>=4 else MAP
         index=13+3*identity
         for site in (0x535001b0,0x535002e4,0x53501b90,0x535071dc,0x5350a24c,

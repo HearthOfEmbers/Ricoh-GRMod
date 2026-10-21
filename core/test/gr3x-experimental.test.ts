@@ -23,8 +23,8 @@ describe.skipIf(!input)('GR IIIx isolated ARM experiments', () => {
     const engine = await Engine.open(raw);
     // Power-off images and the factory entry needed a start-up script on the card; GR Mod 0.8 dropped that route.
     expect(engine.info.capabilities).toEqual({ build: true, presets: true, wallpaper: false, factoryEntry: false, bridge: false });
-    await expect(engine.buildFirmware([], [{ name: '65:24', ratio: '65:24' }]))
-      .rejects.toMatchObject({ code: 'gr3x-fixed-nine-only' });
+    await expect(engine.buildFirmware([], [{ name: '65:24', ratio: '65:24' }], [], { shutdownPictures: [{} as never] }))
+      .rejects.toMatchObject({ code: 'gr3x-unsupported' });
   });
   it('branches within the original probe page and leaves the PC-relative VFP load in place', () => {
     const start = GR3X_160.rtosBase + GR3X_160.rtosLength;

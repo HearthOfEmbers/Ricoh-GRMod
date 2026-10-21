@@ -8,6 +8,7 @@ import { sectionsOf } from '../container';
 import { normalizeIcon } from '../icons';
 import { FirmwareError } from '../types';
 import { buildGr3xAdjResearch, GR3X_ADJ } from './adj';
+import type { Gr3xMenuRatio } from './geometry';
 import { GR3X_160, openGr3xOfficial } from './profile';
 import { GR3X_TEXT_ROWS, gr3xAllowedChars, validateGr3xLookNameFor } from './look-resources';
 
@@ -41,7 +42,7 @@ const unhex = (s: string) => Uint8Array.from(s.match(/../g) ?? [], x => parseInt
 const hex = (b: Uint8Array) => Array.from(b, x => x.toString(16).padStart(2, '0')).join('');
 const addr = (r: number, a: number) => `movw r${r},#${a & 65535};movt r${r},#${a >>> 16};`;
 
-export async function buildGr3xLookMenuResearch(raw: Uint8Array, looks: readonly Gr3xResearchLook[], displayIcons = false) {
+export async function buildGr3xLookMenuResearch(raw: Uint8Array, looks: readonly Gr3xResearchLook[], displayIcons = false, ratioMenu?: readonly Gr3xMenuRatio[]) {
   if (!looks.length || looks.length > GR3X_LOOK_RESEARCH.maxAdditions)
     throw new FirmwareError('bad-edit', 'research menu requires 1..9 extra looks');
   const names = new Set<string>();
@@ -58,7 +59,7 @@ export async function buildGr3xLookMenuResearch(raw: Uint8Array, looks: readonly
         throw new FirmwareError('bad-edit', 'unknown look name language');
     }
   }
-  const base = await buildGr3xAdjResearch(raw);
+  const base = await buildGr3xAdjResearch(raw, ratioMenu);
   const { decoded } = await openGr3xOfficial(raw);
   for (const look of looks) for (const [lang, text] of Object.entries(look.names ?? {}))
     if (text) validateGr3xLookNameFor(text, gr3xAllowedChars(decoded, lang as typeof GR3X_TEXT_ROWS[number]));

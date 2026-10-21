@@ -2,19 +2,23 @@
 // IIIx mappings were traced from its UserData getter and native preview callers.
 import { branchWord, wordsToBytes } from '../aspect/arm';
 import { alignedCrop, parseRatio } from '../aspect/geometry';
-import { GFX_RATIOS } from './geometry';
-import { EXPERIMENT_IDS } from './experimental';
+import { gr3xCustoms, gr3xMaxId, gr3xWide } from './geometry';
 import type { Gr3xProgram } from './image-pipeline';
 
 const addr = (r: string, v: number) => `movw ${r},#${v & 65535};movt ${r},#${v >>> 16};`;
 
 export function installGr3xLiveView(p: Gr3xProgram) {
-  const rows = GFX_RATIOS.flatMap((ratio, i) => {
-    const id = EXPERIMENT_IDS[i];
-    if (id < 4) return [];
+  const max = gr3xMaxId(p.menu);
+  const rows = gr3xCustoms(p.menu).map(({ id, ratio }) => {
     const r = alignedCrop(720, 480, parseRatio(ratio))!;
-    return [{ id, at: p.append(wordsToBytes([r.width, 720, r.height, 480])) }];
+    return { id, at: p.append(wordsToBytes([r.width, 720, r.height, 480])) };
   });
+  // Hardware-wide family (wider than 3:2): one range test when the identities are consecutive.
+  const wide = gr3xCustoms(p.menu).filter(gr3xWide).map(r => r.id);
+  const wideTest = !wide.length ? 'b narrow;'
+    : wide.every((id, i) => id === wide[0] + i)
+    ? `cmp r8,#${wide[0]};blo narrow;cmp r8,#${wide[wide.length - 1]};bls #0x534506b8;`
+    : wide.map(id => `cmp r8,#${id};beq #0x534506b8;`).join('');
   const get = p.code(rows.map(r => `cmp r0,#${r.id};${addr('ip', r.at)}moveq r0,ip;bxeq lr;`).join('') + 'mov r0,#0;bx lr;');
   const scale = p.code('mov ip,r1;mov r3,#0;umull r0,r1,r0,ip;b #0x5313db54;');
   const hook = (site: number, expected: number, source: string) => {
@@ -31,20 +35,20 @@ export function installGr3xLiveView(p: Gr3xProgram) {
   // explicit dimensions when enabled (mode 3), otherwise mode 0. Keep the custom
   // identity in r8; only select a supported hardware descriptor branch.
   const resumeMode = hook(0x53450668, 0xe3580003,
-    'cmp r8,#4;blo native;cmp r8,#10;bhi native;cmp r8,#5;blo narrow;cmp r8,#7;bls #0x534506b8;narrow:b #0x53450790;native:cmp r8,#3;b #0x5345066c;');
+    `cmp r8,#4;blo native;cmp r8,#${max};bhi native;${wideTest}narrow:b #0x53450790;native:cmp r8,#3;b #0x5345066c;`);
   // Public 0/1/2/3 maps to hardware 0/2/1/3. Additional IDs keep their identity.
   hook(0x53669444, 0xe2400001,
-    'cmp r0,#4;blo old;cmp r0,#10;movls r4,r0;bls #0x53669460;old:sub r0,r0,#1;b #0x53669448;');
+    `cmp r0,#4;blo old;cmp r0,#${max};movls r4,r0;bls #0x53669460;old:sub r0,r0,#1;b #0x53669448;`);
   // The secondary preview controller has an inlined copy of the same converter.
   hook(0x534371c8, 0xe2400001,
-    'cmp r0,#4;blo old;cmp r0,#10;bhi old;mov r5,r0;ldr r0,[r6,#8];mov r1,#0;b #0x534371ec;old:sub r0,r0,#1;b #0x534371cc;');
+    `cmp r0,#4;blo old;cmp r0,#${max};bhi old;mov r5,r0;ldr r0,[r6,#8];mov r1,#0;b #0x534371ec;old:sub r0,r0,#1;b #0x534371cc;`);
   hook(0x53437210, 0xe2451003,
-    'cmp r5,#4;blo old;cmp r5,#10;movls r1,#1;bls #0x5343721c;old:sub r1,r5,#3;b #0x53437214;');
+    `cmp r5,#4;blo old;cmp r5,#${max};movls r1,#1;bls #0x5343721c;old:sub r1,r5,#3;b #0x53437214;`);
   // Every main-controller path must choose its computed aperture, including no zoom.
   for (const [site, join] of [[0x53445074,0x53445080],[0x534461b8,0x53445e50],
     [0x53446f84,0x53446de8],[0x534475a8,0x534475bc],[0x53447efc,0x53447f08]]) {
     hook(site, 0xe3510003,
-      `cmp r1,#4;blo old;cmp r1,#10;bhi old;orr r1,r3,#1;b #${join};old:cmp r1,#3;b #${site + 4};`);
+      `cmp r1,#4;blo old;cmp r1,#${max};bhi old;orr r1,r3,#1;b #${join};old:cmp r1,#3;b #${site + 4};`);
   }
   const dimensionEntries: number[] = [];
   for (const [entry, word, displaced, axis, comparison] of [

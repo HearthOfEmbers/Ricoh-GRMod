@@ -62,7 +62,9 @@ import type { Sampling } from '../jpeg';
 import { MODEL_INFO, rotationScript } from '../wallpaper';
 import { GR3X_160, gr3ProfileOf, openGr3xOfficial, requireGr3xPort } from '../fw/gr3x/profile';
 import { planGr3xRatio } from '../fw/gr3x/geometry';
-import { GFX_RATIOS } from '../fw/gr3x/geometry';
+import { GR3X_MAX_CUSTOM_RATIOS, GR3X_T4_MENU, gr3xCustoms, planGr3xMenu } from '../fw/gr3x/geometry';
+import type { Gr3xMenuRatio } from '../fw/gr3x/geometry';
+import { readGr3xRatioRecipe } from '../fw/gr3x/ratio-recipe';
 import { buildGr3xTestFirmware } from '../fw/gr3x/research-package';
 import { readGr3xFactoryEntry } from '../fw/gr3x/factory';
 import { GR3X_CLARITY_OFFSET } from '../fw/gr3x/clarity';
@@ -306,18 +308,18 @@ export class Engine {
   private monoWords: { offset: number; bytes: Uint8Array }[] | null = null;
   private gr3xCandidates = new Map<string, Promise<FirmwareBuild>>();
 
-  private fixedGr3x(softFocus: readonly SoftFocusRequest[] = [], looks?: Gr3xLookOptions): Promise<FirmwareBuild> {
+  private fixedGr3x(softFocus: readonly SoftFocusRequest[] = [], looks?: Gr3xLookOptions, menu: readonly Gr3xMenuRatio[] = GR3X_T4_MENU): Promise<FirmwareBuild> {
     const requests = [...softFocus].sort((a, b) => a.level - b.level);
-    const key = JSON.stringify({ requests, looks });
+    const key = JSON.stringify({ requests, looks, menu });
     let candidate = this.gr3xCandidates.get(key);
     if (candidate) return candidate;
-    candidate = buildGr3xTestFirmware(this.raw, requests, looks).then(r => ({
+    candidate = buildGr3xTestFirmware(this.raw, requests, looks, menu).then(r => ({
       file: r.bytes, sha256: r.report.outputSha256, decodedSha256: r.decodedSha256,
       changedFrames: r.changedFrames, changedBytes: r.changedBytes,
       ranges: r.report.ranges, checks: r.report.checks, features: looks?.monoReplicas ? { monoUnlock: true } : {},
-      ratios: r.manifest.ratios.filter(x => x.id >= 4).map(x => {
+      ratios: gr3xCustoms(r.manifest.menu).map(x => {
         const plan = planGr3xRatio(x.ratio);
-        return { id: x.id, name: x.ratio, ratio: x.ratio, actual: plan.actual, sizes: plan.sizes };
+        return { id: x.id, name: x.name, ratio: x.ratio, actual: plan.actual, sizes: plan.sizes };
       }),
     }));
     this.gr3xCandidates.set(key, candidate);
@@ -444,11 +446,16 @@ export class Engine {
         // label alone never authorizes restoring an arbitrary firmware file.
         const decoded = new Firmware(raw).decoded;
         const rtos = sectionsOf(decoded).find(s => s.name === 'RTOS');
-        if (rtos && rtos.offset === GR3X_160.rtosOffset && rtos.size > GR3X_160.rtosLength)
-          looks = readGr3xLookRecipe(decoded.subarray(rtos.offset + GR3X_160.rtosLength, rtos.offset + rtos.size));
+        let menu: Gr3xMenuRatio[] = [...GR3X_T4_MENU];
+        if (rtos && rtos.offset === GR3X_160.rtosOffset && rtos.size > GR3X_160.rtosLength) {
+          const appended = decoded.subarray(rtos.offset + GR3X_160.rtosLength, rtos.offset + rtos.size);
+          looks = readGr3xLookRecipe(appended);
+          const ratios = readGr3xRatioRecipe(appended);
+          if (ratios) menu = planGr3xMenu(ratios);
+        }
         const changes = clarityChanges(decoded, GR3X_CLARITY_OFFSET);
         if (changes.every(c => SOFT_FOCUS_LEVELS.includes(c.level as SoftFocusLevel) && c.strength !== 'custom')) {
-          candidate = await this.fixedGr3x(changes as SoftFocusRequest[], looks ?? undefined);
+          candidate = await this.fixedGr3x(changes as SoftFocusRequest[], looks ?? undefined, menu);
           softFocus = changes;
         }
       } catch { /* unrecognized input remains non-writable */ }
@@ -627,6 +634,12 @@ export class Engine {
             if (o.screen.width === g.screen.width && o.screen.height === g.screen.height) return { problem: 'ratio-duplicate' };
           } catch { /* Invalid neighbouring rows are reported individually. */ }
         }
+        const valid = others.filter(o => { try { planGr3xRatio(o); return true; } catch { return false; } });
+        try {
+          if (valid.length < GR3X_MAX_CUSTOM_RATIOS) planGr3xMenu([...valid, ratio].map(r => ({ ratio: r })));
+        } catch (e) {
+          if (e instanceof FirmwareError && e.code === 'ratio-conflict') return { problem: 'ratio-conflict' };
+        }
         return { ...g, icon: aspect.drawRatioIcon(ratio), label: aspect.ratioLabel(ratio) };
       } catch (e) {
         return { problem: e instanceof FirmwareError && e.code === 'ratio-factory' ? 'ratio-factory'
@@ -739,11 +752,10 @@ export class Engine {
   /** Build a firmware file. The result has passed the built-in self-check (otherwise this throws). */
   async buildFirmware(requests: SlotRequest[], ratios: readonly RatioSpec[] = [], softFocus: readonly SoftFocusRequest[] = [], options: BuildOptions = {}): Promise<FirmwareBuild> {
     if (this.info.family === 'gr3x') {
-      const fixed = GFX_RATIOS.filter(r => !GR3X_160.factoryRatios.some(f => f === r));
-      if (Object.entries(options).some(([k, v]) => k !== 'monoUnlock' && Boolean(v)) ||
-          ratios.length !== fixed.length || ratios.some((r, i) => r.ratio !== fixed[i] || r.name !== fixed[i])) {
-        throw new FirmwareError('gr3x-fixed-nine-only', 'IIIx keeps nine fixed ratios; date imprint and a separate ADJ soft-focus control are not ported');
-      }
+      if (Object.entries(options).some(([k, v]) => k !== 'monoUnlock' && Boolean(v)))
+        throw new FirmwareError('gr3x-unsupported', 'date imprint, power-off pictures and a separate ADJ soft-focus control are not ported to GR III / IIIx');
+      // 1..7 added ratios; the T4 seven keep the tested T4 menu (see planGr3xMenu).
+      const menu = planGr3xMenu(ratios.map(r => ({ ratio: r.ratio, name: r.name })));
       // Legacy replica builds remain reproducible, but T6 uses all nine slots for films.
       const ids = options.monoUnlock ? GR3X_FILM_IDS.slice(0, 2) : GR3X_FILM_IDS;
       if (requests.length > ids.length || new Set(requests.map(r => r.slot)).size !== requests.length ||
@@ -751,6 +763,8 @@ export class Engine {
       const looks: Gr3xLookOptions | undefined = requests.length || options.monoUnlock ? {
         displayRevision: options.monoUnlock ? 2 : 3,
         monoReplicas: !!options.monoUnlock,
+        // Each film keeps its own parameters (T6d); recipes without the flag rebuild T6c.
+        ...(options.monoUnlock ? {} : { ownParameters: true }),
         films: ids.map((slot, i) => {
           const r = requests.find(r => r.slot === slot);
           // Each camera language may have its own name. Languages without one show the default:
@@ -762,7 +776,7 @@ export class Engine {
           return { name, ...(Object.keys(own).length ? { names: own } : {}), ...(r?.preset ? { preset: r.preset } : {}), ...(r?.icon ? { icon: r.icon } : {}) };
         }),
       } : undefined;
-      const r = await this.fixedGr3x(softFocus, looks);
+      const r = await this.fixedGr3x(softFocus, looks, menu);
       return { ...r, file: r.file.slice() };
     }
     if (this.layout === null || !this.info.capabilities.build) requireGr3xPort('custom firmware');

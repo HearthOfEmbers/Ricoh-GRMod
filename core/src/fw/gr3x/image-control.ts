@@ -6,9 +6,13 @@
 import { assembleWords, branchWord, wordsToBytes } from '../aspect/arm';
 import { FirmwareError } from '../types';
 import { buildGr3xLookMenuResearch } from './image-control-research';
+import type { Gr3xMenuRatio } from './geometry';
 import type { Gr3xResearchLook } from './image-control-research';
 import { GR3X_160, openGr3xOfficial } from './profile';
-import { GR3X_PARAMETER_SETTER_LOOKS, GR3X_STANDARD_ACTIVE_CHECKS, GR3X_STANDARD_ACTIVE_CHECKS_SET0, GR3X_TONE_READS } from './look-addresses';
+import { GR3X_PARAMETER_SETTER_LOOKS, GR3X_STANDARD_ACTIVE_CHECKS, GR3X_STANDARD_ACTIVE_CHECKS_SET0, GR3X_TONE_READS,
+  GR3X_PHOTO_STYLE_SETTERS, GR3X_LOAD_CALL, GR3X_LOAD_DATA, GR3X_SAVE_CALL, GR3X_SAVE_DATA,
+  GR3X_ZERO_FILL_END, GR3X_GAP, GR3X_HEAP_BASE } from './look-addresses';
+import { GR3X_SLOTS_NATIVE } from './slots-native';
 import { quantizeSlot } from '../../color/camera';
 import type { SlotParams } from '../../color/camera';
 import type { QuantizedSlot } from '../../color/camera';
@@ -30,6 +34,8 @@ export interface Gr3xLookOptions {
   /** Legacy revisions reserve two films; T6 reserves nine. Native controls stay intact. */
   films?: readonly Gr3xFilmLook[];
   monoReplicas?: boolean;
+  /** T6 only: each film keeps its own parameters (T6d) instead of sharing Standard's (T6c). */
+  ownParameters?: boolean;
 }
 const hex = (b: Uint8Array) => Array.from(b, x => x.toString(16).padStart(2, '0')).join('');
 const unhex = (s: string) => Uint8Array.from(s.match(/../g) ?? [], x => parseInt(x, 16));
@@ -73,7 +79,7 @@ const REPLICAS = [
   { name: 'M HDR Replica', base: 20, icon: 351, params: { 0x796: 2 } },
 ] as const;
 
-export async function buildGr3xImageControls(raw: Uint8Array, options: Gr3xLookOptions) {
+export async function buildGr3xImageControls(raw: Uint8Array, options: Gr3xLookOptions, ratioMenu?: readonly Gr3xMenuRatio[]) {
   if (options.displayRevision !== undefined && ![1, 2, 3].includes(options.displayRevision))
     throw new FirmwareError('bad-edit', 'unknown IIIx display revision');
   const displayIcons = options.displayRevision !== 1;
@@ -96,7 +102,7 @@ export async function buildGr3xImageControls(raw: Uint8Array, options: Gr3xLookO
   ];
   if (!specs.length) throw new FirmwareError('bad-edit', 'no IIIx extra image controls requested');
   specs.forEach(s => validateGr3xLookName(s.name));
-  const menu = await buildGr3xLookMenuResearch(raw, specs as Gr3xResearchLook[], displayIcons);
+  const menu = await buildGr3xLookMenuResearch(raw, specs as Gr3xResearchLook[], displayIcons, ratioMenu);
   const p = GR3X_160;
   const rtos = decoded.subarray(p.rtosOffset, p.rtosOffset + p.rtosLength);
   const originalRead = (va: number, size: number) => {
@@ -226,6 +232,31 @@ export async function buildGr3xImageControls(raw: Uint8Array, options: Gr3xLookO
     patch(at, 0xe59331c0, branchWord(at, entry), 'image control: a film counts as Standard for the live-value update (set 0)');
     return { address: at, entry };
   }) : [];
+  // Own parameters (T6d): each film keeps its own values per photo set (native/slots.c).
+  // Before a set's look changes, the old owner's values leave Standard's fields for a table and
+  // the new owner's values come back; the firmware's setter then pushes the record to the live
+  // values as always. The table is HTData record 12, loaded after the settings and saved after
+  // them at power off. Its pointer lives in the 12 unused bytes between the zero-filled data and
+  // the heap: the start-up fill is extended to cover them, so the pointer is 0 at every start.
+  const own = adjustable && options.ownParameters === true ? (() => {
+    const native = GR3X_SLOTS_NATIVE;
+    const origin = append(unhex(native.code));
+    const entry = (name: keyof typeof native.exports) => origin + native.exports[name];
+    const styles = GR3X_PHOTO_STYLE_SETTERS.map((at, set) => {
+      const stub = code(`push {r0-r3,ip,lr};mov r2,#${set};bl #${entry('sp_style')};pop {r0-r3,ip,lr};` +
+        `ldr r3,[r0,#4];b #${at + 4};`);
+      patch(at, 0xe5903004, branchWord(at, stub), `own film parameters: look change of photo set ${set}`);
+      return stub;
+    });
+    const load = code(`push {r4,lr};mov r4,r0;bl #${GR3X_LOAD_DATA};mov r0,r4;bl #${entry('sp_after_load')};pop {r4,pc};`);
+    patch(GR3X_LOAD_CALL, branchWord(GR3X_LOAD_CALL, GR3X_LOAD_DATA, 14, true), branchWord(GR3X_LOAD_CALL, load, 14, true),
+      'own film parameters: read the table after the settings load');
+    const save = code(`push {r4,lr};bl #${GR3X_SAVE_DATA};mov r4,r0;bl #${entry('sp_after_save')};mov r0,r4;pop {r4,pc};`);
+    patch(GR3X_SAVE_CALL, branchWord(GR3X_SAVE_CALL, GR3X_SAVE_DATA), branchWord(GR3X_SAVE_CALL, save),
+      'own film parameters: write the table after the settings save');
+    patch(GR3X_ZERO_FILL_END, GR3X_GAP, GR3X_HEAP_BASE, 'start-up zero fill reaches the heap base (clears the table pointer)');
+    return { module: origin, moduleSha256: native.sourceSha256, styles, load, save, exports: { ...native.exports } };
+  })() : undefined;
   const descriptor = code(`push {r1-r3,ip};ldrb r2,[r7,#0x77c];` +
     slots.filter(s => s.record).map(s => `cmp r2,#${s.id};beq slot${s.id};`).join('') +
     `b done;` + slots.filter(s => s.record).map(s => `slot${s.id}:${addr(3, s.record)}str r3,[r4,#8];` +
@@ -250,14 +281,17 @@ export async function buildGr3xImageControls(raw: Uint8Array, options: Gr3xLookO
     ...menu, kind: 'gr3x-image-control-patchset' as const, sites,
     append: { address: menu.append.address, bytes: hex(payload) },
     addedLooks: slots, renderingImplemented: true as const,
-    lookEntries: { aggregate, rawEnum, restriction, enforce, descriptor, gamma, defaults, adapters, setters, activeChecks, activeChecksSet0 },
-    sharedParameters: adjustable,
+    lookEntries: { aggregate, rawEnum, restriction, enforce, descriptor, gamma, defaults, adapters, setters, activeChecks, activeChecksSet0, ...(own ? { ownParameters: own } : {}) },
+    // sharedParameters: films use Standard's storage (T6c). ownParameters: on top of it, each film's
+    // values are swapped into that storage when it is selected (T6d).
+    sharedParameters: adjustable, ownParameters: !!own,
     // A patch-set is not a firmware update. Packaging and native regression checks
     // are separate; camera behavior remains unverified until the user tests it.
     flashable: false as const, cameraUpdateCandidate: false as const, hardwareTested: false,
     blockers: ['native look-path regression suite', 'physical camera test and persistent storage'],
     limitations: ['GR IV Monochrome-inspired replicas, not original GR IV algorithms',
-      ...(adjustable ? ['film parameters are shared with Standard (per Image Control set)'] : ['fixed new-slot parameters']), 'RAW development/EXIF use native base identities',
+      ...(own ? ['films keep their own parameters per photo Image Control set; movie sets share Standard\'s']
+        : adjustable ? ['film parameters are shared with Standard (per Image Control set)'] : ['fixed new-slot parameters']), 'RAW development/EXIF use native base identities',
       'CUBE matrix/curve approximation; camera color accuracy needs sample verification'],
   };
 }

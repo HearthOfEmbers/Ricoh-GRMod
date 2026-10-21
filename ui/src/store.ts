@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react';
-import { card, GFX_RATIOS, GR3X_FILM_IDS, LANGS, MAX_CUSTOM_RATIOS, MAX_EXTRA_SLOTS, SHUTDOWN_MAX_PICTURES, SHUTDOWN_NAME_MAX, validateExtraSlotName, validateRatioName, validateShutdownName } from '@grmod/core';
+import { card, GR3X_FILM_IDS, GR3X_MAX_CUSTOM_RATIOS, GR3X_T4_CUSTOM, LANGS, MAX_CUSTOM_RATIOS, MAX_EXTRA_SLOTS, SHUTDOWN_MAX_PICTURES, SHUTDOWN_NAME_MAX, validateExtraSlotName, validateGr3xRatioName, validateRatioName, validateShutdownName } from '@grmod/core';
 import type { CameraModel, ClarityChange, ExtraSlotSpec, FirmwareInfo, FirmwareSummary, LangCode, PresetResult, RatioPreview, RatioSpec, ShutdownPictureSpec, SlotId, SlotRequest, SoftFocusRequest, SoftFocusStrength } from '@grmod/core';
 import { engine, EngineError } from './engine';
 import { host, HostError, sha256Hex } from './host';
@@ -288,7 +288,9 @@ async function openFirmware(raw: Uint8Array, name: string, persist: boolean): Pr
       ...(!sameFamily ? { slots: emptySlots(), activeSlot: 'CY' as const, soft: false, dateStamp: false, monoUnlock: false } : {}),
       ...(info.family === 'gr3x' ? { page: sameFamily ? state.page : 'ratio' as const, bridgeOpen: false, bridgeAfter: undefined,
         soft: sameFamily && state.soft, dateStamp: false, monoUnlock: sameFamily && state.monoUnlock && info.features.monoUnlock,
-        ratios: GFX_RATIOS.filter(r => !info.factoryRatios.includes(r)).map((ratio, i) => ({ id: `gr3x-${i}`, ratio, name: ratio })) } : {}) });
+        // A list made for the other family does not carry over; an IIIx/III list does.
+        ...(sameFamily && state.ratios.length ? {} : { ratios: t4Ratios() }) } : {}) });
+    if (info.family === 'gr3x') ratiosChanged(true);
     if (info.bridge && persist) toast(t('bridgeOpened'), 'info');
     if (persist) { await host.storeSet('firmware.bin', raw); scheduleSave(); }
     for (const id of info.capabilities.presets ? allSlotKeys() : []) {
@@ -643,11 +645,19 @@ const RATIO_PROBLEMS: Record<NonNullable<RatioPreview['problem']>, Key> = {
   'ratio-metering': 'ratioMetering', 'ratio-conflict': 'ratioConflict', 'ratio-duplicate': 'ratioDup',
 };
 const NAME_PROBLEMS: Record<string, Key> = { 'too-long': 'ratioNameLong', 'bad-char': 'ratioNameBad', empty: 'ratioNameBad' };
+const t4Ratios = (): RatioItem[] => GR3X_T4_CUSTOM.map((r, i) => ({ id: `gr3x-${i}`, ratio: r.ratio, name: r.name ?? r.ratio }));
+/** How many ratios the open firmware takes. */
+export const maxRatios = (s: State = state): number => (s.info?.family === 'gr3x' || (!s.info && isGr3(s.model)) ? GR3X_MAX_CUSTOM_RATIOS : MAX_CUSTOM_RATIOS);
+/** GR III / IIIx: back to the seven ratios of the tested T4 build. */
+export function resetGr3xRatios(): void {
+  set({ ratios: t4Ratios(), activeRatio: 'gr3x-0' });
+  ratiosChanged(true);
+}
 /** Why a row cannot be built (shown in the row), or null. A row without a ratio is simply not built. */
 export function ratioProblem(r: RatioItem): string | null {
   if (!r.ratio.trim()) return null;
   if (r.preview?.problem) return t(RATIO_PROBLEMS[r.preview.problem]);
-  const n = r.name.trim() ? validateRatioName(r.name.trim()) : null;
+  const n = r.name.trim() ? (state.info?.family === 'gr3x' ? validateGr3xRatioName(r.name.trim()) : validateRatioName(r.name.trim())) : null;
   return n ? t(NAME_PROBLEMS[n]) : null;
 }
 /** The menu name a row gets: what was typed, else the ratio as written on its icon. */
@@ -683,7 +693,7 @@ function ratiosChanged(now = false): void {
   if (now) void refreshRatios(); else ratioTimer = setTimeout(() => { void refreshRatios(); }, 160);
 }
 export function addRatio(ratio = ''): void {
-  if (state.ratios.length >= MAX_CUSTOM_RATIOS) { toast(t('ratioMax', { n: MAX_CUSTOM_RATIOS }), 'info'); return; }
+  if (state.ratios.length >= maxRatios()) { toast(t('ratioMax', { n: maxRatios() }), 'info'); return; }
   const empty = state.ratios.find((r) => !r.ratio.trim() && !r.name.trim());
   if (empty && !ratio) { set({ activeRatio: empty.id }); return; }
   const id = Math.random().toString(36).slice(2, 10);
@@ -845,6 +855,7 @@ export async function outputFirmware(dest: Dest, stock = false): Promise<void> {
   const sourceInfo = state.info, sourceRaw = state.raw, sourceModel = state.model;
   const changes = stock ? [] : pendingChanges();
   const ratios = stock ? [] : ratioSpecs();
+  if (!stock && state.info.family === 'gr3x' && ratios.length === 0) { toast(t('gr3xNeedRatio'), 'info'); return; }
   const soft = !stock && softOn();
   const dateStamp = !stock && !!state.dateStamp && !!state.info.features.dateStamp;
   const monoUnlock = !stock && monoUnlockOn();

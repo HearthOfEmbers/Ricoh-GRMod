@@ -23,7 +23,10 @@ import { readGr3xFactoryEntry } from '../src/fw/gr3x/factory';
 import { buildGr3xTestFirmware } from '../src/fw/gr3x/research-package';
 import { gr3xFilmIcon, T6_FILM_NAMES } from '../src/fw/gr3x/film-icons';
 import { GR3X_FILM_IDS } from '../src/fw/gr3x/look-resources';
-import { GFX_RATIOS } from '../src/fw/gr3x/geometry';
+import { GFX_RATIOS, planGr3xMenu } from '../src/fw/gr3x/geometry';
+import type { Gr3xMenuRatio } from '../src/fw/gr3x/geometry';
+import type { Gr3xLookOptions } from '../src/fw/gr3x/image-control';
+import type { Gr3xSoftFocusRequest as SoftFocusRequest } from '../src/fw/gr3x/clarity';
 
 const xPath = process.env.GRMOD_GR3X_FIRMWARE, iiiPath = process.env.GRMOD_GR3_FIRMWARE;
 const soft = [{ level: -1, strength: 'weak' }, { level: -2, strength: 'medium' }, { level: -3, strength: 'strong' }] as const;
@@ -86,14 +89,16 @@ describe.skipIf(!xPath || !iiiPath)('GR III 2.10 is the IIIx 1.60 program', () =
       { name: 'T4-SF1', soft: [...soft], looks: undefined },
       { name: 'T5-L1 replicas', soft: [...soft], looks: { displayRevision: 2 as const, monoReplicas: true, films: films9.slice(0, 2) } },
       { name: 'T6 nine films', soft: [...soft], looks: { displayRevision: 3 as const, monoReplicas: false, films: films9.map((f, i) => (i % 3 === 0 ? { ...f, preset } : f)) } },
-    ];
+      { name: 'T6d own parameters, custom ratios', soft: [...soft], looks: { displayRevision: 3 as const, monoReplicas: false, ownParameters: true, films: films9 },
+        menu: planGr3xMenu([{ ratio: '2.39:1', name: 'Scope' }, { ratio: '4:5' }, { ratio: '3:1' }]) },
+    ] as { name: string; soft: SoftFocusRequest[]; looks?: Gr3xLookOptions; menu?: Gr3xMenuRatio[] }[];
   };
 
   it('every GR III build is the IIIx build of the same recipe with only the identity bytes swapped', async () => {
     const eX = await Engine.open(rawX);
     for (const r of recipes(eX)) {
-      const bX = await buildGr3xTestFirmware(rawX, r.soft, r.looks);
-      const b3 = await buildGr3xTestFirmware(raw3, r.soft, r.looks);
+      const bX = await buildGr3xTestFirmware(rawX, r.soft, r.looks, r.menu);
+      const b3 = await buildGr3xTestFirmware(raw3, r.soft, r.looks, r.menu);
       expect(b3.report.filename).toBe('fwdc239b.bin');
       expect(b3.report.profile).toBe('gr3-hdf-2.10');
       expect(b3.manifest.sites).toEqual(bX.manifest.sites);
@@ -115,8 +120,9 @@ describe.skipIf(!xPath || !iiiPath)('GR III 2.10 is the IIIx 1.60 program', () =
         expected[at] = dec3[o];
       }
       expect(growth).toBeGreaterThanOrEqual(rtosGrowth);
-      const markerX = new TextEncoder().encode(`GR3X-HDF-160-ADJ9-${bX.report.revision}-HARDWARE-UNTESTED\0`);
-      const marker3 = new TextEncoder().encode(`GR3-HDF-210-ADJ9-${b3.report.revision}-HARDWARE-UNTESTED\0`);
+      const entries = r.menu?.length ?? 9;
+      const markerX = new TextEncoder().encode(`GR3X-HDF-160-ADJ${entries}-${bX.report.revision}-HARDWARE-UNTESTED\0`);
+      const marker3 = new TextEncoder().encode(`GR3-HDF-210-ADJ${entries}-${b3.report.revision}-HARDWARE-UNTESTED\0`);
       const end = rtosEnd + rtosGrowth;
       expect(Array.from(oX.subarray(end - 4 - markerX.length, end - 4))).toEqual(Array.from(markerX));
       expected.fill(0, end - 4 - markerX.length, end - 4);

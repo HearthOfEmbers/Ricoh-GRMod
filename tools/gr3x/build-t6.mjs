@@ -21,6 +21,9 @@ if (!input || !directory || !python || !reference || extra.length) {
   process.exit(2);
 }
 const { buildGr3xTestFirmware } = await import('../../core/src/fw/gr3x/research-package.ts');
+const { planGr3xMenu, GR3X_T4_MENU } = await import('../../core/src/fw/gr3x/geometry.ts');
+// GR3X_RATIOS='[{"ratio":"2.39:1","name":"Scope"},…]' builds another ratio list (default: the T4 seven).
+const menu = process.env.GR3X_RATIOS ? planGr3xMenu(JSON.parse(process.env.GR3X_RATIOS)) : GR3X_T4_MENU;
 const { buildGr3xAdjResearch } = await import('../../core/src/fw/gr3x/adj.ts');
 const { openGr3xOfficial } = await import('../../core/src/fw/gr3x/profile.ts');
 const { gr3xLookResources } = await import('../../core/src/fw/gr3x/look-resources.ts');
@@ -48,7 +51,9 @@ for (const [index, name] of T6_FILM_NAMES.entries()) {
   sources.push({ filename, text });
 }
 const soft = [{ level: -1, strength: 'weak' }, { level: -2, strength: 'medium' }, { level: -3, strength: 'strong' }];
-const result = await buildGr3xTestFirmware(raw, soft, { films, monoReplicas: false, displayRevision: 3 });
+// Films keep their own parameters (T6d) unless GR3X_SHARED=1 rebuilds T6c (shared with Standard).
+const ownParameters = process.env.GR3X_SHARED !== '1';
+const result = await buildGr3xTestFirmware(raw, soft, { films, monoReplicas: false, displayRevision: 3, ...(ownParameters ? { ownParameters } : {}) }, menu);
 const target = resolve(directory);
 await mkdir(target);
 const json = async (name, value) => writeFile(join(target, name), JSON.stringify(value, null, 2) + '\n', { flag: 'wx' });
@@ -70,7 +75,7 @@ try {
     if (!section) throw new Error('Missing original section: ' + name);
     await writeFile(join(temporary, name.toLowerCase() + '.bin'), decoded.subarray(section.offset, section.offset + section.size));
   }
-  await writeFile(join(temporary, 'base.json'), JSON.stringify(await buildGr3xAdjResearch(raw)));
+  await writeFile(join(temporary, 'base.json'), JSON.stringify(await buildGr3xAdjResearch(raw, menu)));
   const run = spawnSync(python, [join(here, 'validate_test.py'), '--official', resolve(input),
     '--container', join(target, 'UNVALIDATED.bin'), '--manifest', join(target, 'patch-manifest.json'),
     '--build-report', join(target, 'build-report.json'), '--rtos', join(temporary, 'rtos.bin'),

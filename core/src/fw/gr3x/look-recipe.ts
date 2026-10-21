@@ -7,6 +7,8 @@ export const GR3X_RECIPE_MAGIC = new TextEncoder().encode('GR3X-T5-RECIPE\0');
 export function encodeGr3xLookRecipe(options: Gr3xLookOptions): Uint8Array {
   const recipe = {
     schema: options.displayRevision ?? 2, monoReplicas: options.monoReplicas === true,
+    // Written only when set, so T6c recipes (shared parameters) stay byte-identical.
+    ...(options.ownParameters === true ? { ownParameters: true } : {}),
     films: (options.films ?? []).map(f => ({
       name: f.name,
       ...(f.names && Object.keys(f.names).length ? { names: f.names } : {}),
@@ -32,9 +34,10 @@ export function readGr3xLookRecipe(appendedRtos: Uint8Array): Gr3xLookOptions | 
     if (size > 512000 || start + size > appendedRtos.length) throw new FirmwareError('bad-edit', 'invalid IIIx recipe extent');
     const r = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(appendedRtos.subarray(start, start + size)));
     if (![1, 2, 3].includes(r.schema) || typeof r.monoReplicas !== 'boolean' || !Array.isArray(r.films) ||
-        r.films.length > (r.schema === 3 ? 9 : 2) || (r.schema === 3 && r.monoReplicas) || (r.schema !== 3 && size > 256000))
+        r.films.length > (r.schema === 3 ? 9 : 2) || (r.schema === 3 && r.monoReplicas) || (r.schema !== 3 && size > 256000) ||
+        (r.ownParameters !== undefined && (r.ownParameters !== true || r.schema !== 3)))
       throw new FirmwareError('bad-edit', 'invalid IIIx recipe');
-    return { displayRevision: r.schema, monoReplicas: r.monoReplicas, films: r.films.map((f: Record<string, any>) => {
+    return { displayRevision: r.schema, monoReplicas: r.monoReplicas, ...(r.ownParameters ? { ownParameters: true } : {}), films: r.films.map((f: Record<string, any>) => {
       if (typeof f.name !== 'string' || (f.icon && (!Array.isArray(f.icon) || f.icon.length !== 6400 ||
           f.icon.some((v: number) => !Number.isInteger(v) || v < 0 || v > 255))))
         throw new FirmwareError('bad-edit', 'invalid IIIx recipe slot');

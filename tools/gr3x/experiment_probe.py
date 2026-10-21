@@ -16,16 +16,16 @@ def by_rtos_sha(sha):
         if p['rtos_sha256']==sha: return p
     raise ValueError('Experiment identity does not match a known RTOS')
 from rear_dial_probe import RearDialProbe, SELECTOR, DATA
+from ratio_menu import T4, menu as menu_of, parse
 
 if not __debug__: raise RuntimeError('Validation requires Python assertions; run without -O')
 
-RATIOS = [('4:3',4),('3:2',0),('16:9',5),('65:24',6),('17:6',7),
-          ('3:4',8),('1:1',3),('7:6',9),('5:4',10)]
+RATIOS = T4  # the T4 menu; a manifest may declare another menu (see ratio_menu)
 SITES = {0x536a2a34: bytes.fromhex('0dc0a0e1'), 0x5366634c: bytes.fromhex('36feffeb'),
          0x53666500: bytes.fromhex('920d84e2')}
 
 def crop(w,h,ratio):
-    n,d = map(int,ratio.split(':'))
+    r = parse(ratio); n,d = r.numerator,r.denominator
     def nearest4(value): return 4*((value+2)//4)
     if w*d <= h*n: return w,nearest4(Fraction(w*d,n))
     return nearest4(Fraction(h*n,d)),h
@@ -52,7 +52,9 @@ class ExperimentProbe(NativeProbe):
             raise ValueError('Experiment identity does not match the original RTOS')
         if manifest['firmwareGenerated'] or manifest['hardwareTested'] or manifest['rearDialPatched']:
             raise ValueError('Unexpected experiment scope')
-        if manifest['ratios'] != [dict(ratio=r,id=i) for r,i in RATIOS]:
+        try: m=menu_of(manifest)
+        except AssertionError as exc: raise ValueError('Unexpected ratio menu') from exc
+        if [(r['ratio'],r['id']) for r in manifest['ratios']] != [(r,i) for r,_,i in m.rows]:
             raise ValueError('Unexpected ratio IDs')
         if len(manifest['sites']) != len(SITES): raise ValueError('Unexpected patch count')
         append=manifest['append']; payload=bytes.fromhex(append['bytes'])
@@ -83,7 +85,8 @@ class DirectedCycleProbe(RearDialProbe):
         ExperimentProbe.install(self,data,manifest)
 
 def verify_cycle(data,manifest):
-    n=DirectedCycleProbe(data,manifest);order=[i for _,i in RATIOS];entry=manifest['entries']['directedCycle'];calls=0
+    m=menu_of(manifest)
+    n=DirectedCycleProbe(data,manifest);order=m.order;entry=manifest['entries']['directedCycle'];calls=0
     for initial in order:
         for direction in (0,1):
             n.reset({DATA+0x44:1,DATA+0x4c2:initial})
@@ -96,7 +99,7 @@ def verify_cycle(data,manifest):
                 assert n.notifications==[[0x62053000,0x183,0,0]]
                 calls+=1
             assert bytes(n.uc.mem_read(DATA+0x4c2,1))==bytes([initial])
-    for initial in (1,2,11,255):
+    for initial in sorted({1,2,m.max_id+1,11,255}):
         for direction in (0,1,2,0xffffffff):
             n.reset({DATA+0x44:1,DATA+0x4c2:initial})
             assert n.call(entry,SELECTOR,direction)==0
@@ -107,7 +110,7 @@ def verify_cycle(data,manifest):
         assert n.call(entry,SELECTOR,direction)==0
         assert bytes(n.uc.mem_read(DATA+0x4c2,1))==b'\0' and not n.notifications
         calls+=1
-    return dict(calls=calls,nine_ratio_forward_reverse_wrap=True,
+    return dict(calls=calls,menu_entries=len(order),nine_ratio_forward_reverse_wrap=len(order)==9,all_entries_forward_reverse_wrap=True,
                 original_getter_setter_executed=True,original_notification_arguments=True,
                 invalid_id_direction_ignored=True,selector_ram_only=True,persistence_tested=False,
                 installed_in_rear_dial_router=False,queue_delivery_stubbed=True)
@@ -124,6 +127,7 @@ def preview(probe,aspect,scale,divisor=1,source=(45<<16,30<<16)):
     return after,rects
 
 def verify(data,manifest,patched=None):
+    menu=menu_of(manifest)
     original=NativeProbe(data)
     if patched is None:patched=ExperimentProbe(data,manifest)
     counts=dict(factory_dimensions=0,factory_previews=0,factory_dng=0,
@@ -140,7 +144,7 @@ def verify(data,manifest,patched=None):
         for m in (1.0,1.25,1.78):
             assert patched.dng_window(aspect,m)==original.dng_window(aspect,m)
             counts['factory_dng']+=1
-    for ratio,aspect in RATIOS:
+    for ratio,_,aspect in menu.rows:
         if aspect < 4: continue
         for s in range(4):
             for m in (1.0,1.25,1.78):
@@ -175,7 +179,7 @@ def verify(data,manifest,patched=None):
             assert bytes(patched.uc.mem_read(OUTPUT+8,8))==b'\xa5'*8
             counts['custom_dng']+=1
     # Unknown IDs still reach original diagnostics rather than silently becoming 3:2.
-    for aspect in (11,255):
+    for aspect in sorted({menu.max_id+1,11,255}):
         try: patched.dimensions(aspect)
         except ValueError as exc:
             assert 'assertion failed' in str(exc)

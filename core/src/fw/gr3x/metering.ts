@@ -4,20 +4,21 @@ import { branchWord, movWord, wordsToBytes } from '../aspect/arm';
 import { FirmwareError } from '../types';
 import { GR3X_MAP_NATIVE } from './map-native';
 import type { Gr3xProgram } from './image-pipeline';
-import { GFX_RATIOS } from './geometry';
-import { EXPERIMENT_IDS } from './experimental';
+import { GR3X_MAX_CUSTOM_RATIOS, gr3xCustoms, gr3xMaxId } from './geometry';
 import { alignedCrop, parseRatio } from '../aspect/geometry';
 
 const addr = (reg: string, value: number) => `movw ${reg},#${value & 65535};movt ${reg},#${value >>> 16};`;
 const VIEW_BYTES = 304 + 12 * 36;
 
 export function installGr3xMetering(p: Gr3xProgram) {
-  const rows = GFX_RATIOS.flatMap((ratio, i) => {
-    const id = EXPERIMENT_IDS[i];
-    if (id < 4) return [];
+  const max = gr3xMaxId(p.menu);
+  const rows = gr3xCustoms(p.menu).flatMap(({ id, ratio }) => {
     const screen = alignedCrop(720, 480, parseRatio(ratio))!;
     return [id, screen.width, 720, screen.height, 480];
   });
+  // map.c declares seven rows and seven views. Unused rows are never selected (identities above
+  // the last added ratio stay native); they hold the full 3:2 view.
+  for (let id = max + 1; id < 4 + GR3X_MAX_CUSTOM_RATIOS; id++) rows.push(id, 720, 720, 480, 480);
   const table = p.append(wordsToBytes(rows));
   const origin = p.next();
   const module = GR3X_MAP_NATIVE;
@@ -40,7 +41,7 @@ export function installGr3xMetering(p: Gr3xProgram) {
   `);
   p.patch(0x5365da00, 0xe3a00022, branchWord(0x5365da00, allocation), 'metering: extend only primary record zero allocation');
   const identity = p.code(`
-    uxtb r0,r0;cmp r0,#4;blo native;cmp r0,#10;bxls lr
+    uxtb r0,r0;cmp r0,#4;blo native;cmp r0,#${max};bxls lr
     native:b #0x536a3204
   `);
   p.patch(0x536a3200, 0xe6ef0070, branchWord(0x536a3200, identity), 'metering: preserve known custom aspect until selecting its map view');

@@ -11,6 +11,7 @@ from pathlib import Path
 from unicorn import arm_const as reg
 from liveview_probe import LiveProbe
 from native_probe import OBJECT
+from ratio_menu import menu as menu_of, is_t4
 
 T2_MANIFEST_SHA='5a538ac51f6ac1c5823a3d5cf046f20f5009a800318646680e813212c938e6f0'
 WIDE=(5,6,7)
@@ -82,6 +83,8 @@ def verify(data,manifest):
     archived=Path(__file__).with_name('fixtures')/'t2-patch-manifest.json'
     raw=archived.read_bytes();assert hashlib.sha256(raw).hexdigest()==T2_MANIFEST_SHA
     old=DevelopmentProbe(data,json.loads(raw));current=DevelopmentProbe(data,manifest)
+    m=menu_of(manifest)
+    if not is_t4(m): return verify_custom(old,current,m)
     examples=[];states=0;old_failures=0;unaffected=0;calls=0
     for mode in (0,2):
         for resolution in range(1,32):
@@ -119,6 +122,39 @@ def verify(data,manifest):
                 executed_functions=['0x53669ab4','0x53669bd0','0x5345a3c8','0x53457e00'],examples=examples,
                 hardware_tested=False,
                 scope='Synthetic mode/flag/zoom combinations; native recipe producer and complete development destination builder. No sensor DMA, full capture event sequence or physical LCD execution.')
+
+def verify_custom(old,current,m):
+    """Another ratio list: no archived build has its geometry, so the T2 comparison covers the
+    native identities only. Every added identity must stay inside the canvas the native consumer
+    reads, keep the physical allocation, and give a four-row aligned height where it crops rows."""
+    states=calls=unaffected=0;checked=dict(wide=0,narrow=0)
+    for mode in (0,2):
+        for resolution in range(1,32):
+            for flags in ((0,0),(0,1),(1,0),(1,1)):
+                for zoom in (8192,10240,14629):
+                    native=None
+                    for identity in range(4):
+                        previous=old.recipe(identity,resolution,mode,flags,zoom)
+                        result=current.recipe(identity,resolution,mode,flags,zoom)
+                        assert result==previous,(identity,resolution,mode,flags,zoom)
+                        if identity==0:native=result
+                        unaffected+=1;states+=1;calls+=8
+                    for identity,num,den in m.custom:
+                        result=current.recipe(identity,resolution,mode,flags,zoom);states+=1;calls+=4
+                        assert result['in_bounds'],result
+                        assert result['allocation']==native['allocation']
+                        assert all(v>0 for v in result['dimensions'])
+                        if identity in m.wide:
+                            assert result['dimensions'][1]%4==0 and result['dimensions'][1]<=native['dimensions'][1]
+                            checked['wide']+=1
+                        else:
+                            assert result['dimensions'][0]<=native['dimensions'][0]
+                            checked['narrow']+=1
+    return dict(calls=calls,recipe_states=states,custom_menu=True,native_states_identical_to_T2=unaffected,
+                custom_states_in_bounds=checked,T2_comparison='native identities only (no archived build has this ratio list)',
+                physical_allocation_unchanged=True,hardware_tested=False,
+                executed_functions=['0x53669ab4','0x53669bd0','0x5345a3c8','0x53457e00'],
+                scope='Synthetic mode/flag/zoom combinations; native recipe producer and complete development destination builder.')
 
 if __name__=='__main__':
     import argparse

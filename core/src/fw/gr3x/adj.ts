@@ -8,6 +8,8 @@ import { drawRatioIcon } from '../aspect/icon';
 import { sectionsOf, sha256Hex } from '../container';
 import { FirmwareError } from '../types';
 import { buildGr3xExperiment } from './experimental';
+import { GR3X_T4_MENU, gr3xCustoms } from './geometry';
+import type { Gr3xMenuRatio } from './geometry';
 import { GR3X_160, openGr3xOfficial } from './profile';
 import { installGr3xImageIdentity, installGr3xDevelopAndPlayback, installGr3xAutofocus } from './image-pipeline';
 import { installGr3xMetering } from './metering';
@@ -45,8 +47,9 @@ function utf16z(s: string): Uint8Array {
 }
 function fail(message: string): never { throw new FirmwareError('unexpected-layout', message); }
 
-export async function buildGr3xAdjResearch(raw: Uint8Array) {
-  const geometry = await buildGr3xExperiment(raw);
+export async function buildGr3xAdjResearch(raw: Uint8Array, ratioMenu: readonly Gr3xMenuRatio[] = GR3X_T4_MENU) {
+  const geometry = await buildGr3xExperiment(raw, ratioMenu);
+  const menu = geometry.menu, count = menu.length, spelled = count === 9 ? 'nine' : String(count);
   const { decoded, profile } = await openGr3xOfficial(raw);
   const p = GR3X_160, m = GR3X_ADJ;
   const rtos = decoded.subarray(p.rtosOffset, p.rtosOffset + p.rtosLength);
@@ -101,10 +104,10 @@ export async function buildGr3xAdjResearch(raw: Uint8Array) {
   };
 
   const order = append(Uint8Array.from(geometry.ratios.map(r => r.id)));
-  for (const at of m.orderSites) pair(at, at + 4, 3, m.order, order, 'nine-entry native menu order');
-  for (const at of m.countSites) patch(at, 0xe3a00002, 0xe3a00009, 'nine-entry native menu count');
+  for (const at of m.orderSites) pair(at, at + 4, 3, m.order, order, `${spelled}-entry native menu order`);
+  for (const at of m.countSites) patch(at, 0xe3a00002, 0xe3a00000 | count, `${spelled}-entry native menu count`);
 
-  const additions = geometry.ratios.filter(r => r.id >= 4);
+  const additions = gr3xCustoms(menu);
   const textIds = new Map([[0, 241], [3, 243]]);
   const iconIds = new Map([[0, 257], [3, 256]]);
   const columns = m.textCount + additions.length;
@@ -114,8 +117,8 @@ export async function buildGr3xAdjResearch(raw: Uint8Array) {
     return row;
   });
   additions.forEach((r, i) => {
-    const text = append(utf16z(r.ratio));
-    const record = append(Uint8Array.from([r.ratio.length + 1, 1, 0, 0, ...words([text])]));
+    const text = append(utf16z(r.name));
+    const record = append(Uint8Array.from([r.name.length + 1, 1, 0, 0, ...words([text])]));
     const id = m.textCount + i;
     textIds.set(r.id, id);
     rows.forEach(row => new DataView(row.buffer).setUint32(id * 4, record, true));
@@ -143,12 +146,12 @@ export async function buildGr3xAdjResearch(raw: Uint8Array) {
   const ratioText = lookup(textIds), ratioIcon = lookup(iconIds);
   patch(m.ratioText, 0xe3510000, branchWord(m.ratioText, ratioText), 'ratio identity to IIIx text ID');
   patch(m.ratioIcon, 0xe3510000, branchWord(m.ratioIcon, ratioIcon), 'ratio identity to IIIx icon ID');
-  // Fn cycling uses the same nine entries. It does not intercept a physical dial.
+  // Fn cycling uses the same menu entries. It does not intercept a physical dial.
   const fnCycle = code(geometry.ratios.map((r, i) =>
-    `cmp r0,#${r.id}; moveq r1,#${geometry.ratios[(i + 1) % 9].id}; beq selected;`).join('\n') +
+    `cmp r0,#${r.id}; moveq r1,#${geometry.ratios[(i + 1) % count].id}; beq selected;`).join('\n') +
     `mov r1,#${geometry.ratios[0].id}; selected:b #${m.fnJoin};`);
-  patch(m.fnHook, 0xe5d31000, branchWord(m.fnHook, fnCycle), 'Fn cycle through the nine menu entries');
-  const program = { code, patch, append, next: () => geometry.append.address + ((length + 3) & ~3) };
+  patch(m.fnHook, 0xe5d31000, branchWord(m.fnHook, fnCycle), `Fn cycle through the ${spelled} menu entries`);
+  const program = { code, patch, append, next: () => geometry.append.address + ((length + 3) & ~3), menu };
   const imageEntries = installGr3xImageIdentity(program);
   const developEntries = installGr3xDevelopAndPlayback(program);
   const afEntries = installGr3xAutofocus(program);
@@ -169,6 +172,7 @@ export async function buildGr3xAdjResearch(raw: Uint8Array) {
     catalogs: { order, textRoots, textColumns: columns, iconRoot, iconCount: m.iconCount + additions.length },
     iconAddition: { originalLength: originalIcons.length, originalSha256: await sha256Hex(originalIcons), bytes: hex(iconAddition) },
     ratios: geometry.ratios.map(r => ({ ...r, textId: textIds.get(r.id)!, iconId: iconIds.get(r.id)! })),
+    menu: menu.map(r => ({ ...r })),
     firmwareGenerated: false, hardwareTested: false, rearDialPatched: false,
     blockers: ['physical update and camera startup', 'power-cycle and U-mode storage',
       'real ADJ rendering, AF/AE/ISP, JPEG/RAW capture and playback'],

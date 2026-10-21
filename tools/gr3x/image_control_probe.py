@@ -35,6 +35,11 @@ class LookProbe(AdjProbe):
         super().__init__(data, {**manifest, 'kind': 'gr3x-adj-patchset'})
         self.queue = []
         self.uc.mem_map(SHIM, 0x1000)
+        if manifest.get('ownParameters'):
+            # The table pointer of own film parameters (0x55804374) is zeroed at every start.
+            # Left 0 here, the module stays out of the way and these checks see the T6c
+            # behaviour underneath; slots_probe.py exercises the module itself.
+            self.uc.mem_map(0x55800000, 0x100000)
         # R12 receives the original member-function address, R0 is the native User
         # object. Real validation/commit receives R1=argument pointer, R2=0.
         # Only command 2 stores its Boolean result through the queue output pointer.

@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { color, EXTRA_NAME_MAX, halateRgba, halationLight, MAX_CUSTOM_RATIOS, MAX_EXTRA_SLOTS, SHUTDOWN_H, SHUTDOWN_NAME_MAX, SHUTDOWN_W } from '@grmod/core';
+import { color, EXTRA_NAME_MAX, GR3X_RATIO_NAME_MAX, halateRgba, halationLight, MAX_EXTRA_SLOTS, SHUTDOWN_H, SHUTDOWN_NAME_MAX, SHUTDOWN_W } from '@grmod/core';
 import type { SlotId } from '@grmod/core';
 import type { ReactNode } from 'react';
 import { DropZone, FileButton, Ico, IconCanvas, Menu, Prop, RatioIcon, RgbCanvas, Segmented, Switch } from './components';
@@ -11,7 +11,7 @@ import { onUiScale, uiScale } from './fit';
 import { applySlot } from './preview';
 import {
   addRatio, addWallFiles, askForOfficial, bridgeLoaded, loadFirmwareFile, loadIconImage, loadPresetFile, loadPreviewFile, moveWall, nameProblem, openCrop, outputFirmware, previewPhoto, removePreset, removeWall,
-  ratioName, ratioProblem, removeRatio, setActiveRatio, setActiveSlot, setCrop, setIcon, setName, setPreviewMode, setRatio, setRatioBackdrop, useStore, wallBitmap,
+  maxRatios, ratioName, ratioProblem, removeRatio, resetGr3xRatios, setActiveRatio, setActiveSlot, setCrop, setIcon, setName, setPreviewMode, setRatio, setRatioBackdrop, useStore, wallBitmap,
   setSoft,
   setDateStamp,
   setMonoUnlock,
@@ -472,7 +472,7 @@ const COMMON_RATIOS = ['65:24', '2.39:1', '2:1', '5:4', '7:6', '4:5'];
 const size = (s: [number, number]): string => `${s[0]}×${s[1]}`;
 
 function RatioRow({ r, active, tour }: { r: RatioItem; active: boolean; tour?: string }) {
-  const locked = useStore(s => s.info?.family === 'gr3x');
+  const gr3x = useStore(s => s.info?.family === 'gr3x');
   const problem = ratioProblem(r);
   const p = r.preview;
   const busy = !!r.ratio.trim() && !p;
@@ -480,17 +480,17 @@ function RatioRow({ r, active, tour }: { r: RatioItem; active: boolean; tour?: s
     <div className={`ratio-row ${active ? 'on' : ''}`} data-tour={tour} onPointerDownCapture={() => setActiveRatio(r.id)} onFocusCapture={() => setActiveRatio(r.id)}>
       <RatioIcon pixels={p?.icon} width={48} />
       <input
-        className={`input ratio-in ${p?.problem ? 'bad' : ''}`} value={r.ratio} readOnly={locked} maxLength={16} spellCheck={false} placeholder={t('ratioPlaceholder')} aria-label={t('navRatio')}
+        className={`input ratio-in ${p?.problem ? 'bad' : ''}`} value={r.ratio} maxLength={16} spellCheck={false} placeholder={t('ratioPlaceholder')} aria-label={t('navRatio')}
         autoFocus={!r.ratio} onChange={(e) => setRatio(r.id, { ratio: e.target.value.replace(/[^0-9:.：/xX×]/g, '').replace(/[：/xX×]/g, ':') })}
       />
       <input
-        className={`input ratio-name ${problem && !p?.problem ? 'bad' : ''}`} value={r.name} readOnly={locked} maxLength={24} spellCheck={false} placeholder={p?.label || t('name')} aria-label={t('name')}
+        className={`input ratio-name ${problem && !p?.problem ? 'bad' : ''}`} value={r.name} maxLength={gr3x ? GR3X_RATIO_NAME_MAX : 24} spellCheck={false} placeholder={p?.label || t('name')} aria-label={t('name')}
         onChange={(e) => setRatio(r.id, { name: e.target.value })}
       />
       <span className={`ratio-size ${problem ? 'bad' : ''}`} title={problem || undefined}>
         {busy ? <span className="spinner small" /> : problem ? <span className="ellipsis">{problem}</span> : p?.sizes ? size(p.sizes[0]) : ''}
       </span>
-      <button disabled={locked} className="btn ghost icon-only ratio-x" title={t('remove')} aria-label={t('remove')} onClick={() => removeRatio(r.id)}>{Ico.x}</button>
+      <button className="btn ghost icon-only ratio-x" title={t('remove')} aria-label={t('remove')} onClick={() => removeRatio(r.id)}>{Ico.x}</button>
     </div>
   );
 }
@@ -548,20 +548,22 @@ export function RatioPage() {
   const ratios = useStore((s) => s.ratios);
   const activeId = useStore((s) => s.activeRatio);
   const active = ratios.find((r) => r.id === activeId) || ratios[0];
-  const full = ratios.length >= MAX_CUSTOM_RATIOS;
+  const max = useStore((s) => maxRatios(s));
+  const full = ratios.length >= max;
   const used = new Set(ratios.map((r) => r.ratio.trim()));
   return (
     <DropZone className="page" accept={isFirmware} onFiles={(f) => { void loadFirmwareFile(f[0]); }}>
       <header className="page-head">
         <span className="page-icon">{Ico.ratio}</span>
         <h1>{t('navRatio')}</h1>
-        {info && <div className="head-right"><span className="chip">{info.family === 'gr3x' ? 'ADJ9 · T4' : `${ratios.filter(r => r.ratio.trim()).length}/${MAX_CUSTOM_RATIOS}`}</span></div>}
+        {info && <div className="head-right"><span className="chip">{`${ratios.filter(r => r.ratio.trim()).length}/${max}`}</span></div>}
       </header>
       {!info && <FirmwareHero />}
       {info?.family === 'gr3x' && <div className="gr3x-notice" role="status">
         <b>{t('gr3xPreview')}</b><p>{t('gr3xIntro')}</p><p>{t('gr3xOperation')}</p>
         <button className="btn small" onClick={() => { void outputFirmware({ kind: 'folder' }, true); }}>{t('exportStock')}</button>
         <button className="btn small" onClick={() => { void outputFirmware({ kind: 'card' }, true); }}>{t('writeStock')}</button>
+        <button className="btn small" onClick={() => resetGr3xRatios()}>{t('gr3xRatioReset')}</button>
       </div>}
       {info && (
         <div className="ratio" data-tour-page="ratio">
@@ -571,7 +573,7 @@ export function RatioPage() {
               {(info.factoryRatios || FACTORY_RATIOS).map((f) => <span key={f} className="chip muted">{f}</span>)}
             </div>
             {ratios.map((r, i) => <RatioRow key={r.id} r={r} active={r.id === active?.id} tour={i === 0 ? 'ratio-row' : undefined} />)}
-            {!full && info.family !== 'gr3x' && (
+            {!full && (
               <div className="ratio-add">
                 <button className="btn dashed fill" data-tour="ratio-add" onClick={() => addRatio()}>{Ico.plus}<span>{t('ratioAdd')}</span></button>
                 <div className="chips" data-tour="ratio-common">

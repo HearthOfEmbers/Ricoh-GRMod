@@ -74,6 +74,14 @@ def main():
             with path.open('x') as f:json.dump(report,f,indent=2);f.write('\n')
             results['look-icons']=dict(passed=True,calls=report['native_calls'],report=path.name,sha256=hashlib.sha256(path.read_bytes()).hexdigest())
             print('look-icons: passed',flush=True)
+        if manifest.get('ownParameters'):
+            from slots_probe import verify as slots_verify
+            report=slots_verify(data,manifest)
+            report['candidate_sha256']=sha
+            path=a.output/'own-film-parameters.json'
+            with path.open('x') as f:json.dump(report,f,indent=2);f.write('\n')
+            results['own-film-parameters']=dict(passed=True,calls=report['calls'],report=path.name,sha256=hashlib.sha256(path.read_bytes()).hexdigest())
+            print('own-film-parameters: passed',flush=True)
     summary=dict(schema=1,kind='gr3x-adj9-'+build['revision']+'-validation',candidate_sha256=sha,
                  all_checks_passed=True,checks=results,native_function_cases=sum(r['calls'] for r in results.values()),
                  container_checks=len(build['checks']),patch_sites=len(manifest['sites']),

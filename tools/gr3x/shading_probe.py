@@ -28,7 +28,7 @@ def verify(data,manifest):
             for mag in (1.,1.25,struct.unpack('<f',struct.pack('<I',0x3fe49249))[0]):
                 for width,height in ((17,13),(32,24),(65,49)):
                     baseline=tables(old,0,amount,mode,mag,width,height);calls+=1
-                    for aspect in range(11):
+                    for aspect in range(new.menu.max_id+1):
                         got=tables(new,aspect,amount,mode,mag,width,height);calls+=1
                         if aspect in (1,2,3):
                             expected=tables(old,aspect,amount,mode,mag,width,height);calls+=1
