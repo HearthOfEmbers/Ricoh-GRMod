@@ -34,7 +34,7 @@ import { assembleWords, branchTarget, branchWord, movImmediate, movWord } from '
 import { BASE, ICON_CATALOG, LOOKUP_BOUNDS, OFFICIAL_RTOS_LENGTH, Patch, TEXT_CATALOG, concat, expectWord, u16le, u32le, utf16z } from './build';
 import { linkModule } from './native-link';
 import { SLOT_PARAMETERS, SLOT_PARAMS_MODULE } from './slotparams-native';
-import { HALATION_NAMES, halationIcon, halationScale, installHalationModule, readHalation } from './halation';
+import { HALATION_NAMES, halationIcon, halationLight, halationScale, installHalationModule, readHalation } from './halation';
 import { FirmwareError } from '../types';
 
 export const MAX_EXTRA_SLOTS = 6;
@@ -401,7 +401,7 @@ export function installExtraSlots(p: Patch, iconbin: Uint8Array, slots: readonly
     }
     for (const [site, r] of LOOKUP_BOUNDS) p.setWord(site, movWord(r, Math.max(HALATION_SCALE_ICON_ID, movImmediate(p.word(site)))), 'icon upper bound');
     installHalationScreens(p, count);
-    installHalationModule(p, slots.map((s) => s.halation === true), EXTRA_FIRST_STYLE, HALATION_STASH);
+    installHalationModule(p, slots.map((s) => s.halation === true), EXTRA_FIRST_STYLE, HALATION_STASH, slots.map((s) => halationLight(s.curves, s.postQ9)));
   }
   return concat(parts);
 }

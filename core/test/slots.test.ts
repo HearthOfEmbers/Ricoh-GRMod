@@ -11,6 +11,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { Engine, color, fw } from '../src';
 import { syntheticSamples } from '../src/color/convert';
 import type { ExtraSlotSpec } from '../src/fw';
+import { Patch } from '../src/fw/aspect/build';
 
 const P = new URL('../testdata/private/', import.meta.url).pathname;
 const have = existsSync(P + 'official.bin');
@@ -147,6 +148,9 @@ describe.skipIf(!have)('added slots: firmware files', () => {
     const icons = secs.find((x) => x.name === 'ICONBIN')!;
     const back = aspect.readExtraSlots(d.slice(rtos.offset, rtos.offset + rtos.size), d.subarray(icons.offset, icons.offset + icons.size), 3)!;
     expect(back.map((x) => x.halation)).toEqual([true, undefined, true]);
+    // each slot's own light, from its look
+    const patch = new Patch(d.slice(rtos.offset, rtos.offset + rtos.size));
+    expect(aspect.readHalationLight(patch, 3)).toEqual(slots.map((x) => aspect.halationLight(x.curves, x.postQ9)));
     // the parameter's name in the camera's languages (rows of the text catalog: 0 Japanese, 1 English, 19 Simplified Chinese)
     const r = d.subarray(rtos.offset, rtos.offset + rtos.size);
     const word = (va: number): number => new DataView(r.buffer, r.byteOffset).getUint32(va - 0x53000000, true);
@@ -164,6 +168,20 @@ describe.skipIf(!have)('added slots: firmware files', () => {
     const plain = await eng.buildFirmware([], [], [], { extraSlots: [{ ...slotSpec(eng, 0), halation: false }] });
     expect(plain.sha256).toBe(none.sha256);
   }, 120_000);
+
+  it('halation on all six added slots (what GR Mod 0.7.4 always builds), with soft focus and the date imprint', async () => {
+    const eng = await Engine.open(raw());
+    const slots = Array.from({ length: 6 }, (_, i) => ({ ...slotSpec(eng, i % 3), name: `Look ${i + 1}`, halation: true }));
+    const b = await eng.buildFirmware([], [], [], { dateStamp: true, adjSoftFocus: true, extraSlots: slots });
+    expect(Object.values(b.checks).every((v) => v === true)).toBe(true);
+    expect((await eng.inspect(b.file)).verified).toBe(true);
+    const d = new fw.Firmware(b.file).decoded;
+    const secs = fw.sectionsOf(d);
+    const rtos = secs.find((x) => x.name === 'RTOS')!;
+    const icons = secs.find((x) => x.name === 'ICONBIN')!;
+    const back = aspect.readExtraSlots(d.slice(rtos.offset, rtos.offset + rtos.size), d.subarray(icons.offset, icons.offset + icons.size), 6)!;
+    expect(back.map((x) => x.halation)).toEqual([true, true, true, true, true, true]);
+  }, 180_000);
 
   it('halation preview: the fixed look lifts red first and leaves dark pictures alone', () => {
     const w = 400, h = 300;
@@ -187,6 +205,31 @@ describe.skipIf(!have)('added slots: firmware files', () => {
     expect(g).toBeGreaterThanOrEqual(b - 2);
     expect(at(strong, 212, 150)[0]).toBeGreaterThan(at(weak, 212, 150)[0]);
     expect(at(strong, 390, 10)).toEqual([30, 30, 30]);
+  });
+
+  it('halation light follows the look: a look whose white is 238 still spreads its highlights', () => {
+    const curve = (top: number): Uint16Array => Uint16Array.from({ length: 256 }, (_, i) => Math.round(Math.min(1, (i * 64) / 16383) * top * 16383));
+    const plain = aspect.halationLight([curve(1), curve(1), curve(1)]);
+    expect(plain).toEqual(aspect.PLAIN_LIGHT);
+    expect(plain).toEqual({ threshold: 235, escale: 819 });
+    const dim = aspect.halationLight([curve(238 / 255), curve(238 / 255), curve(238 / 255)]);
+    expect(dim.threshold).toBe(219); // 235 * 238 / 255
+    expect(dim.escale).toBe(Math.round(16384 / (238 - 219)));
+    // a look that clips early keeps a few levels
+    const clip = aspect.halationLight([curve(1.2), curve(1.2), curve(1.2)]);
+    expect(clip.threshold).toBe(255 - aspect.HALATION.minRange);
+    const w = 400, h = 300;
+    const img = (): Uint8ClampedArray => {
+      const d = new Uint8ClampedArray(w * h * 4);
+      for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) d.set(Math.hypot(x - 200, y - 150) < 6 ? [232, 232, 232, 255] : [30, 30, 30, 255], (y * w + x) * 4);
+      return d;
+    };
+    const fixed = img(), own = img();
+    aspect.halateRgba(fixed, w, h, 2);
+    aspect.halateRgba(own, w, h, 2, dim);
+    const at = (d: Uint8ClampedArray, x: number, y: number): number[] => Array.from(d.slice((y * w + x) * 4, (y * w + x) * 4 + 3));
+    expect(at(fixed, 212, 150)).toEqual([30, 30, 30]); // below the fixed 235: nothing
+    expect(at(own, 212, 150)[0]).toBeGreaterThan(at(own, 212, 150)[1] + 40);
   });
 
   it('refuses more than six slots, bad names and bad colour data', async () => {

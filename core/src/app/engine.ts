@@ -37,6 +37,7 @@ import {
   readBuildRevision,
   readExtensionFeatures,
   readExtraSlotCount,
+  readShutdownCount,
   readRatioRecord,
   resolveLayout,
   sectionsOf,
@@ -51,7 +52,7 @@ import {
   SOFT_FOCUS_STRENGTHS,
   clarityChanges,
 } from '../fw';
-import type { BuildResult, BuiltRatio, ClarityChange, ClarityEdit, ExtraSlotSpec, SoftFocusLevel, SoftFocusStrength, FactoryEntry, LangCode, Layout, NameValidation, Range, RatioSpec, SlotEdit, SlotId as NativeSlotId } from '../fw';
+import type { BuildResult, BuiltRatio, ClarityChange, ClarityEdit, ExtraSlotSpec, ShutdownPictureSpec, SoftFocusLevel, SoftFocusStrength, FactoryEntry, LangCode, Layout, NameValidation, Range, RatioSpec, SlotEdit, SlotId as NativeSlotId } from '../fw';
 import { grownRanges, growPayload } from '../fw/aspect/package';
 import { BRIDGE_SHA256, BRIDGE_SIZE, isBridgeFirmware, makeBridgeFirmware, officialFromBridge } from '../fw/bridge';
 import { convertCube, convertXmp, quantizeSlot } from '../color';
@@ -200,6 +201,8 @@ export interface FirmwareSummary {
   monoUnlock: boolean;
   /** Image Control slots the file adds (empty when none, or when they cannot be read). */
   extraSlots: { name: string; icon: Uint8Array }[];
+  /** Power-off pictures chosen in the camera's End Screen menu (absent when none, or when they cannot be read). */
+  shutdownPictures?: ShutdownPictureSpec[];
 }
 
 /** Additions besides the slots and the ratios. */
@@ -212,6 +215,8 @@ export interface BuildOptions {
   monoUnlock?: boolean;
   /** Added Image Control slots (1 to 6), after the factory ones. */
   extraSlots?: ExtraSlotSpec[];
+  /** Power-off pictures (1 to 8) chosen in the camera's End Screen menu; see `encodeShutdownPicture`. */
+  shutdownPictures?: ShutdownPictureSpec[];
   /** Test builds only: a fixed setting byte (1 short, 3 long style) instead of the camera menu. */
   dateStampFixed?: number;
   /** Test builds only: print the encoder configuration on the 720x480 picture. */
@@ -510,14 +515,26 @@ export class Engine {
       else if (grown !== 0) return unknown;
     }
     // ICONBIN grows only when icons were added (a build that only appends code leaves it as it is).
-    if (!(rtosGrowth > 0 && iconGrowth >= 0 && rtosGrowth % FRAME_SIZE === 0 && iconGrowth % FRAME_SIZE === 0 && dec.length === DECODED_SIZE + rtosGrowth + iconGrowth)) return unknown;
+    // RES grows only by power-off pictures: one run of files inserted between official ones.
+    const resGrowth = dec.length - DECODED_SIZE - rtosGrowth - iconGrowth;
+    if (!(rtosGrowth > 0 && iconGrowth >= 0 && resGrowth >= 0 && rtosGrowth % FRAME_SIZE === 0 && iconGrowth % FRAME_SIZE === 0 && resGrowth % FRAME_SIZE === 0)) return unknown;
+    const resInsert = resGrowth > 0 ? aspect.findResInsertion(this.decoded, dec, FRAME_SIZE) : null;
+    if (resGrowth > 0 && !(resInsert && resInsert.length === resGrowth)) return unknown;
     // The payload with the added blocks taken out again: official layout.
     const aligned = new Uint8Array(DECODED_SIZE);
     const rtosEnd = RTOS_OFFSET + RTOS_LENGTH;
     const iconEnd = ICONBIN_OFFSET + ICONBIN_LENGTH;
     aligned.set(dec.subarray(0, rtosEnd), 0);
     aligned.set(dec.subarray(rtosEnd + rtosGrowth, iconEnd + rtosGrowth), rtosEnd);
-    aligned.set(dec.subarray(iconEnd + rtosGrowth + iconGrowth), iconEnd);
+    if (resInsert) {
+      const after = rtosGrowth + iconGrowth;
+      aligned.set(dec.subarray(iconEnd + after, resInsert.at + after), iconEnd);
+      aligned.set(dec.subarray(resInsert.at + after + resGrowth), resInsert.at);
+      const count = aspect.readRes(this.decoded).countOffset;
+      aligned.set(this.decoded.subarray(count, count + 4), count);
+    } else {
+      aligned.set(dec.subarray(iconEnd + rtosGrowth + iconGrowth), iconEnd);
+    }
     aligned.set(this.decoded.subarray(RTOS_OFFSET - 4, RTOS_OFFSET), RTOS_OFFSET - 4);
     aligned.set(this.decoded.subarray(ICONBIN_OFFSET - 4, ICONBIN_OFFSET), ICONBIN_OFFSET - 4);
     const specs = readRatioRecord(dec.subarray(RTOS_OFFSET, rtosEnd + rtosGrowth));
@@ -530,14 +547,23 @@ export class Engine {
       if (!slots) return { ...unknown, kind: 'modified' };
       features.extraSlots = slots;
     }
+    // Power-off pictures: names and identities from the image, JPEGs from RES.
+    const pictureCount = readShutdownCount(dec.subarray(RTOS_OFFSET, rtosEnd + rtosGrowth)) ?? 0;
+    if (pictureCount > 0 || resInsert) {
+      const menu = aspect.readShutdownMenu(new aspect.Patch(dec.slice(RTOS_OFFSET, rtosEnd + rtosGrowth)));
+      const jpegs = aspect.readShutdownJpegs(dec, pictureCount);
+      if (!menu || !jpegs || menu.length !== pictureCount || !resInsert) return { ...unknown, kind: 'modified' };
+      features.shutdown = { pictures: menu.map((m, k) => ({ ...m, jpeg: jpegs[k] })), factory: aspect.factoryShutdownJpegs(this.decoded) };
+    }
     // Files of GR Mod 0.2.x are revision 1; they are checked against what that revision builds.
     const revision = readBuildRevision(dec.subarray(RTOS_OFFSET, rtosEnd + rtosGrowth)) ?? 1;
     const modified = (verified: boolean, ratios: BuiltRatio[], slotsFrom: Uint8Array): FirmwareSummary => ({
-      sha256, kind: 'modified', changedBytes: countChangedBytes(aligned, this.decoded) + rtosGrowth + iconGrowth, verified, slots: describe(slotsFrom), ratios, softFocus: clarityChanges(slotsFrom),
+      sha256, kind: 'modified', changedBytes: countChangedBytes(aligned, this.decoded) + rtosGrowth + iconGrowth + resGrowth, verified, slots: describe(slotsFrom), ratios, softFocus: clarityChanges(slotsFrom),
       adjSoftFocus: !!features.adjSoftFocus,
       dateStamp: !!features.dateStamp,
       monoUnlock: !!features.monoUnlock,
       extraSlots: (features.extraSlots ?? []).map((x) => ({ name: x.name, icon: x.icon })),
+      ...(features.shutdown ? { shutdownPictures: [...features.shutdown.pictures] } : {}),
     });
     if (!specs) return modified(false, [], aligned);
     let ratios: BuiltRatio[] = [];
@@ -569,7 +595,7 @@ export class Engine {
       const grown = growPayload(aligned, built, specs);
       const same = grown.decoded.length === dec.length && equalRange(grown.decoded, 0, dec, 0, dec.length);
       if (!same) return modified(false, ratios, aligned);
-      const ranges: Range[] = editable.map((r) => (r.offset >= ICONBIN_OFFSET ? { ...r, offset: r.offset + grown.rtosGrowth } : r));
+      const ranges: Range[] = editable.map((r) => (r.offset >= ICONBIN_OFFSET ? { ...r, offset: r.offset + grown.rtosGrowth + (r.offset >= ICONBIN_OFFSET + ICONBIN_LENGTH ? grown.iconGrowth : 0) } : r));
       ranges.push(...grownRanges(grown, built));
       const checks = selfCheckGrown(this.raw, raw, ranges, grown.decoded);
       return modified(Object.values(checks).every((v) => v === true), ratios, aligned);
@@ -583,6 +609,11 @@ export class Engine {
    * new one must not collide with them). Never throws.
    */
   previewRatio(ratio: string, others: readonly string[] = []): RatioPreview {
+    return this.ratioPreview(ratio, others, true);
+  }
+
+  /** `suggest`: look for the nearest ratios that work; the candidates themselves are checked without it (else each would search again, without end). */
+  private ratioPreview(ratio: string, others: readonly string[], suggest: boolean): RatioPreview {
     if (this.layout === null) {
       try {
         const g = planGr3xRatio(ratio);
@@ -628,7 +659,7 @@ export class Engine {
       if (e instanceof FirmwareError) {
         const known = ['bad-ratio', 'ratio-factory', 'ratio-too-extreme', 'ratio-quick-view', 'ratio-metering', 'ratio-conflict'];
         const problem = (known.includes(e.code) ? e.code : 'bad-ratio') as RatioPreview['problem'];
-        if (problem !== 'ratio-quick-view') return { problem };
+        if (problem !== 'ratio-quick-view' || !suggest) return { problem };
         // Step the screen rectangle 4 pixels at a time in both directions until a ratio works.
         const nearest: string[] = [];
         try {
@@ -642,7 +673,7 @@ export class Engine {
                 const h = wideFrame ? screen.height + direction * 4 * k : aspect.SCREEN_H;
                 if (!(w >= 4 && w <= aspect.SCREEN_W && h >= 4 && h <= aspect.SCREEN_H)) break;
                 const candidate = ratioText(w, h);
-                if (this.previewRatio(candidate, others).problem === undefined) {
+                if (this.ratioPreview(candidate, others, false).problem === undefined) {
                   nearest.push(candidate);
                   break;
                 }
@@ -746,11 +777,13 @@ export class Engine {
     const dateStamp = !!(options && options.dateStamp);
     const monoUnlock = !!(options && options.monoUnlock);
     const extraSlots = options && options.extraSlots ? options.extraSlots : [];
+    const pictures = options && options.shutdownPictures ? options.shutdownPictures : [];
+    if (pictures.length > 0 && clarity.length > 0) throw new FirmwareError('bad-clarity', 'power-off pictures cannot be combined with the clarity-table soft focus of 0.4.x');
     if (adjSoftFocus && clarity.length > 0) throw new FirmwareError('bad-clarity', 'soft focus on the ADJ lever and on the clarity table cannot be combined');
     if (dateStamp && clarity.length > 0) throw new FirmwareError('bad-clarity', 'the date imprint cannot be combined with the clarity-table soft focus of 0.4.x');
     if (extraSlots.length > 0 && clarity.length > 0) throw new FirmwareError('bad-clarity', 'added slots cannot be combined with the clarity-table soft focus of 0.4.x');
-    if (edits.length === 0 && ratios.length === 0 && clarity.length === 0 && !adjSoftFocus && !dateStamp && !monoUnlock && extraSlots.length === 0) throw new FirmwareError('bad-edit', 'nothing to change');
-    const features = { adjSoftFocus, ...(dateStamp ? { dateStamp } : {}), ...(monoUnlock ? { monoUnlock } : {}), ...(extraSlots.length > 0 ? { extraSlots } : {}) };
+    if (edits.length === 0 && ratios.length === 0 && clarity.length === 0 && !adjSoftFocus && !dateStamp && !monoUnlock && extraSlots.length === 0 && pictures.length === 0) throw new FirmwareError('bad-edit', 'nothing to change');
+    const features = { adjSoftFocus, ...(dateStamp ? { dateStamp } : {}), ...(monoUnlock ? { monoUnlock } : {}), ...(extraSlots.length > 0 ? { extraSlots } : {}), ...(pictures.length > 0 ? { shutdown: { pictures, factory: aspect.factoryShutdownJpegs(this.decoded) } } : {}) };
     const test = options && options.dateStampFixed ? { dateStampFixed: options.dateStampFixed, dateStampDiag: !!options.dateStampDiag } : {};
     const { decoded: _decoded, ...rest } = await buildFirmware(this.raw, edits, ratios, clarity, features, test);
     return rest;

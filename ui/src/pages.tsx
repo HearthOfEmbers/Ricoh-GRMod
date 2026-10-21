@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { color, EXTRA_NAME_MAX, halateRgba, MAX_CUSTOM_RATIOS, MAX_EXTRA_SLOTS, SHUTDOWN_H, SHUTDOWN_W } from '@grmod/core';
+import { color, EXTRA_NAME_MAX, halateRgba, halationLight, MAX_CUSTOM_RATIOS, MAX_EXTRA_SLOTS, SHUTDOWN_H, SHUTDOWN_NAME_MAX, SHUTDOWN_W } from '@grmod/core';
 import type { SlotId } from '@grmod/core';
 import type { ReactNode } from 'react';
 import { DropZone, FileButton, Ico, IconCanvas, Menu, Prop, RatioIcon, RgbCanvas, Segmented, Switch } from './components';
@@ -10,12 +10,13 @@ import type { Crop } from './pixels';
 import { onUiScale, uiScale } from './fit';
 import { applySlot } from './preview';
 import {
-  addFactoryWall, addRatio, addWallFiles, askForOfficial, bridgeLoaded, loadFirmwareFile, outputEntry, loadIconImage, loadPresetFile, loadPreviewFile, moveWall, nameProblem, openCrop, outputFirmware, previewPhoto, removePreset, removeWall,
+  addRatio, addWallFiles, askForOfficial, bridgeLoaded, loadFirmwareFile, loadIconImage, loadPresetFile, loadPreviewFile, moveWall, nameProblem, openCrop, outputFirmware, previewPhoto, removePreset, removeWall,
   ratioName, ratioProblem, removeRatio, setActiveRatio, setActiveSlot, setCrop, setIcon, setName, setPreviewMode, setRatio, setRatioBackdrop, useStore, wallBitmap,
   setSoft,
   setDateStamp,
   setMonoUnlock,
   extraName, extraNameProblem, extraProblem, halationOf, removeExtraSlot, setExtraCount, setExtraName, setHalation, slotOf,
+  setWallName, wallMax, wallMenuProblem,
 } from './store';
 import type { ExtraSlot, RatioItem, WallItem } from './store';
 
@@ -50,15 +51,18 @@ function Swatches({ params }: { params?: color.SlotParams }) {
 function PhotoCompare({ params }: { params?: color.SlotParams }) {
   const photo = usePhoto();
   const gr3x = useStore(s => s.info?.family === 'gr3x');
-  const halo = useStore((s) => { const x = s.extras.find((e) => e.key === s.activeSlot); return x?.halation?.on && x.halation.preview ? x.halation : undefined; });
+  const halo = useStore((s) => { const x = s.extras.find((e) => e.key === s.activeSlot); return x?.halation?.preview ? x.halation : undefined; });
+  // where the slot's light starts: its own look decides how bright the highlights end up
+  const result = useStore((s) => s.extras.find((e) => e.key === s.activeSlot)?.preset?.result);
+  const light = useMemo(() => (result ? halationLight(result.curves, result.postQ9) : undefined), [result]);
   const base = useMemo(() => (photo && params ? applySlot(params, photo, gr3x) : null), [photo, params, gr3x]);
   // The added slot's halation at the level chosen for the preview, as the camera computes it.
   const after = useMemo(() => {
     if (!base || !halo) return base;
     const out = new ImageData(new Uint8ClampedArray(base.data), base.width, base.height);
-    halateRgba(out.data, out.width, out.height, halo.preview as 1 | 2);
+    halateRgba(out.data, out.width, out.height, halo.preview as 1 | 2, light);
     return out;
-  }, [base, halo]);
+  }, [base, halo, light]);
   return <Compare photo={photo} after={after} label={t('preset')} />;
 }
 
@@ -314,14 +318,10 @@ function HalationProp({ x }: { x: ExtraSlot }) {
   return (
     <Prop label={t('haloLabel')}>
       <div className="halo">
+        {/* Every added slot has it: the camera switches it (the slot's "Halation" parameter); here only the preview. */}
         <div className="chips">
-          <Switch checked={h.on} onChange={(on) => setHalation(k, { on })} label={t('halation')} />
-          {h.on && (
-            <>
-              <span className="muted small">{t('haloPreview')}</span>
-              <Segmented value={String(h.preview)} onChange={(v) => setHalation(k, { preview: Number(v) as 0 | 1 | 2 })} options={[{ value: '0', label: t('haloOff') }, { value: '1', label: t('haloWeak') }, { value: '2', label: t('haloStrong') }]} />
-            </>
-          )}
+          <span className="muted small">{t('haloPreview')}</span>
+          <Segmented value={String(h.preview)} onChange={(v) => setHalation(k, { preview: Number(v) as 0 | 1 | 2 })} options={[{ value: '0', label: t('haloOff') }, { value: '1', label: t('haloWeak') }, { value: '2', label: t('haloStrong') }]} />
         </div>
         <span className="muted small halo-note">{t('halationSub')}</span>
       </div>
@@ -590,13 +590,8 @@ export function RatioPage() {
 // ---------------------------------------------------------------- power-off images
 function WallCard({ w, index }: { w: WallItem; index: number }) {
   const tour = index === 0 ? 'wall-card' : undefined;
-  const info = useStore((s) => s.info);
-  const model = useStore((s) => s.model);
   const [over, setOver] = useState(false);
-  const factory = w.kind === 'factory' ? info?.shutdown[model] : undefined;
-  const ref = useRef<HTMLImageElement>(null);
-  const url = useMemo(() => (factory ? URL.createObjectURL(new Blob([factory.data as unknown as BlobPart], { type: 'image/jpeg' })) : ''), [factory]);
-  useEffect(() => () => { if (url) URL.revokeObjectURL(url); }, [url]);
+  const problem = !w.busy ? wallMenuProblem(w) : null;
   return (
     <div
       className={`wall-card ${over ? 'drag-over' : ''}`} data-tour={tour}
@@ -608,18 +603,20 @@ function WallCard({ w, index }: { w: WallItem; index: number }) {
     >
       <div className="wall-thumb">
         {w.preview && <RgbCanvas rgb={w.preview} w={SHUTDOWN_W} h={SHUTDOWN_H} />}
-        {factory && <img ref={ref} src={url} alt="" draggable={false} />}
         {w.busy && <span className="thumb-state"><span className="spinner" /></span>}
         {w.error && <span className="thumb-state bad">{w.error}</span>}
         <span className="wall-index">{index + 1}</span>
         <span className="wall-actions">
-          {w.kind === 'image' && <button className="btn mini" title={t('wallCrop')} onClick={() => openCrop(w.id)}>{Ico.crop}</button>}
+          <button className="btn mini" title={t('wallCrop')} onClick={() => openCrop(w.id)}>{Ico.crop}</button>
           <button className="btn mini" title={t('remove')} onClick={() => removeWall(w.id)}>{Ico.x}</button>
         </span>
       </div>
-      <div className="wall-meta">
-        <span className="ellipsis">{w.name}</span>
-        {!!w.grain && <span className="chip tiny">{t('grain')}</span>}
+      <div className="wall-meta wall-name">
+        <input
+          className={`input small ${problem && w.menuJpeg ? 'bad' : ''}`} value={w.menuName ?? ''} maxLength={SHUTDOWN_NAME_MAX + 8}
+          placeholder={t('wallName')} aria-label={t('wallName')} title={problem && w.menuJpeg ? problem : w.name} spellCheck={false}
+          onChange={(e) => setWallName(w.id, e.target.value)}
+        />
       </div>
     </div>
   );
@@ -659,28 +656,30 @@ export function fitTiles(n: number, w: number, h: number): { cols: number; tile:
 export function WallpaperPage() {
   const wall = useStore((s) => s.wall);
   const info = useStore((s) => s.info);
+  const max = wallMax();
   const [ref, box] = useBox<HTMLDivElement>();
-  const tiles = wall.length + (wall.length < 9 ? 1 : 0);
+  const tiles = wall.length + (wall.length < max ? 1 : 0);
   const fit = fitTiles(tiles, box.w, box.h);
   return (
     <DropZone className="page" accept={(f) => isImage(f) || isFirmware(f)} onFiles={(f) => { const fwFile = f.find(isFirmware); if (fwFile) void loadFirmwareFile(fwFile); const imgs = f.filter(isImage); if (imgs.length) void addWallFiles(imgs); }}>
       <header className="page-head">
         <span className="page-icon">{Ico.image}</span>
         <h1>{t('navWall')}</h1>
-        {info && wall.length > 0 && <div className="head-right"><span className="chip">{wall.length}/9</span></div>}
+        {info && (
+          <div className="head-right">
+            {wall.length > 0 && <span className={`chip ${wall.length > max ? 'warn' : ''}`}>{wall.length}/{max}</span>}
+          </div>
+        )}
       </header>
       {!info && <FirmwareHero />}
-      {info && <FactoryEntryCard />}
-      {info?.family === 'gr3x' && <p className="small muted">{t('gr3xWallHint')}</p>}
       {info && (
         <div className="wall-fit" ref={ref} data-tour-page="wall">
           {fit.tile > 0 && (
             <div className="wall-grid" style={{ gridTemplateColumns: `repeat(${fit.cols}, ${fit.tile}px)` }}>
               {wall.map((w, i) => <WallCard key={w.id} w={w} index={i} />)}
-              {wall.length < 9 && (
+              {wall.length < max && (
                 <div className="wall-add" data-tour="wall-add">
                   <FileButton className="wall-add-btn" accept="image/*" multiple onFiles={(f) => { void addWallFiles(f); }}>{Ico.plus}<span>{wall.length ? t('wallAdd') : t('wallEmpty')}</span></FileButton>
-                  <button className="btn ghost small" onClick={() => addFactoryWall()}>{t('wallFactory')}</button>
                 </div>
               )}
             </div>
@@ -688,41 +687,6 @@ export function WallpaperPage() {
         </div>
       )}
     </DropZone>
-  );
-}
-
-// ---------------------------------------------------------------- switching Script on
-/**
- * The files that open the camera's factory menu, where Script is switched on once so that the
- * power-off images take effect. Only the power-off images need it, so it sits on their page.
- */
-function FactoryEntryCard() {
-  const info = useStore((s) => s.info);
-  const onCard = useStore((s) => s.entryOnCard);
-  const busy = useStore((s) => !!s.busy);
-  const hasCard = useStore((s) => s.volumes.some((v) => v.id === s.volumeId));
-  const bridge = useStore((s) => bridgeLoaded(s));
-  if (!info) return null;
-  const run = (kind: 'card' | 'folder'): void => { if (bridge) askForOfficial(); else void outputEntry({ kind }); };
-  return (
-    <div className="card entry-card" data-tour="wall-entry">
-      <div className="entry-row">
-        <span className="page-icon soft-ico">{Ico.tool}</span>
-        <div className="soft-text">
-          <b>{t('navScript')}</b>
-          <span className="muted small">{t('scriptHint')}</span>
-          {info.family === 'gr3x' && <span className="muted small">{t('gr3xScriptHint')}</span>}
-          <div className="chips entry-chips">
-            {info.factoryEntry.files.map((f) => <span key={f.name} className="chip file tiny">{Ico.file}{f.name}</span>)}
-            {onCard && <span className="chip ok tiny">{Ico.check}{t('entryOnCard')}</span>}
-          </div>
-        </div>
-        <div className="entry-actions">
-          <button className="btn ghost icon-only" disabled={busy} title={t('exportFolder')} aria-label={t('exportFolder')} onClick={() => run('folder')}>{Ico.folder}</button>
-          <button className="btn" data-tour="wall-entry-write" disabled={busy || (!hasCard && !bridge)} onClick={() => run('card')}>{t('writeCard')}</button>
-        </div>
-      </div>
-    </div>
   );
 }
 

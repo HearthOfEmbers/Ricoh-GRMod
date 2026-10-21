@@ -195,7 +195,7 @@ svg { width: 18px; height: 18px; flex: none; }
 .dialog-lines li { padding: 6px 10px; background: var(--chip); border-radius: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dialog-lines.last { margin-bottom: 18px; }
 .dialog-warn { margin: 0 0 18px; padding: 9px 12px; border-radius: 6px; background: var(--amber-bg); color: var(--amber); font-size: 13.5px; }
-.dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.dialog-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 .dialog-actions.spread { align-items: center; padding-top: 14px; }
 .dialog.crop { width: auto; padding: 16px 16px 14px; }
 .crop-stage { position: relative; background: var(--stage); border-radius: 6px; display: grid; place-items: center; touch-action: none; }
@@ -478,3 +478,14 @@ button.fw-rel:disabled { cursor: default; }
 .gr3x-features p { margin: 8px 18px; line-height: 1.6; }
 .gr3x-coverage { padding: 18px; }
 .gr3x-coverage p { margin: 12px 0 0; }
+/* writing the factory firmware: reset first */
+.dialog-reset { display: flex; flex-direction: column; gap: 6px; margin: 4px 0 16px; padding: 12px 14px; border: 1px solid var(--red); border-radius: 10px; background: color-mix(in srgb, var(--red) 12%, transparent); font-size: 13px; line-height: 1.5; }
+.dialog-reset b { color: var(--red); font-size: 14px; }
+.dialog-reset-path { font-weight: 600; }
+.btn.danger-solid { background: var(--red); border-color: var(--red); color: #fff; font-weight: 600; }
+.btn.danger-solid:hover { filter: brightness(1.08); }
+
+/* power-off images chosen in the camera's menu: the name under each picture */
+.wall-name { height: 30px; padding: 3px 0 0; overflow: visible; }
+.wall-name .input { width: 100%; min-width: 0; height: 26px; padding-top: 0; padding-bottom: 0; font-size: 13px; }
+.wall-name .input.bad { border-color: var(--danger, #d64545); }

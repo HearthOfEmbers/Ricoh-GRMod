@@ -9,8 +9,11 @@
  * parameter screen, the slider of Cinema's Toning) is not off, the light of the highlights spreads
  * around them as on CineStill 800T (cinema film without its anti-halation layer): light that went
  * through the film comes back from the base and exposes the red layer again, a little the green.
- *   1. light: how far a pixel is above a threshold, of the brighter of Y and red, averaged down
- *      to a picture at most 1024 wide and high;
+ *   1. light: how far a pixel is above the slot's threshold, of the brighter of Y and red,
+ *      averaged down to a picture at most 1024 wide and high. Threshold and scale are the slot's
+ *      own (`light`): the level its look gives to what Standard renders at the threshold and
+ *      the range up to its white, so that the same light spreads whatever the look does to the
+ *      highlights (a look whose white is 238 would otherwise never reach a fixed threshold);
  *   2. spread with two widths together (a narrow fringe and a wider glow; three box passes each
  *      way for each), relative to the picture's width;
  *   3. the spread light times the level's gain picks, from a table, how much red, green and blue
@@ -43,12 +46,10 @@ struct picture {
 };
 
 struct params {
-  u16 threshold;      /* light above this (0..254 of 255) spreads */
-  u16 escale;         /* 16384 / (255 - threshold): the light of a pixel, 0..16384 */
   u16 narrow, wide;   /* box radius of the two spreads, in 1/4096 of the picture's width */
   u16 mix;            /* share of the narrow spread, of 256 */
   u16 gain[2];        /* weak, strong: table index = light * gain >> 10 */
-  u16 pad;
+  u16 pad[3];
 };
 
 #define LUT_N 4096    /* lut[0..N) red, [N..2N) green, [2N..3N) blue: lift towards white, of 255 */
@@ -64,6 +65,8 @@ struct ctx {
   u32 enabled;        /* bit k: added slot k has halation */
   const u8 *lut;
   struct params p;
+  u32 magic;
+  u32 light[];        /* per added slot: threshold (0..254 of 255) | escale << 16 (16384 / range to the slot's white) */
 };
 
 #define STASH_VALID 0x10000u
@@ -134,7 +137,7 @@ static s32 clamp8(s32 v) { return v < 0 ? 0 : (v > 255 ? 255 : v); }
 /* Lift a colour towards white by h (0..255 of 255). */
 static s32 lift(s32 v, u32 h) { return v + (s32)(((u32)(255 - v) * h * 257 + 32768) >> 16); }
 
-static void halate(const struct ctx *k, void *cache, const struct picture *p, u32 gain) {
+static void halate(const struct ctx *k, void *cache, const struct picture *p, u32 gain, s32 threshold, u32 escale) {
   const struct params *P = &k->p;
   const u8 *lr = k->lut, *lg = k->lut + LUT_N, *lb = k->lut + 2 * LUT_N;
   u32 w = p->width, h = p->height, s = 0, q, F, sw, sh, x, y, i, n;
@@ -163,8 +166,8 @@ static void halate(const struct ctx *k, void *cache, const struct picture *p, u3
       for (x = 0; x < w; x += 1u << q) {
         s32 v = yr[x], red = v + ((91881 * ((s32)cr[x | 1] - 128) + 32768) >> 16), e;
         if (red > v) v = red;
-        e = v - (s32)P->threshold;
-        if (e > 0) acc[x >> s] += (u32)e * P->escale;
+        e = v - threshold;
+        if (e > 0) { u32 l = (u32)e * escale; acc[x >> s] += l > E_MAX ? E_MAX : l; }
       }
     }
     for (x = 0; x < sw; x++) {
@@ -234,7 +237,7 @@ out:
 
 /* Entry: k = context, config = JpegEncodeMacroProcess configuration. */
 void halation(const struct ctx *k, u32 *config) {
-  u32 st = *k->stash, style, level, i, j, gain;
+  u32 st = *k->stash, style, level, i, j, gain, light, threshold, escale;
   struct picture *seen[4];
   void *cache;
   if (!(st & STASH_VALID) || !ram(config) || !ram(k->lut)) return;
@@ -243,7 +246,9 @@ void halation(const struct ctx *k, u32 *config) {
   if (!((k->enabled >> (style - k->first_style)) & 1)) return;
   if (level < 1 || level > 2) return;
   gain = k->p.gain[level - 1];
-  if (!gain || k->p.threshold > 254 || k->p.mix > 256) return;
+  light = k->light[style - k->first_style];
+  threshold = light & 0xffff; escale = light >> 16;
+  if (!gain || threshold > 254 || !escale || escale > E_MAX || k->p.mix > 256) return;
   cache = k->cache();
   /* One picture per buffer (another entry with the same planes describes the whole sensor). */
   for (i = 0; i < 4; i++) {
@@ -253,5 +258,5 @@ void halation(const struct ctx *k, u32 *config) {
     for (j = 0; j < i; j++) if (seen[j] && seen[j]->y == p->y) break;
     if (j == i) seen[i] = p;
   }
-  for (i = 0; i < 4; i++) if (seen[i]) halate(k, cache, seen[i], gain);
+  for (i = 0; i < 4; i++) if (seen[i]) halate(k, cache, seen[i], gain, (s32)threshold, escale);
 }
