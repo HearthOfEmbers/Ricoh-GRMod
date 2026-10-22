@@ -7,6 +7,7 @@ import { assembleWords, branchWord, wordsToBytes } from '../aspect/arm';
 import { FirmwareError } from '../types';
 import { buildGr3xLookMenuResearch } from './image-control-research';
 import type { Gr3xMenuRatio } from './geometry';
+import type { Gr3xAdjFeatures } from './adj';
 import type { Gr3xResearchLook } from './image-control-research';
 import { GR3X_160, openGr3xOfficial } from './profile';
 import { GR3X_PARAMETER_SETTER_LOOKS, GR3X_STANDARD_ACTIVE_CHECKS, GR3X_STANDARD_ACTIVE_CHECKS_SET0, GR3X_TONE_READS,
@@ -97,7 +98,7 @@ const REPLICAS = [
   { name: 'M HDR Replica', base: 20, icon: 351, params: { 0x796: 2 } },
 ] as const;
 
-export async function buildGr3xImageControls(raw: Uint8Array, options: Gr3xLookOptions, ratioMenu?: readonly Gr3xMenuRatio[]) {
+export async function buildGr3xImageControls(raw: Uint8Array, options: Gr3xLookOptions, ratioMenu?: readonly Gr3xMenuRatio[], features: Gr3xAdjFeatures = {}) {
   if (options.displayRevision !== undefined && ![1, 2, 3].includes(options.displayRevision))
     throw new FirmwareError('bad-edit', 'unknown IIIx display revision');
   const displayIcons = options.displayRevision !== 1;
@@ -120,7 +121,7 @@ export async function buildGr3xImageControls(raw: Uint8Array, options: Gr3xLookO
   ];
   if (!specs.length) throw new FirmwareError('bad-edit', 'no IIIx extra image controls requested');
   specs.forEach(s => validateGr3xLookName(s.name));
-  const menu = await buildGr3xLookMenuResearch(raw, specs as Gr3xResearchLook[], displayIcons, ratioMenu);
+  const menu = await buildGr3xLookMenuResearch(raw, specs as Gr3xResearchLook[], displayIcons, ratioMenu, features);
   const p = GR3X_160;
   const rtos = decoded.subarray(p.rtosOffset, p.rtosOffset + p.rtosLength);
   const originalRead = (va: number, size: number) => {

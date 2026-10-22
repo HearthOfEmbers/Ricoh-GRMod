@@ -7,6 +7,7 @@ import { countChangedBytes, selfCheckGrown } from '../selfcheck';
 import { FirmwareError } from '../types';
 import type { Range } from '../types';
 import { buildGr3xAdjResearch } from './adj';
+import type { Gr3xAdjFeatures } from './adj';
 import { GR3X_160, openGr3xOfficial } from './profile';
 import { GR3X_CLARITY_OFFSET, gr3xClarityBytes } from './clarity';
 import type { Gr3xSoftFocusRequest } from './clarity';
@@ -26,12 +27,15 @@ export async function buildGr3xResearchContainer(raw: Uint8Array) {
 }
 
 /** `ratioMenu` comes from `planGr3xMenu`; the default is the T4 menu. */
-export async function buildGr3xTestFirmware(raw: Uint8Array, softFocus: readonly Gr3xSoftFocusRequest[] = [], looks?: Gr3xLookOptions, ratioMenu: readonly Gr3xMenuRatio[] = GR3X_T4_MENU) {
-  return buildContainer(raw, 'hardware-test', softFocus, looks, ratioMenu);
+export async function buildGr3xTestFirmware(raw: Uint8Array, softFocus: readonly Gr3xSoftFocusRequest[] = [], looks?: Gr3xLookOptions, ratioMenu: readonly Gr3xMenuRatio[] = GR3X_T4_MENU, features: Gr3xAdjFeatures = {}) {
+  return buildContainer(raw, 'hardware-test', softFocus, looks, ratioMenu, features);
 }
 
-async function buildContainer(raw: Uint8Array, purpose: 'research' | 'hardware-test', softFocus: readonly Gr3xSoftFocusRequest[] = [], looks?: Gr3xLookOptions, ratioMenu: readonly Gr3xMenuRatio[] = GR3X_T4_MENU) {
-  const manifest = looks ? await buildGr3xImageControls(raw, looks, ratioMenu) : await buildGr3xAdjResearch(raw, ratioMenu);
+async function buildContainer(raw: Uint8Array, purpose: 'research' | 'hardware-test', softFocus: readonly Gr3xSoftFocusRequest[] = [], looks?: Gr3xLookOptions, ratioMenu: readonly Gr3xMenuRatio[] = GR3X_T4_MENU, features: Gr3xAdjFeatures = {}) {
+  // Soft focus is either on the ADJ lever or in the negative clarity rows, not both (the ADJ
+  // version takes over the clarity function's row selection).
+  if (features.adjSoftFocus && softFocus.length) throw new FirmwareError('bad-clarity', 'ADJ soft focus replaces the clarity-table soft focus');
+  const manifest = looks ? await buildGr3xImageControls(raw, looks, ratioMenu, features) : await buildGr3xAdjResearch(raw, ratioMenu, features);
   const menu = manifest.menu, t4 = gr3xIsT4Menu(menu);
   const { fw, decoded, profile } = await openGr3xOfficial(raw);
   const sections = sectionsOf(decoded);
@@ -41,7 +45,7 @@ async function buildContainer(raw: Uint8Array, purpose: 'research' | 'hardware-t
   const addition = unhex(manifest.append.bytes), pixels = unhex(manifest.iconAddition.bytes);
   const revision = looks ? (looks.displayRevision === 3 ? 'T6' : looks.displayRevision === 1 ? 'T5' : 'T5-L1') : softFocus.length ? 'T4-SF1' : 'T4';
   const lookRecipe = looks ? encodeGr3xLookRecipe(looks) : new Uint8Array();
-  const ratioRecipe = t4 ? new Uint8Array() : encodeGr3xRatioRecipe(menu);
+  const ratioRecipe = t4 && !features.adjSoftFocus ? new Uint8Array() : encodeGr3xRatioRecipe(menu, features);
   const recipe = new Uint8Array(lookRecipe.length + ratioRecipe.length);
   recipe.set(lookRecipe); recipe.set(ratioRecipe, lookRecipe.length);
   const record = new TextEncoder().encode(purpose === 'research'
@@ -102,7 +106,7 @@ async function buildContainer(raw: Uint8Array, purpose: 'research' | 'hardware-t
       schema: 1, kind: purpose === 'research' ? 'gr3x-adj-research-container' : 'gr3x-adj9-test-firmware',
       profile: profile.id, camera: profile.camera, experimental: profile.experimental, purpose,
       revision: purpose === 'research' ? 'research' : revision,
-      softFocus: softFocus.map(r => ({ ...r })),
+      softFocus: softFocus.map(r => ({ ...r })), adjSoftFocus: features.adjSoftFocus === true,
       imageControls: looks && 'addedLooks' in manifest ? manifest.addedLooks.map(s => ({
         id: s.id, name: s.name, source: s.source, nativeBase: s.nativeBase,
       })) : [],

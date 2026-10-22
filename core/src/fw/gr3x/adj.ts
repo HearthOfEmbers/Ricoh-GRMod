@@ -5,6 +5,8 @@
  * Camera startup, persistent storage and the physical ISP remain hardware-unverified. */
 import { assembleWords, branchWord, movWord, wordsToBytes } from '../aspect/arm';
 import { drawRatioIcon } from '../aspect/icon';
+import { drawSoftFocusIcon, SOFT_FOCUS_NAMES } from '../aspect/softfocus';
+import { installGr3xAdjSoftFocus } from './adj-softfocus';
 import { sectionsOf, sha256Hex } from '../container';
 import { FirmwareError } from '../types';
 import { buildGr3xExperiment } from './experimental';
@@ -46,8 +48,16 @@ function utf16z(s: string): Uint8Array {
   return out;
 }
 function fail(message: string): never { throw new FirmwareError('unexpected-layout', message); }
+/** GR III text rows (ja en fr de es pt it nl da sv fi pl cs hu tr el ru ko zh-TW zh-CN th) as indices of `LANGS`. */
+const GR3X_SOFT_FOCUS_ROWS = [9, 2, 4, 5, 16, 13, 8, 11, 1, 17, 3, 12, 0, 7, 20, 6, 14, 10, 19, 15, 18];
 
-export async function buildGr3xAdjResearch(raw: Uint8Array, ratioMenu: readonly Gr3xMenuRatio[] = GR3X_T4_MENU) {
+export interface Gr3xAdjFeatures {
+  /** Soft focus on the ADJ lever (function 0x13, see adj-softfocus.ts). */
+  adjSoftFocus?: boolean;
+}
+
+export async function buildGr3xAdjResearch(raw: Uint8Array, ratioMenu: readonly Gr3xMenuRatio[] = GR3X_T4_MENU, features: Gr3xAdjFeatures = {}) {
+  const softFocus = features.adjSoftFocus === true;
   const geometry = await buildGr3xExperiment(raw, ratioMenu);
   const menu = geometry.menu, count = menu.length, spelled = count === 9 ? 'nine' : String(count);
   const { decoded, profile } = await openGr3xOfficial(raw);
@@ -110,7 +120,8 @@ export async function buildGr3xAdjResearch(raw: Uint8Array, ratioMenu: readonly 
   const additions = gr3xCustoms(menu);
   const textIds = new Map([[0, 241], [3, 243]]);
   const iconIds = new Map([[0, 257], [3, 256]]);
-  const columns = m.textCount + additions.length;
+  const columns = m.textCount + additions.length + (softFocus ? 1 : 0);
+  const softText = m.textCount + additions.length, softIcon = m.iconCount + additions.length;
   const rows = Array.from({ length: m.languages }, (_, l) => {
     const row = new Uint8Array(columns * 4);
     row.set(read(word(m.textRoots + l * 4), m.textCount * 4));
@@ -123,11 +134,18 @@ export async function buildGr3xAdjResearch(raw: Uint8Array, ratioMenu: readonly 
     textIds.set(r.id, id);
     rows.forEach(row => new DataView(row.buffer).setUint32(id * 4, record, true));
   });
+  if (softFocus) GR3X_SOFT_FOCUS_ROWS.forEach((lang, row) => {
+    const name = SOFT_FOCUS_NAMES[lang];
+    const text = append(utf16z(name));
+    const record = append(Uint8Array.from([name.length + 1, 1, 0, 0, ...words([text])]));
+    new DataView(rows[row].buffer).setUint32(softText * 4, record, true);
+  });
   const textRoots = append(words(rows.map(row => append(row))));
   for (const [low, high] of m.textRootSites) pair(low, high, 3, m.textRoots, textRoots, 'extended IIIx language directory');
   for (const at of m.textBounds) patch(at, movWord(3, m.textCount - 1), movWord(3, columns - 1), 'extended IIIx text bound');
 
-  const iconCatalog = new Uint8Array((m.iconCount + additions.length) * 4);
+  const iconCount = m.iconCount + additions.length + (softFocus ? 1 : 0);
+  const iconCatalog = new Uint8Array(iconCount * 4);
   iconCatalog.set(read(m.iconRoot, m.iconCount * 4));
   const pixels = additions.map(r => drawRatioIcon(r.ratio));
   let iconOffset = originalIcons.length;
@@ -138,9 +156,16 @@ export async function buildGr3xAdjResearch(raw: Uint8Array, ratioMenu: readonly 
     new DataView(iconCatalog.buffer).setUint32(id * 4, descriptor, true);
     iconIds.set(r.id, id); iconOffset += pixels[i].length;
   });
+  if (softFocus) {
+    const icon = drawSoftFocusIcon();
+    if (iconOffset % 4) fail('IIIx ICONBIN alignment');
+    const descriptor = append(Uint8Array.from([40, 0, 40, 0, ...words([iconOffset / 4])]));
+    new DataView(iconCatalog.buffer).setUint32(softIcon * 4, descriptor, true);
+    pixels.push(icon); iconOffset += icon.length;
+  }
   const iconRoot = append(iconCatalog);
   for (const [low, r] of m.iconRootSites) pair(low, low + 4, r, m.iconRoot, iconRoot, 'extended IIIx icon directory');
-  for (const [at, r] of m.iconBounds) patch(at, movWord(r, m.iconCount - 1), movWord(r, m.iconCount + additions.length - 1), 'extended IIIx icon bound');
+  for (const [at, r] of m.iconBounds) patch(at, movWord(r, m.iconCount - 1), movWord(r, iconCount - 1), 'extended IIIx icon bound');
   const lookup = (ids: Map<number, number>): number => code([...ids].map(([id, value]) =>
     `cmp r1,#${id}; movweq r0,#${value}; bxeq lr;`).join('\n') + 'mov r0,#0;bx lr;');
   const ratioText = lookup(textIds), ratioIcon = lookup(iconIds);
@@ -159,6 +184,7 @@ export async function buildGr3xAdjResearch(raw: Uint8Array, ratioMenu: readonly 
   const liveEntries = installGr3xLiveView(program);
   const rawEntries = installGr3xRawDevelopment(program);
   const shadingEntries = installGr3xShading(program);
+  const softEntries = softFocus ? installGr3xAdjSoftFocus({ code, append, patch, word }, softText, softIcon) : {};
   const fullRawEntries = installGr3xFullFrameRaw(program);
   const payload = new Uint8Array((length + 3) & ~3);
   let at = 0; for (const part of parts) { payload.set(part, at); at += part.length; }
@@ -168,8 +194,9 @@ export async function buildGr3xAdjResearch(raw: Uint8Array, ratioMenu: readonly 
     schema: 1, kind: 'gr3x-adj-patchset' as const, profile: profile.id,
     originalRtosSha256: profile.rtosSha256, originalLength: p.rtosLength, base: BASE,
     sites, append: { address: geometry.append.address, bytes: hex(payload) }, geometry,
-    entries: { ...geometry.entries, ratioText, ratioIcon, fnCycle, ...imageEntries, ...developEntries, ...afEntries, ...mapEntries, ...liveEntries, ...rawEntries, ...shadingEntries, ...fullRawEntries },
-    catalogs: { order, textRoots, textColumns: columns, iconRoot, iconCount: m.iconCount + additions.length },
+    entries: { ...geometry.entries, ratioText, ratioIcon, fnCycle, ...imageEntries, ...developEntries, ...afEntries, ...mapEntries, ...liveEntries, ...rawEntries, ...shadingEntries, ...fullRawEntries, ...softEntries },
+    catalogs: { order, textRoots, textColumns: columns, iconRoot, iconCount },
+    adjSoftFocus: softFocus,
     iconAddition: { originalLength: originalIcons.length, originalSha256: await sha256Hex(originalIcons), bytes: hex(iconAddition) },
     ratios: geometry.ratios.map(r => ({ ...r, textId: textIds.get(r.id)!, iconId: iconIds.get(r.id)! })),
     menu: menu.map(r => ({ ...r })),

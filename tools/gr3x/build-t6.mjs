@@ -59,10 +59,12 @@ for (const [index, name] of T6_FILM_NAMES.entries()) {
 if (diagnostics) {
   films[0] = { ...films[0], name: 'RB Swap Test', preset: { ...films[0].preset, postQ9: [0, 0, 512, 0, 512, 0, 512, 0, 0] } };
 }
-const soft = [{ level: -1, strength: 'weak' }, { level: -2, strength: 'medium' }, { level: -3, strength: 'strong' }];
+// Round 3: soft focus on the ADJ lever (function 0x13) instead of the negative clarity rows.
+const adjSoftFocus = round >= 3;
+const soft = adjSoftFocus ? [] : [{ level: -1, strength: 'weak' }, { level: -2, strength: 'medium' }, { level: -3, strength: 'strong' }];
 // Films keep their own parameters (T6d) unless GR3X_SHARED=1 rebuilds T6c (shared with Standard).
 const ownParameters = process.env.GR3X_SHARED !== '1';
-const result = await buildGr3xTestFirmware(raw, soft, { films, monoReplicas: false, displayRevision: 3, ...(ownParameters ? { ownParameters } : {}), ...(diagnostics ? { jpegDiagnostics: true } : {}) }, menu);
+const result = await buildGr3xTestFirmware(raw, soft, { films, monoReplicas: false, displayRevision: 3, ...(ownParameters ? { ownParameters } : {}), ...(diagnostics ? { jpegDiagnostics: true } : {}) }, menu, { adjSoftFocus });
 const target = resolve(directory);
 await mkdir(target);
 const json = async (name, value) => writeFile(join(target, name), JSON.stringify(value, null, 2) + '\n', { flag: 'wx' });
@@ -102,7 +104,7 @@ try {
     if (!section) throw new Error('Missing original section: ' + name);
     await writeFile(join(temporary, name.toLowerCase() + '.bin'), decoded.subarray(section.offset, section.offset + section.size));
   }
-  await writeFile(join(temporary, 'base.json'), JSON.stringify(await buildGr3xAdjResearch(raw, menu)));
+  await writeFile(join(temporary, 'base.json'), JSON.stringify(await buildGr3xAdjResearch(raw, menu, { adjSoftFocus })));
   const run = spawnSync(python, [join(here, 'validate_test.py'), '--official', resolve(input),
     '--container', join(target, 'UNVALIDATED.bin'), '--manifest', join(target, 'patch-manifest.json'),
     '--build-report', join(target, 'build-report.json'), '--rtos', join(temporary, 'rtos.bin'),

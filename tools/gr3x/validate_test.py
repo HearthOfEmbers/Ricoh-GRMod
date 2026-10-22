@@ -14,6 +14,7 @@ from development_bounds_probe import verify as development_bounds
 from chroma_alignment_probe import verify as chroma_alignment
 from package_probe import verify as package
 from clarity_probe import verify as clarity
+from adj_softfocus_probe import verify as adj_soft_focus
 
 if not __debug__:raise RuntimeError('Validation requires Python assertions')
 
@@ -48,6 +49,7 @@ def main():
         ('raw-and-settings',lambda:raw_state(data,manifest)),
         ('shading',lambda:shading(data,manifest)),
         ('clarity-table',lambda:clarity(data,build.get('softFocus',[]))),
+        *((('adj-soft-focus',lambda:adj_soft_focus(data,manifest)),) if manifest.get('adjSoftFocus') else ()),
         ('updater-loader',lambda:loader(data,a.boot.read_bytes(),original,candidate,build)),
         ('independent-codec',lambda:package(original,candidate,manifest,build,a.reference)),
     ):
