@@ -137,10 +137,7 @@ export interface TestOptions {
   dateStampFixed?: number;
   /** Also print the encoder configuration on the 720x480 picture. */
   dateStampDiag?: boolean;
-  /**
-   * Test builds (0.8.2 tests 038): with an added ratio, also paint the strips beside the live-view
-   * picture from the CPU at the painted-byte test, in this colour (magenta: to see where and when).
-   */
+  /** Test builds: paint the strips beside an added ratio's live-view picture magenta instead of black (to see where and when). */
   liveViewStrips?: 'magenta' | 'black';
 }
 
@@ -970,8 +967,13 @@ function installPlaybackDecode(patch: Patch): void {
 //    buffer's byte is cleared every time, so every buffer is painted when it is current; for a
 //    factory ratio the bytes are cleared only when the rectangle (w, h at +0xBA0, x, y at +0xBAC)
 //    differs from the one the buffers were last painted for, as the firmware's own start does.
-// Analysed statically and in the emulator (layout, buffer sizes, the flags), not yet confirmed on
-// the camera.
+//  - Then, for an added ratio, the CPU paints the strips of the job's buffer black as well. Test 038
+//    (the same in magenta) showed why: the job leaves a column at the screen's left edge and one at
+//    the picture's right edge unpainted (magenta stayed visible there only), which showed the old
+//    picture (0.8.1) or zeroed memory (green, after start). With the black paint they are gone in
+//    steady live view (test 038 B).
+// Not yet covered: for about two seconds after start and after a shot those two columns can show
+// green / the old picture, until the display has gone through its buffers.
 
 const LAYOUT = 0x53647498;
 const FILL_FLAG_TEST = 0x53647248;
@@ -1105,7 +1107,7 @@ export function installExtensions(rtos: Uint8Array, iconbin: Uint8Array, ratios:
     installState(patch, ratios, menu.activeBitmap);
     installImageIdentity(patch, ratios);
     if (revision >= 2) installPlaybackDecode(patch);
-    if (features.guard) installLiveViewRepaint(patch, test.liveViewStrips);
+    if (features.guard) installLiveViewRepaint(patch, test.liveViewStrips ?? 'black');
   }
   if (features.adjSoftFocus) icons = installAdjSoftFocus(patch, icons);
   if (features.monoUnlock) installMonoUnlock(patch);
