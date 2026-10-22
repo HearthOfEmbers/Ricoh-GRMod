@@ -82,7 +82,10 @@ def verify(data,manifest):
     # Count: 4 in still mode on every slot; the movie layout is the firmware's own.
     for slot in range(5):
         p.state(slot=slot);assert p.call(0x531a31ac,VIEW)==4
-        p.state(slot=slot,movie=1);n.state(slot=slot,movie=1);assert p.call(0x531a31ac,VIEW)==n.call(0x531a31ac,VIEW);calls+=3
+        # Movie mode uses the fixed layout 0xC, 1, 6, 0xF, 0xE: the same counts as the firmware,
+        # except Image Control (slot 1), which lists the added films in a film build.
+        p.state(slot=slot,movie=1);n.state(slot=slot,movie=1);calls+=3
+        if slot or not manifest.get('addedLooks'):assert p.call(0x531a31ac,VIEW)==n.call(0x531a31ac,VIEW),slot
     assert max_count(p)==max_count(n)==32;calls+=2
     # Exactly one current value for every stored byte, a damaged byte reads (and is reset) as off.
     for b in list(range(4))+[4,0x13,0xaa,0xff]:

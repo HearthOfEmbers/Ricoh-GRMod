@@ -49,7 +49,8 @@ class LookProbe(AdjProbe):
         self.uc.mem_write(SHIM, struct.pack('<13I', *words))
         for table, expected in ((VALIDATE_TABLE, 0x535423a0), (COMMIT_TABLE, 0x535423ac)):
             assert struct.unpack_from('<II', data, table - BASE + 0xd4 * 8) == (expected, 0)
-        self.uc.mem_map(0x5536d000, 0x1000)
+        try: self.uc.mem_map(0x5536d000, 0x1000)
+        except Exception: pass  # already mapped with the zero-filled RAM (adj_probe)
         put(self.uc, GAMMA_GUARD, 1)
         self.uc.mem_write(GAMMA_OBJECT, struct.pack('<3I', *GAMMA_BUFFERS))
 

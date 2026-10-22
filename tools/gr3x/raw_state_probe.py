@@ -22,7 +22,8 @@ class StateProbe(AdjProbe):
                0xe1a01003,0xe3a02000,branch(SHIM+52,0x535423ac)]
         words[1]=(words[1]&0x0fffffff) # conditional EQ
         self.uc.mem_write(SHIM,struct.pack('<'+'I'*len(words),*words))
-        self.uc.mem_map(0x55357000,0x1000)
+        try:self.uc.mem_map(0x55357000,0x1000)
+        except Exception:pass  # already mapped with the zero-filled RAM (adj_probe)
     def _hook(self,cpu,at,size,user):
         if at==0x5354b564:
             assert cpu.reg_read(reg.UC_ARM_REG_R1) in (1,2)

@@ -60,6 +60,9 @@ class AdjProbe(RearDialProbe):
         required_end=(manifest['append']['address']+len(payload)+4095)&~4095
         if required_end>page_end:
             self.uc.mem_map(page_end,required_end-page_end,UC_PROT_READ|UC_PROT_EXEC)
+        # Zero-filled data after the initialised RAM image, up to the heap (the settings object's
+        # pointer 0x55063f34 lives there; 0 before the settings are loaded).
+        self.uc.mem_map(0x5503b000,0x55800000-0x5503b000)
         self.uc.mem_write(manifest['append']['address'],payload)
         for s in manifest['sites']:self.uc.mem_write(s['address'],bytes.fromhex(s['replacement']))
 

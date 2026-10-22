@@ -86,14 +86,16 @@ def verify(original,new,manifest,build,reference):
             assert recipe['schema']==(1 if revision=='T5' else 2) and len(recipe['films'])<=2
             assert len(manifest['addedLooks'])==2+6*recipe['monoReplicas']
         padding=start+length
-    if not is_t4(m):
+    if not is_t4(m) or manifest.get('adjSoftFocus'):
         # The ratio list follows the film recipe; it must name exactly the manifest's added ratios.
         magic=b'GR3X-RATIO-RECIPE\0'
         assert dec[padding:padding+len(magic)]==magic
         length=struct.unpack_from('<I',dec,padding+len(magic))[0];assert length<=4096
         start=padding+len(magic)+4
         recipe=json.loads(dec[start:start+length])
-        assert recipe=={'schema':1,'ratios':[{'ratio':m.ratios[i],'name':m.names[i]} for i,_,_ in m.custom]},recipe
+        expected={'schema':1,'ratios':[{'ratio':m.ratios[i],'name':m.names[i]} for i,_,_ in m.custom]}
+        if manifest.get('adjSoftFocus'):expected['adjSoftFocus']=True
+        assert recipe==expected,recipe
         padding=start+length
     assert not any(dec[padding:rt['end']-4-len(marker)])
     return dict(schema=1,decoder='DoYitNow/gr-custom-tool codec at 0c15c8f9a97b464ac23ab1641740a8263e0068b0',

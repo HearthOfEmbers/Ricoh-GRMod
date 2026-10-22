@@ -51,10 +51,12 @@ function Swatches({ params }: { params?: color.SlotParams }) {
 function PhotoCompare({ params }: { params?: color.SlotParams }) {
   const photo = usePhoto();
   const gr3x = useStore(s => s.info?.family === 'gr3x');
-  const halo = useStore((s) => {
-    if (s.info?.family === 'gr3x') { const level = s.slots[s.activeSlot as SlotId]?.halation; return level ? { on: true, preview: level } : undefined; }
-    const x = s.extras.find((e) => e.key === s.activeSlot); return x?.halation?.preview ? x.halation : undefined;
+  // A level, not an object: a selector must return the same value for the same state.
+  const haloLevel = useStore((s) => {
+    if (s.info?.family === 'gr3x') return s.slots[s.activeSlot as SlotId]?.halation ?? 0;
+    return s.extras.find((e) => e.key === s.activeSlot)?.halation?.preview ?? 0;
   });
+  const halo = haloLevel ? { preview: haloLevel } : undefined;
   // where the slot's light starts: its own look decides how bright the highlights end up
   const result = useStore((s) => (s.info?.family === 'gr3x' ? s.slots[s.activeSlot as SlotId]?.preset?.result : s.extras.find((e) => e.key === s.activeSlot)?.preset?.result));
   const light = useMemo(() => (result ? halationLight(result.curves, result.postQ9) : undefined), [result]);
@@ -65,7 +67,7 @@ function PhotoCompare({ params }: { params?: color.SlotParams }) {
     const out = new ImageData(new Uint8ClampedArray(base.data), base.width, base.height);
     halateRgba(out.data, out.width, out.height, halo.preview as 1 | 2, light);
     return out;
-  }, [base, halo, light]);
+  }, [base, haloLevel, light]); // eslint-disable-line react-hooks/exhaustive-deps
   return <Compare photo={photo} after={after} label={t('preset')} />;
 }
 
