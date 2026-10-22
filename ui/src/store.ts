@@ -597,7 +597,7 @@ export function softText(list: readonly (SoftFocusRequest | ClarityChange)[]): s
 
 // ------------------------------------------------------------------ added aspect ratios
 const RATIO_PROBLEMS: Record<NonNullable<RatioPreview['problem']>, Key> = {
-  'bad-ratio': 'ratioBad', 'ratio-factory': 'ratioIsFactory', 'ratio-too-extreme': 'ratioExtreme', 'ratio-quick-view': 'ratioQuick',
+  'bad-ratio': 'ratioBad', 'ratio-factory': 'ratioIsFactory', 'ratio-portrait': 'ratioPortrait', 'ratio-too-extreme': 'ratioExtreme', 'ratio-quick-view': 'ratioQuick',
   'ratio-metering': 'ratioMetering', 'ratio-conflict': 'ratioConflict', 'ratio-duplicate': 'ratioDup',
 };
 const NAME_PROBLEMS: Record<string, Key> = { 'too-long': 'ratioNameLong', 'bad-char': 'ratioNameBad', empty: 'ratioNameBad' };

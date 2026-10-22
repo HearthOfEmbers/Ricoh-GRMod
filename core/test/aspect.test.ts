@@ -71,11 +71,11 @@ describe('aspect: ratios and geometry', () => {
     expect(g.screen).toEqual({ left: 60, top: 0, width: 600, height: 480 });
     expect(fullSize(g)).toEqual([5160, 4128]);
     expect([g.modeAlias, g.tracking]).toEqual([3, [667, 750]]);
-    expect(planRatio('6:7').tracking).toEqual([573, 750]);
+    expect(planRatio('6:7', { portrait: true }).tracking).toEqual([573, 750]);
   });
   it('every photo size is a multiple of 4 and centred', () => {
     for (const r of ['65:24', '2.39:1', '16:10', '5:4', '6:7', '2:1', '7:6']) {
-      const g = planRatio(r);
+      const g = planRatio(r, { portrait: true });
       for (const s of g.photoSizes) expect(s.width % 4 === 0 && s.height % 4 === 0 && s.width >= 4 && s.height >= 4, r).toBe(true);
       expect(g.screen.left * 2 + g.screen.width).toBe(720);
       expect(g.screen.top * 2 + g.screen.height).toBe(480);
@@ -88,7 +88,12 @@ describe('aspect: ratios and geometry', () => {
     expect(code(() => planRatio('16:9'))).toBe('ratio-factory');
     expect(code(() => planRatio('720:268'))).toBe('ratio-quick-view');
     expect(code(() => planRatio('1000:1'))).toBe('ratio-too-extreme');
-    expect(code(() => planRatio('1:20'))).toBe('ratio-metering');
+    expect(code(() => planRatio('1:20', { portrait: true }))).toBe('ratio-metering');
+    // From 0.8.2 an added ratio is wider than tall; files of earlier versions are still read.
+    for (const r of ['4:5', '6:7', '1:20', '0.8']) expect(code(() => planRatio(r))).toBe('ratio-portrait');
+    expect(code(() => planRatio('1:1'))).toBe('ratio-factory');
+    expect(code(() => planRatios([{ name: 'x', ratio: '4:5' }]))).toBe('ratio-portrait');
+    expect(planRatios([{ name: 'x', ratio: '4:5' }], { portrait: true })[0].geometry.screen.width).toBe(384);
     expect(code(() => planRatio('wide'))).toBe('bad-ratio');
     // 719:480 rounds to the 3:2 screen but with another thumbnail: its photos could not be told from 3:2 ones.
     expect(code(() => planRatios([{ name: 'x', ratio: '719:480' }]))).toBe('ratio-conflict');
@@ -344,16 +349,17 @@ describe.skipIf(!have)('aspect: firmware files', () => {
 
   it('eight ratios with names; nine are refused', async () => {
     const eng = await Engine.open(raw);
-    const list = ['65:24', '2.39:1', '16:10', '5:4', '6:7', '2:1', '7:6', '3:1'].map((r, i) => ({ name: i % 2 ? r : `Frame ${r}`, ratio: r }));
+    const list = ['65:24', '2.39:1', '16:10', '5:4', '7:5', '2:1', '7:6', '3:1'].map((r, i) => ({ name: i % 2 ? r : `Frame ${r}`, ratio: r }));
     const b = await eng.buildFirmware([], list);
     expect(Object.values(b.checks).every((v) => v === true)).toBe(true);
     expect(b.ratios.map((r) => [r.id, r.name, r.sizes[0]])).toEqual([
       [7, 'Frame 65:24', [6192, 2272]], [8, '2.39:1', [6192, 2580]], [9, 'Frame 16:10', [6192, 3888]], [10, '5:4', [5160, 4128]],
-      [11, 'Frame 6:7', [3544, 4128]], [12, '2:1', [6192, 3096]], [13, 'Frame 7:6', [4816, 4128]], [14, '3:1', [6192, 2064]],
+      [11, 'Frame 7:5', [5780, 4128]], [12, '2:1', [6192, 3096]], [13, 'Frame 7:6', [4816, 4128]], [14, '3:1', [6192, 2064]],
     ]);
     const s = await eng.inspect(b.file);
     expect([s.kind, s.verified, s.ratios.length]).toEqual(['modified', true, 8]);
-    await expect(eng.buildFirmware([], [...list, { name: 'x', ratio: '4:5' }])).rejects.toMatchObject({ code: 'too-many-ratios' });
+    await expect(eng.buildFirmware([], [...list, { name: 'x', ratio: '5:3' }])).rejects.toMatchObject({ code: 'too-many-ratios' });
+    await expect(eng.buildFirmware([], [{ name: 'x', ratio: '4:5' }])).rejects.toMatchObject({ code: 'ratio-portrait' });
     await expect(eng.buildFirmware([], [{ name: 'x', ratio: '3:2' }])).rejects.toMatchObject({ code: 'ratio-factory' });
     await expect(eng.buildFirmware([], [{ name: '宽', ratio: '2:1' }])).rejects.toMatchObject({ code: 'bad-name' });
     await expect(eng.buildFirmware([], [])).rejects.toMatchObject({ code: 'bad-edit' });

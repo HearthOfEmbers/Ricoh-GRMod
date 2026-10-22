@@ -132,6 +132,6 @@ describe.skipIf(!have)('combinations of the additions', () => {
     const s = await eng.inspect(b.file);
     expect(s.verified).toBe(true);
     expect({ adjSoftFocus: s.adjSoftFocus, dateStamp: s.dateStamp, monoUnlock: s.monoUnlock }).toEqual({ adjSoftFocus: true, dateStamp: true, monoUnlock: true });
-    expect(s.ratios.map((r) => r.name)).toEqual(['XPan', '2.39:1', '5:4', '4:5']);
+    expect(s.ratios.map((r) => r.name)).toEqual(['XPan', '2.39:1', '5:4', '2:1']); // 4:5 is no longer built (0.8.2)
   });
 });

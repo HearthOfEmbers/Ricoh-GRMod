@@ -37,7 +37,7 @@ import type { HalationLook } from './halation';
 import type { ExtraSlotSpec } from './slots';
 import { installShutdownMenu } from './shutdown';
 import { FIRST_ADDED_LOOK, installSettingsGuard } from './guard';
-import { LOOK_STASH, extendZeroFill, installLookStash, monoLook, monoTable, styleColour } from './lookstash';
+import { LOOK_STASH, installLookStash, monoLook, monoTable, styleColour } from './lookstash';
 import type { ShutdownPictureSpec } from './shutdown';
 
 export const BASE = 0x53000000;
@@ -137,8 +137,6 @@ export interface TestOptions {
   dateStampFixed?: number;
   /** Also print the encoder configuration on the 720x480 picture. */
   dateStampDiag?: boolean;
-  /** Test builds: paint the strips beside an added ratio's live-view picture magenta instead of black (to see where and when). */
-  liveViewStrips?: 'magenta' | 'black';
 }
 
 export interface AspectResult {
@@ -950,142 +948,6 @@ function installPlaybackDecode(patch: Patch): void {
 }
 
 // --------------------------------------------------------------------------------------------
-// Not in the reference (0.8.2, builds with the settings guard): live view painted around the
-// picture of an added ratio in every display buffer, every time a buffer is shown.
-//
-// The live-view display (UpdateFillVramSequence 0x53639A10, once per display object) lays the
-// picture out in its buffer (0x53647498: width +0xBD6, x +0xBE0, ...) and (0x53647138) makes one
-// fill job for the current display buffer, only while that buffer's "painted" byte (config
-// [r4+0x330] + 0x118 + buffer [r4+0x31C]) is 0. The job (0x538C2030, message 0x010E8004 of the
-// display's fill task) paints the strips with the 2D engine; the display task waits for it and
-// then shows the buffer (0x536472F8: Y = [r4+0xBDC] + [r4+0x2E8], CbCr = Y + stride x rows, 4:2:0).
-// Test 038 showed that for 4:5 (picture 384 wide at x 168) the engine leaves the first CbCr column
-// of each strip (screen x 0 and x 552) unpainted: magenta stayed visible there only. Those columns
-// showed the old picture (0.8.1), or zeroed memory (green) after start. Painting them from the
-// layout's job (test 038 B) fixed steady live view, but not the first seconds after start or a shot:
-// the job runs for a buffer only when that buffer's byte is 0, not each time the buffer is shown.
-//  - The layout's entry remembers the aspect it lays out (r1) in a word before the heap.
-//  - At the painted-byte test the bytes are cleared when the rectangle (w, h at +0xBA0, x, y at
-//    +0xBAC) differs from the one the buffers were last painted for, as the firmware's own start
-//    does (switching 1:1 <-> 4:5 does not restart live view).
-//  - Where the buffer is handed to the display (both paths of 0x536472F8: 0x53647348 and
-//    0x53647404, `mov r1, r5` with r5 = Y), for an added ratio the CPU paints everything outside
-//    the picture rectangle black (Y 0, CbCr 0x80; CbCr rows = rows / 2), each run of bytes flushed
-//    from the data cache before (so no stale line is written back over the picture next to it) and
-//    after (clean and invalidate, 0x53000930). Every register kept.
-
-const LAYOUT = 0x53647498;
-const FILL_FLAG_TEST = 0x53647248;
-/** The two places where 0x536472F8 hands the buffer (Y in r5) to the display: `mov r1, r5`. */
-const SHOW_BUFFER = [0x53647348, 0x53647404] as const;
-/** Clean and invalidate the data cache by address, (start, length > 0), then DSB. A leaf. */
-const DCACHE_FLUSH_RANGE = 0x53000930;
-/** Columns / rows of the live-view picture painted over on each side that has a strip beside it. */
-const LIVE_VIEW_MARGIN = 4;
-/** The rectangle the buffers were last painted for: two words in the 44 bytes before the heap. */
-const LAST_FILL_RECT = 0x558372e8;
-/** The aspect the live-view layout last laid out. */
-const LV_ASPECT = 0x558372f4;
-
-function installLiveViewRepaint(patch: Patch, strips: 'magenta' | 'black' = 'black'): void {
-  expectWord(patch, LAYOUT, 0xe1a0c00d); // mov ip,sp
-  expectWord(patch, FILL_FLAG_TEST, 0xe594331c); // ldr r3,[r4,#0x31c]
-  expectWord(patch, FILL_FLAG_TEST + 4, 0xe0800003); // add r0,r0,r3
-  expectWord(patch, FILL_FLAG_TEST + 8, 0xe5d03118); // ldrb r3,[r0,#0x118]
-  expectWord(patch, SHOW_BUFFER[0] - 4, 0x0a00000c); // beq 0x5364737c
-  expectWord(patch, SHOW_BUFFER[0], 0xe1a01005); // mov r1,r5
-  expectWord(patch, SHOW_BUFFER[0] + 4, 0xe3a08001); // mov r8,#1
-  expectWord(patch, SHOW_BUFFER[1] - 4, 0xe5940330); // ldr r0,[r4,#0x330]
-  expectWord(patch, SHOW_BUFFER[1], 0xe1a01005); // mov r1,r5
-  expectWord(patch, DCACHE_FLUSH_RANGE, 0xe92d4070); // push {r4,r5,r6,lr}
-  expectWord(patch, DCACHE_FLUSH_RANGE + 0x14, 0xee074f3e); // mcr p15,0,r4,c7,c14,1
-  const layout = patch.append((at) => assembleWords(
-    `movw ip,#${LV_ASPECT & 65535};movt ip,#${LV_ASPECT >>> 16};str r1,[ip];mov ip,sp;b #${LAYOUT + 4}`, at), 16);
-  patch.setWord(LAYOUT, branchWord(LAYOUT, layout), 'live view: remember the aspect being laid out');
-  const stub = patch.append((at) => assembleWords(
-    `push {r1,r2,r3,ip}
-     ldr r2,[r4,#0xba0];ldr r3,[r4,#0xbac]
-     movw ip,#${LAST_FILL_RECT & 65535};movt ip,#${LAST_FILL_RECT >>> 16}
-     ldr r1,[ip];cmp r1,r2;ldreq r1,[ip,#4];cmpeq r1,r3;beq same
-     str r2,[ip];str r3,[ip,#4]
-     mov r1,#0;strb r1,[r0,#0x118];strb r1,[r0,#0x119];strb r1,[r0,#0x11a];strb r1,[r0,#0x11b]
-     same:pop {r1,r2,r3,ip}
-     ldr r3,[r4,#0x31c];b #${FILL_FLAG_TEST + 4}`, at), 16);
-  patch.setWord(FILL_FLAG_TEST, branchWord(FILL_FLAG_TEST, stub), 'live view: paint the buffers again when the picture rectangle changes');
-  // seg: r0 start, r1 length (<= 0: nothing), r2 value (word); halfword stores at even
-  // addresses, so a CbCr pair is never split. Keeps every register.
-  // paint: r0 config, r4 display object, r5 Y of the buffer being shown. Paints everything outside
-  // the picture rectangle shrunk by `margin` on each side that has a strip beside it, rows out to
-  // the stride (the padding after the buffer width included).
-  const paintAsm = (yy: number, cc: number, margin: number) =>
-    `paint:push {r0-r12,lr}
-     movw ip,#${LV_ASPECT & 65535};movt ip,#${LV_ASPECT >>> 16};ldr r1,[ip];cmp r1,#${FIRST_CUSTOM_ID};blo pdone
-     cmp r5,#0x40000000;blo pdone;cmp r5,#0xc0000000;bhs pdone
-     add ip,r0,#0x200;ldrh r6,[ip,#0x14];ldrh r3,[ip,#0x16]
-     mul r8,r6,r3;add r8,r8,r5
-     cmp r8,r5;bls pdone;cmp r8,#0xc0000000;bhs pdone
-     add ip,r4,#0xb00
-     ldrh r7,[ip,#0xea];ldrh r1,[ip,#0xec]
-     cmp r1,r3;bhi pdone;mov r3,r1
-     ldrh r9,[ip,#0xe0];ldrh r10,[ip,#0xd6];ldrh r11,[ip,#0xe2];ldrh r12,[ip,#0xd8]
-     cmp r7,#0;beq pdone;cmp r7,r6;bhi pdone
-     cmp r3,#0;beq pdone;cmp r3,#2048;bhi pdone
-     add r10,r10,r9;cmp r10,r7;bhi pdone
-     add r12,r12,r11;cmp r12,r3;bhi pdone
-     cmp r9,#0;bne pgo;cmp r10,r7;bne pgo;cmp r11,#0;bne pgo;cmp r12,r3;beq pdone
-     pgo:${margin ? `cmp r9,#0;addne r9,r9,#${margin};cmp r10,r7;subne r10,r10,#${margin}
-     cmp r11,#0;addne r11,r11,#${margin};cmp r12,r3;subne r12,r12,#${margin}
-     cmp r9,r10;bhs pdone;cmp r11,r12;bhs pdone` : 'mov r0,r0'}
-     mov r7,r6
-     movw r2,#${yy};movt r2,#${yy}
-     mov r4,#0
-     yl:cmp r4,r3;bhs yd
-     mul r0,r4,r6;add r0,r0,r5
-     cmp r4,r11;blo yf;cmp r4,r12;bhs yf
-     mov r1,r9;bl seg;add r0,r0,r10;sub r1,r7,r10;bl seg;b yn
-     yf:mov r1,r7;bl seg
-     yn:add r4,r4,#1;b yl
-     yd:movw r2,#${cc};movt r2,#${cc}
-     mov r5,r8;mov r3,r3,lsr #1
-     bic r9,r9,#1;add r10,r10,#1;bic r10,r10,#1;cmp r10,r7;movhi r10,r7
-     mov r4,#0
-     cl:cmp r4,r3;bhs pdone
-     mul r0,r4,r6;add r0,r0,r5
-     add r1,r4,r4;add r1,r1,#1;cmp r1,r11;blo cf;sub r1,r1,#1;cmp r1,r12;bhs cf
-     mov r1,r9;bl seg;add r0,r0,r10;sub r1,r7,r10;bl seg;b cn
-     cf:mov r1,r7;bl seg
-     cn:add r4,r4,#1;b cl
-     pdone:pop {r0-r12,pc}
-     seg:cmp r1,#0;bxle lr
-     push {r0-r7,lr}
-     bic r4,r0,#63;add r5,r0,r1
-     sub r1,r5,r4;mov r0,r4;bl #${DCACHE_FLUSH_RANGE}
-     ldr r6,[sp]
-     tst r6,#1;beq h2;strb r2,[r6],#1
-     h2:sub r7,r5,r6;cmp r7,#2;blo tl;tst r6,#2;beq w0;strh r2,[r6],#2
-     w0:bic r7,r5,#3
-     w:cmp r6,r7;bhs tl;str r2,[r6],#4;b w
-     tl:sub r7,r5,r6;cmp r7,#2;blo t1;strh r2,[r6],#2;b tl
-     t1:cmp r6,r5;bhs fl;strb r2,[r6],#1
-     fl:sub r1,r5,r4;mov r0,r4;bl #${DCACHE_FLUSH_RANGE}
-     pop {r0-r7,pc}`;
-  // Black: the strips and the outermost LIVE_VIEW_MARGIN columns / rows of the picture (test 039
-  // showed a line at the picture's right edge holding a frozen frame from focusing: columns inside
-  // the laid-out rectangle that live view does not write). Magenta (diagnostic): the same margin in
-  // cyan, then the strips in magenta.
-  const paints = strips === 'magenta'
-    ? [paintAsm(0xb3b3, 0x10a6, LIVE_VIEW_MARGIN), paintAsm(0x6969, 0xead4, 0)]
-    : [paintAsm(0x0000, 0x8080, LIVE_VIEW_MARGIN)];
-  const routines = paints.map((src) => patch.append((at) => assembleWords(src, at), 16));
-  SHOW_BUFFER.forEach((site) => {
-    const tramp = patch.append((at) => assembleWords(
-      `${routines.map((r) => `bl #${r}`).join(';')};mov r1,r5;b #${site + 4}`, at), 16);
-    patch.setWord(site, branchWord(site, tramp), 'live view: paint around an added ratio\'s picture in the buffer being shown');
-  });
-  extendZeroFill(patch);
-}
-
-// --------------------------------------------------------------------------------------------
 
 export function validateRatioName(name: string): 'empty' | 'too-long' | 'bad-char' | null {
   if (typeof name !== 'string' || name.trim() === '') return 'empty';
@@ -1096,14 +958,14 @@ export function validateRatioName(name: string): 'empty' | 'too-long' | 'bad-cha
 }
 
 /** Validate a list of ratios and work out their identities, geometry and icons. Throws on any problem. */
-export function planRatios(specs: readonly RatioSpec[]): RatioEntry[] {
+export function planRatios(specs: readonly RatioSpec[], options: { portrait?: boolean } = {}): RatioEntry[] {
   if (!Array.isArray(specs)) fail('bad-ratio', 'the ratio list must be an array');
   if (specs.length > MAX_CUSTOM_RATIOS) fail('too-many-ratios', `at most ${MAX_CUSTOM_RATIOS} ratios can be added`);
   const out: RatioEntry[] = [];
   specs.forEach((s, i) => {
     const problem = validateRatioName(s.name);
     if (problem) fail('bad-name', `ratio ${i + 1}: name is ${problem}`);
-    const geometry = planRatio(s.ratio);
+    const geometry = planRatio(s.ratio, options);
     out.push({ name: s.name, ratio: s.ratio, id: FIRST_CUSTOM_ID + i, geometry, icon: drawRatioIcon(s.ratio) });
   });
   playbackRectangles(out.map((r) => r.geometry)); // throws on conflicting photo sizes
@@ -1156,7 +1018,6 @@ export function installExtensions(rtos: Uint8Array, iconbin: Uint8Array, ratios:
     installState(patch, ratios, menu.activeBitmap);
     installImageIdentity(patch, ratios);
     if (revision >= 2) installPlaybackDecode(patch);
-    if (features.guard) installLiveViewRepaint(patch, test.liveViewStrips ?? 'black');
   }
   if (features.adjSoftFocus) icons = installAdjSoftFocus(patch, icons);
   if (features.monoUnlock) installMonoUnlock(patch);

@@ -132,7 +132,7 @@ export type FirmwareBuild = Omit<BuildResult, 'decoded'>;
 
 /** What adding a ratio would give, for the UI; `problem` is set (and the rest absent) when it cannot be added. */
 export interface RatioPreview {
-  problem?: 'bad-ratio' | 'ratio-factory' | 'ratio-too-extreme' | 'ratio-quick-view' | 'ratio-metering' | 'ratio-conflict' | 'ratio-duplicate';
+  problem?: 'bad-ratio' | 'ratio-factory' | 'ratio-portrait' | 'ratio-too-extreme' | 'ratio-quick-view' | 'ratio-metering' | 'ratio-conflict' | 'ratio-duplicate';
   /** The ratio the pixel grid really gives, reduced (e.g. `30:11` for 65:24). */
   actual?: string;
   /** Relative difference between the actual and the requested ratio, in percent. */
@@ -208,8 +208,6 @@ export interface BuildOptions {
   dateStampFixed?: number;
   /** Test builds only: print the encoder configuration on the 720x480 picture. */
   dateStampDiag?: boolean;
-  /** Test builds only: paint the strips beside an added ratio's live-view picture (see aspect TestOptions). */
-  liveViewStrips?: 'magenta' | 'black';
 }
 
 export interface ShutdownImage {
@@ -478,7 +476,8 @@ export class Engine {
     if (!specs) return modified(false, [], aligned);
     let ratios: BuiltRatio[] = [];
     try {
-      const plan = planRatios(specs);
+      // Files of earlier versions may hold ratios narrower than 1:1, which are no longer built.
+      const plan = planRatios(specs, { portrait: true });
       ratios = plan.map((r) => ({ id: r.id, name: r.name, ratio: r.ratio, actual: ratioText(r.geometry.actual.n, r.geometry.actual.d), sizes: gr4Sizes(r.geometry) }));
       // Undo the hook words (their places are the same for every list of ratios of this length
       // or any other: they are found by building once on the official image).
@@ -552,7 +551,7 @@ export class Engine {
       };
     } catch (e) {
       if (e instanceof FirmwareError) {
-        const known = ['bad-ratio', 'ratio-factory', 'ratio-too-extreme', 'ratio-quick-view', 'ratio-metering', 'ratio-conflict'];
+        const known = ['bad-ratio', 'ratio-factory', 'ratio-portrait', 'ratio-too-extreme', 'ratio-quick-view', 'ratio-metering', 'ratio-conflict'];
         const problem = (known.includes(e.code) ? e.code : 'bad-ratio') as RatioPreview['problem'];
         if (problem !== 'ratio-quick-view' || !suggest) return { problem };
         // Step the screen rectangle 4 pixels at a time in both directions until a ratio works.
@@ -647,7 +646,6 @@ export class Engine {
     const features = { adjSoftFocus, guard: clarity.length === 0 && options.guard !== false, ...(Object.keys(cinemaHalation).length > 0 ? { cinemaHalation } : {}), ...(dateStamp ? { dateStamp } : {}), ...(monoUnlock ? { monoUnlock } : {}), ...(extraSlots.length > 0 ? { extraSlots } : {}), ...(pictures.length > 0 ? { shutdown: { pictures, factory: aspect.factoryShutdownJpegs(this.decoded) } } : {}) };
     const test = {
       ...(options && options.dateStampFixed ? { dateStampFixed: options.dateStampFixed, dateStampDiag: !!options.dateStampDiag } : {}),
-      ...(options && options.liveViewStrips ? { liveViewStrips: options.liveViewStrips } : {}),
     };
     const { decoded: _decoded, ...rest } = await buildFirmware(this.raw, edits, ratios, clarity, features, test);
     return rest;
