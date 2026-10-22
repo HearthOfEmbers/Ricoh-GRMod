@@ -11,7 +11,7 @@ import { onUiScale, uiScale } from './fit';
 import { applySlot } from './preview';
 import {
   addRatio, addWallFiles, askForOfficial, bridgeLoaded, loadFirmwareFile, loadIconImage, loadPresetFile, loadPreviewFile, moveWall, nameProblem, openCrop, outputFirmware, previewPhoto, removePreset, removeWall,
-  maxRatios, ratioName, ratioProblem, removeRatio, resetGr3xRatios, setActiveRatio, setActiveSlot, setCrop, setIcon, setName, setPreviewMode, setRatio, setRatioBackdrop, useStore, wallBitmap,
+  maxRatios, setFilmHalation, ratioName, ratioProblem, removeRatio, resetGr3xRatios, setActiveRatio, setActiveSlot, setCrop, setIcon, setName, setPreviewMode, setRatio, setRatioBackdrop, useStore, wallBitmap,
   setSoft,
   setDateStamp,
   setMonoUnlock,
@@ -51,9 +51,12 @@ function Swatches({ params }: { params?: color.SlotParams }) {
 function PhotoCompare({ params }: { params?: color.SlotParams }) {
   const photo = usePhoto();
   const gr3x = useStore(s => s.info?.family === 'gr3x');
-  const halo = useStore((s) => { const x = s.extras.find((e) => e.key === s.activeSlot); return x?.halation?.preview ? x.halation : undefined; });
+  const halo = useStore((s) => {
+    if (s.info?.family === 'gr3x') { const level = s.slots[s.activeSlot as SlotId]?.halation; return level ? { on: true, preview: level } : undefined; }
+    const x = s.extras.find((e) => e.key === s.activeSlot); return x?.halation?.preview ? x.halation : undefined;
+  });
   // where the slot's light starts: its own look decides how bright the highlights end up
-  const result = useStore((s) => s.extras.find((e) => e.key === s.activeSlot)?.preset?.result);
+  const result = useStore((s) => (s.info?.family === 'gr3x' ? s.slots[s.activeSlot as SlotId]?.preset?.result : s.extras.find((e) => e.key === s.activeSlot)?.preset?.result));
   const light = useMemo(() => (result ? halationLight(result.curves, result.postQ9) : undefined), [result]);
   const base = useMemo(() => (photo && params ? applySlot(params, photo, gr3x) : null), [photo, params, gr3x]);
   // The added slot's halation at the level chosen for the preview, as the camera computes it.
@@ -218,6 +221,14 @@ function SlotCard({ id }: { id: SlotId }) {
               </div>
             )}
           </Prop>
+          {gr3x && (
+            <Prop label={t('haloLabel')}>
+              <div className="halo">
+                <Segmented value={String(slot.halation ?? 0)} onChange={(v) => setFilmHalation(id, Number(v) as 0 | 1 | 2)} options={[{ value: '0', label: t('haloOff') }, { value: '1', label: t('haloWeak') }, { value: '2', label: t('haloStrong') }]} />
+                <span className="muted small halo-note">{t('gr3xHalationSub')}</span>
+              </div>
+            </Prop>
+          )}
           <Prop label={t('icon')} tour={first ? 'ic-icon' : undefined}>
             <div className="chips">
               <Segmented value={slot.icon.mode} onChange={(mode) => setIcon(id, { mode })} options={[{ value: 'keep', label: t('iconKeep') }, { value: 'text', label: t('iconText') }, { value: 'image', label: t('iconImage') }]} />

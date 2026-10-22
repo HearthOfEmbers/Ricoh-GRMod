@@ -114,7 +114,7 @@ try {
   if (!summary.all_checks_passed || summary.candidate_sha256 !== result.report.outputSha256) throw new Error('T6 validation/hash mismatch');
   // Fresh Engine inspection must rebuild identical bytes from the embedded recipe.
   const inspected = await (await Engine.open(raw)).inspect(result.bytes);
-  if (!inspected.verified || inspected.monoUnlock || inspected.slots.length !== 9 || inspected.slots.some((s, i) => s.names.en !== T6_FILM_NAMES[i])) throw new Error('T6 fresh-engine reconstruction failed');
+  if (!inspected.verified || inspected.monoUnlock || inspected.slots.length !== 9 || inspected.slots.some((s, i) => s.names.en !== films[i].name)) throw new Error('T6 fresh-engine reconstruction failed');
   await json('reconstruction-check.json', { verified: true, sha256: inspected.sha256, monoReplicas: inspected.monoUnlock,
     slotNames: inspected.slots.map(s => s.names.en), hardwareTested: false });
   await copyFile(join(root, 'docs/' + (result.report.filename === 'fwdc239b.bin' ? 'GR3_HDF_210_TEST.txt' : 'GR3X_T6_TEST.txt')), join(target, '请先阅读.txt'));

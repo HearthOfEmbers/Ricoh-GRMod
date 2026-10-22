@@ -16,7 +16,9 @@ export type Page = 'ic' | 'ratio' | 'wall' | 'copies';
 export interface RatioItem { id: string; ratio: string; name: string; preview?: RatioPreview }
 export interface PresetState { fileName: string; kind: 'xmp' | 'cube'; text: string; busy: boolean; result?: PresetResult; error?: string }
 export interface IconState { mode: 'keep' | 'text' | 'image'; text: string; style: 'film' | 'plain'; image?: string; pixels?: Uint8Array }
-export interface SlotState { preset?: PresetState; names: Partial<Record<LangCode, string>>; icon: IconState }
+export interface SlotState { preset?: PresetState; names: Partial<Record<LangCode, string>>; icon: IconState;
+  /** GR III / IIIx films: halation level built in (0 off, 1 weak, 2 strong). */
+  halation?: 0 | 1 | 2 }
 /**
  * An added Image Control slot (style 34, 35, ... in the camera): `key` is `x-` and a random id;
  * `name` as typed (empty: the default name of its place), one name for every language.
@@ -154,6 +156,7 @@ async function saveProject(): Promise<void> {
       preset: s.slots[id].preset ? { fileName: s.slots[id].preset!.fileName, kind: s.slots[id].preset!.kind } : null,
       names: s.slots[id].names,
       icon: { mode: s.slots[id].icon.mode, text: s.slots[id].icon.text, style: s.slots[id].icon.style, image: s.slots[id].icon.image },
+      ...(s.slots[id].halation ? { halation: s.slots[id].halation } : {}),
     }])),
     extras: s.extras.map((x) => ({ key: x.key, name: x.name, preset: x.preset ? { fileName: x.preset.fileName, kind: x.preset.kind } : null, icon: { mode: x.icon.mode, text: x.icon.text, style: x.icon.style, image: x.icon.image }, ...(x.halation ? { halation: x.halation } : {}) })),
     wall: s.wall.map((w) => ({ id: w.id, name: w.name, kind: 'image', width: w.width, height: w.height, crop: w.crop, ...(w.menuName !== undefined ? { menuName: w.menuName } : {}), ...(w.menuId ? { menuId: w.menuId } : {}) })),
@@ -180,6 +183,7 @@ export async function init(): Promise<void> {
         if (!d) continue;
         slots[id].names = d.names || {};
         if (d.icon) slots[id].icon = { mode: d.icon.mode || 'keep', text: d.icon.text || '', style: d.icon.style || 'film', image: d.icon.image };
+        if (d.halation === 1 || d.halation === 2) slots[id].halation = d.halation;
       }
       const extras: ExtraSlot[] = (Array.isArray(doc.extras) ? doc.extras : []).slice(0, MAX_EXTRA_SLOTS)
         .filter((x: ExtraSlot) => x && typeof x.key === 'string' && /^x-[a-z0-9]{1,12}$/.test(x.key))
@@ -708,6 +712,11 @@ export function removeRatio(id: string): void {
   set((s) => { const ratios = s.ratios.filter((r) => r.id !== id); return { ratios, activeRatio: s.activeRatio === id ? ratios[0]?.id : s.activeRatio }; });
   ratiosChanged(true);
 }
+/** GR III / IIIx: a film's halation level (built in; the camera has no slider for it). */
+export function setFilmHalation(id: SlotId, level: 0 | 1 | 2): void {
+  set((s) => ({ slots: { ...s.slots, [id]: { ...s.slots[id], halation: level || undefined } } }));
+  scheduleSave();
+}
 export function setActiveRatio(id: string): void { if (state.activeRatio !== id) set({ activeRatio: id }); }
 
 // ------------------------------------------------------------------ preview photo
@@ -785,6 +794,7 @@ export function pendingChanges(s: State = state): SlotChange[] {
       if (v && v !== off.names[lang].text && !nameProblem(s.info, id, lang, v)) names[lang] = v;
     }
     if (Object.keys(names).length) { req.names = names; parts.push(`${t('name')} ${Object.values(names).join(' / ')}`); labels.push(`${t('name')} “${Object.values(names)[0]}”`); }
+    if (s.info.family === 'gr3x' && sl.halation) { req.halation = sl.halation; parts.push(`${t('halation')} ${t(sl.halation === 2 ? 'haloStrong' : 'haloWeak')}`); labels.push(t('halation')); }
     if (parts.length) out.push({ id, parts, labels, request: req });
   }
   return out;
