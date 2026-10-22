@@ -290,7 +290,9 @@ interface SubmenuSites {
  * own scale, a red or white icon, no number). Values are read from and written to the Toning byte.
  */
 function submenu(p: Patch, o: HalationUiOptions, field: number, put: number, s: SubmenuSites): void {
-  hook(p, s.title, 0xe3001157, `${flagTest};movw r1,#${TEXT_GRAIN};movwne r1,#${o.nameText};b #${s.title + 4}`, 'halation submenu: title');
+  // In the prologue: ip still holds the caller's sp (`sub fp,ip,#4` follows), so only r1 is used
+  // (test 043 used ip here: fp went wrong and the camera froze on entering the submenu).
+  hook(p, s.title, 0xe3001157, `${addr('r1', HAL_FLAG)};ldr r1,[r1];cmp r1,#0;movw r1,#${TEXT_GRAIN};movwne r1,#${o.nameText};b #${s.title + 4}`, 'halation submenu: title');
   hook(p, s.subtitle, 0xe1d310b4,
     `ldrh r1,[r3,#4];${flagTest};beq done;movw ip,#${TEXT_SIZE};cmp r1,ip;movweq r1,#${TEXT_STRENGTH};movwne r1,#${o.colourText};done:b #${s.subtitle + 4}`, 'halation submenu: row name');
   hook(p, s.icon0, 0xe1d370b2, `ldrh r7,[r3,#2];${flagTest};movwne r7,#${o.icon};b #${s.icon0 + 4}`, 'halation submenu: strength icon');

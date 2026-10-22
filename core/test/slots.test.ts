@@ -12,6 +12,7 @@ import { Engine, color, fw } from '../src';
 import { syntheticSamples } from '../src/color/convert';
 import type { ExtraSlotSpec } from '../src/fw';
 import { Patch } from '../src/fw/aspect/build';
+import { branchTarget } from '../src/fw/aspect/arm';
 
 const P = new URL('../testdata/private/', import.meta.url).pathname;
 const have = existsSync(P + 'official.bin');
@@ -180,6 +181,16 @@ describe.skipIf(!have)('added slots: firmware files', () => {
     // the parameter screens' hooks (shooting and RAW development) and the native readers' clamps
     for (const at of [0x531c7aa0, 0x531caa94, 0x531c9728, 0x531cb448, 0x531ca810, 0x531cb1bc, 0x531ca698, 0x531cbd9c, 0x531cc7f8, 0x531a6a8c, 0x531a9d64, 0x531aa1e8, 0x531ab4b8, 0x53911afc, 0x537dd7c4, 0x537d7768]) {
       expect(patch.word(at) >>> 24, at.toString(16)).toBe(0xea);
+    }
+    // the submenus' title hooks sit inside a prologue (`mov ip,sp; push …; <hook>; …; sub fp,ip,#4`): their code
+    // must not write ip (test 043 did, and the camera froze on pressing Fn for either submenu)
+    for (const at of [0x531cbd9c, 0x531aaa34]) {
+      const back = (pc: number): boolean => (patch.word(pc) & 0x0f000000) === 0x0a000000 && branchTarget(pc, patch.word(pc)) === at + 4;
+      let pc = branchTarget(at, patch.word(at));
+      for (let n = 0; n < 16 && !back(pc); n++, pc += 4) {
+        expect((patch.word(pc) >>> 12) & 15, `${at.toString(16)}: ${pc.toString(16)}`).not.toBe(12);
+      }
+      expect(back(pc)).toBe(true);
     }
     const other = await eng.buildFirmware([], [], [], { dateStamp: true, extraSlots: [slots[0], slots[1], { ...slots[2], halation: false }] });
     expect(other.sha256).not.toBe(b.sha256);
