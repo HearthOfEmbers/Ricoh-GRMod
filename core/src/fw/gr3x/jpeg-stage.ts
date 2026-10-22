@@ -25,7 +25,7 @@ import { FirmwareError } from '../types';
 import { branchWord, wordsToBytes } from '../aspect/arm';
 import { halationLut, halationModule, paramBytes } from '../aspect/halation';
 import type { HalationLight } from '../aspect/halation';
-import { datestampModule } from '../aspect/datestamp';
+import { GR3X_DATESTAMP_DIAG_CODE } from './datestamp-diag';
 
 export const GR3X_JPEG_EXECUTE = 0x535047d4;
 export const GR3X_DEVELOP_LOOK_READ = 0x536db7f8;
@@ -75,7 +75,9 @@ export function installGr3xJpegStage(p: Gr3xJpegProgram, o: Gr3xJpegOptions) {
   if (o.diagnostics) {
     const on = p.append(Uint8Array.of(1, 0, 0, 0));
     const ctx = p.append(u32le([CACHE, CACHE_FLUSH_FOR_READ, CACHE_CLEAN, PLATFORM, GET_TIME, on]));
-    const module = p.append(datestampModule(true));
+    // GR III's own diagnostic build: it only draws into planes above the RTOS data and heaps
+    // whose CbCr plane has the rows it draws (tools/gr3x/compile_diag.py).
+    const module = p.append(Uint8Array.from(atob(GR3X_DATESTAMP_DIAG_CODE), c => c.charCodeAt(0)));
     const stub = p.code(`push {r0-r3,ip,lr};ldr r1,[r1,#8];${addr('r0', ctx)}bl #${module};pop {r0-r3,ip,lr};${tail}`);
     entries.dateDiagnostics = stub; entries.dateModule = module;
     tail = `b #${stub};`; first = stub;

@@ -105,9 +105,11 @@ def verify(data,manifest):
         p.state(fn=4);p.call(setter,0,12);assert c.mem_read(DATA+0x918+2*slot,1)[0]==FN
         p.state(fn=FN,slot=slot);assert [i for i in range(19) if p.call(current,0,i)]==[12];calls+=21
     # Pictures: the per-picture decision and the clarity parameter.
-    def decide(probe,look,byte):
+    def slots(probe,on,where=2):
+        for i,f in enumerate((0x918,0x91a,0x91c,0x91e,0x920)):probe.uc.mem_write(DATA+f,bytes([FN if on and i==where else 4]))
+    def decide(probe,look,byte,on=True):
         u=probe.uc;u.mem_write(CP,bytes(0x800));u.mem_write(CP+0x77c,bytes([look]));u.mem_write(CP+0x793,b'\x04\x04\x00\x00')
-        u.mem_write(OUT,bytes(0x40));u.mem_write(BYTE,bytes([byte]));put(u,PTR,DATA);probe.call(0x535131c0,OUT,CP)
+        u.mem_write(OUT,bytes(0x40));u.mem_write(BYTE,bytes([byte]));put(u,PTR,DATA);slots(probe,on);probe.call(0x535131c0,OUT,CP)
         return u.mem_read(OUT+0x24,1)[0]
     for look in list(range(11,23))+[f['id'] for f in manifest.get('addedLooks',[])]:
         native_look=next((f['nativeBase'] for f in manifest.get('addedLooks',[]) if f['id']==look),look)
@@ -116,9 +118,11 @@ def verify(data,manifest):
         for b in (1,2,3):
             on=decide(p,look,b);calls+=1
             assert on==(off if native_look==20 else 1),(look,b,on)
+            # Taken off the ADJ lever, soft focus is off whatever the byte says.
+            assert decide(p,look,b,on=False)==off;calls+=1
         assert decide(p,look,9)==off
-    def effect(probe,clarity,byte):
-        u=probe.uc;u.mem_write(CP,bytes(0x800));u.mem_write(CP+0x793,bytes([4,clarity,0,0]));u.mem_write(CP+0x7b8,struct.pack('<f',1.0))
+    def effect(probe,clarity,byte,on=True):
+        slots(probe,on,4);u=probe.uc;u.mem_write(CP,bytes(0x800));u.mem_write(CP+0x793,bytes([4,clarity,0,0]));u.mem_write(CP+0x7b8,struct.pack('<f',1.0))
         u.mem_write(PARAM,b'\xa5'*16);u.mem_write(PROC,bytes(0x40));put(u,PROC+0x10,PARAM);u.mem_write(BYTE,bytes([byte]))
         probe.call(0x5350304c,PROC,CP,1);return struct.unpack('<h',u.mem_read(PARAM+2,2))[0],bytes(u.mem_read(PARAM,16))
     for clarity in range(9):
@@ -126,6 +130,7 @@ def verify(data,manifest):
         for b in (0,4,9,0xff):assert effect(p,clarity,b)==native
         for b in (1,2,3):
             v,raw=effect(p,clarity,b);assert v==4+b and raw[:2]+raw[4:]==native[1][:2]+native[1][4:]
+            assert effect(p,clarity,b,on=False)==native
         calls+=8
     # The clarity function's row: rows 0..8 as before, 9..11 from the three soft-focus rows.
     rows=e['softFocusRows']
@@ -137,7 +142,7 @@ def verify(data,manifest):
     return dict(schema=1,rtos_sha256=hashlib.sha256(data).hexdigest(),calls=calls,function=FN,text=text,icon=icon,
         soft_focus_rows=[list(gains[i*11:i*11+11]) for i in range(3)],names_all_21_rows=True,other_functions_unchanged=True,
         movie_layout_unchanged=True,one_current_value_always=True,menu_all_five_slots=True,
-        look20_unchanged=True,hardware_tested=False,
+        look20_unchanged=True,off_unless_on_an_adj_slot=True,hardware_tested=False,
         scope='ADJ controller, ADJ mode setting menu, picture decision, effect parameter and row helper; widgets substituted.')
 
 if __name__=='__main__':

@@ -25,7 +25,7 @@
  *  - Pictures: the per-picture decision 0x535131c0 reads Clarity at 0x53513218 and 0x53513240
  *    (looks 11/12/17/18/19/21 and 13/15/16/22; look 14 always runs the step, look 20 decides on
  *    another field and gets no soft focus); while soft focus is on, those reads give "not
- *    neutral". SetEffectParameter (0x5350304c) stores Clarity at 0x53503184 `strh r3,[r4,#2]`;
+ *    neutral" (only while an ADJ slot holds soft focus). SetEffectParameter (0x5350304c) stores Clarity at 0x53503184 `strh r3,[r4,#2]`;
  *    while soft focus is on it stores 5..7 instead. The clarity function's bound (0x5367c1b0
  *    `cmp r8,#8`) becomes 11 and its row selection (0x5367c7e4) takes rows 9..11 from a table of
  *    the three soft-focus rows. Clarity itself and its table stay as they are.
@@ -92,16 +92,22 @@ export function installGr3xAdjSoftFocus(p: Gr3xSoftFocusProgram, textId: number,
   p.patch(NAME_SITE, 0x03a00049, one(`movweq r0,#${textId}`, NAME_SITE), 'ADJ soft focus: name');
   const tail = assembleWords(`cmp r1,#0x13;movweq r0,#${iconId};movne r0,#0;bx lr`, ICON_TAIL);
   [0xe2410013, 0xe16f0f10, 0xe1a002a0, 0xe12fff1e].forEach((w, i) => p.patch(ICON_TAIL + i * 4, w, tail[i], 'ADJ soft focus: icon'));
-  // --- pictures
+  // --- pictures. The level counts only while one of the five ADJ slots holds soft focus
+  // (bytes 0x918 + 2i): taken off the lever, it cannot stay on unseen. Returns it in r2;
+  // every other register is kept (flags are not).
+  const level = p.code(`push {r0,r1,r3,lr};${ptr('r0')}mov r2,#0;cmp r0,#0;beq done;
+    ldrb r1,[r0,#${O}];cmp r1,#3;bhi done;` +
+    [0x918, 0x91a, 0x91c, 0x91e, 0x920].map(f => `ldrb r3,[r0,#${f}];cmp r3,#${GR3X_ADJ_SOFT_FOCUS};beq on;`).join('') +
+    `b done;on:mov r2,r1;done:pop {r0,r1,r3,pc};`);
   const gates = GATES.map(site => {
-    const at = p.code(`ldrb r3,[r1,#0x794];${ptr('r2')}cmp r2,#0;ldrbne r2,[r2,#${O}];
+    const at = p.code(`ldrb r3,[r1,#0x794];push {lr};bl #${level};pop {lr};
       sub r2,r2,#1;cmp r2,#2;movls r3,#9;b #${site + 4};`);
     if (p.word(site + 4) !== 0xe5d12793) throw new FirmwareError('unexpected-instruction', 'IIIx clarity gate'); // ldrb r2,[r1,#0x793]: r2 is free
     p.patch(site, 0xe5d13794, b(site, at), 'ADJ soft focus: run the digital-filter step');
     return at;
   });
-  const param = p.code(`strh r3,[r4,#2];${ptr('r2')}cmp r2,#0;bxeq lr;ldrb r2,[r2,#${O}];
-    cmp r2,#0;bxeq lr;cmp r2,#3;bxhi lr;add r2,r2,#4;strh r2,[r4,#2];bx lr;`);
+  const param = p.code(`strh r3,[r4,#2];push {lr};bl #${level};pop {lr};
+    cmp r2,#0;bxeq lr;add r2,r2,#4;strh r2,[r4,#2];bx lr;`);
   p.patch(PARAM_STORE, 0xe1c430b2, bl(PARAM_STORE, param), 'ADJ soft focus: clarity parameter');
   p.patch(BOUND, 0xe3580008, 0xe358000b, 'ADJ soft focus: clarity rows up to 11');
   const rows = p.append(softFocusRows());
@@ -109,6 +115,6 @@ export function installGr3xAdjSoftFocus(p: Gr3xSoftFocusProgram, textId: number,
     soft:sub r8,r8,#9;mul r8,r3,r8;movw ip,#${lo(rows)};movt ip,#${hi(rows)};add r8,r8,ip;bx lr;`);
   p.patch(ROW, 0xe0281893, bl(ROW, row), 'ADJ soft focus: clarity row');
   void wordsToBytes;
-  return { softFocusDraw: draw, softFocusIsCurrent: isCurrent, softFocusSet: set, softFocusCount: count,
+  return { softFocusLevel: level, softFocusDraw: draw, softFocusIsCurrent: isCurrent, softFocusSet: set, softFocusCount: count,
     softFocusGates: gates, softFocusParam: param, softFocusRows: rows, softFocusRow: row, softFocusText: textId, softFocusIcon: iconId };
 }

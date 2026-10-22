@@ -118,9 +118,15 @@ static u32 digit_hit(u32 seg, s32 qx, s32 qy, s32 w, s32 h, s32 t) {
 /* Plausible RAM address (the camera's DDR, 0x40000000..0xBFFFFFFF); anything else is not
  * dereferenced. With RAW+JPEG the scaled-down main picture of the smaller sizes lives above
  * 0xA0000000 (seen at 0xB1069CC0, test firmware 015). */
+#ifdef STRICT_PLANES
+/* GR III test builds: picture buffers only above the RTOS data and heaps (0x55..-0x5c8..). */
+#define RAM_LOW 0x5d000000u
+#else
+#define RAM_LOW 0x40000000u
+#endif
 static int ram(const void *p) {
   u32 a = (u32)p;
-  return a >= 0x40000000u && a < 0xc0000000u && (a & 3) == 0;
+  return a >= RAM_LOW && a < 0xc0000000u && (a & 3) == 0;
 }
 
 static void sync(const struct ctx *k, void *cache, struct picture *p, u32 y0, u32 y1, int clean) {
@@ -259,7 +265,7 @@ static void hex_word_le(u32 v, u8 *out) {
 }
 static int wide_ram(const void *p) {
   u32 a = (u32)p;
-  return a >= 0x40000000u && a < 0xc0000000u;
+  return a >= RAM_LOW && a < 0xc0000000u;
 }
 /* Why picture_ok refuses a picture, as a hex digit: 1 format, 2 planes outside 0x40000000..0xc0000000,
  * 4 size, 8 stride / CbCr height. 0 = accepted. */
@@ -292,6 +298,9 @@ static void diag(const struct ctx *k, void *cache, u32 *config) {
     Hm = p->width == 720 ? Hd : (s32)(p->width >> 6);
     if (Hm < 16) Hm = 16;
     if (p->height < (u32)(Hm + 8)) continue;
+#ifdef STRICT_PLANES
+    if (p->c_height < (u32)(Hm + 8)) continue;
+#endif
     sync(k, cache, p, 0, (u32)(Hm + 8), 0);
     n = 0;
     line[n++] = 10; line[n++] = 17;
@@ -303,6 +312,9 @@ static void diag(const struct ctx *k, void *cache, u32 *config) {
     text_at(p, line, n, 4, 4, Hm, white, 1); row++;
     sync(k, cache, p, 0, (u32)(Hm + 8), 1);
     if (p->width != 720 || p->height < 400) continue;
+#ifdef STRICT_PLANES
+    if (p->c_height < 340) continue;
+#endif
     sync(k, cache, p, 0, 340, 0);
     for (j = 0; j < 3; j++) {
       n = 0;
