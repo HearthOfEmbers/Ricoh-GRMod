@@ -51,6 +51,7 @@ function PhotoCompare({ params }: { params?: color.SlotParams }) {
   const photo = usePhoto();
   // (primitive selections: the store hook needs a stable value)
   const haloLevel = useStore((s) => { const h = halationOf(s.activeSlot, s); return h.on ? h.preview : 0; });
+  const haloColour = useStore((s) => halationOf(s.activeSlot, s).colour ?? 'red');
   const halo = haloLevel ? { preview: haloLevel } : undefined;
   // where the slot's light starts: its own look decides how bright the highlights end up
   const result = useStore((s) => slotOf(s.activeSlot, s)?.preset?.result);
@@ -60,9 +61,9 @@ function PhotoCompare({ params }: { params?: color.SlotParams }) {
   const after = useMemo(() => {
     if (!base || !halo) return base;
     const out = new ImageData(new Uint8ClampedArray(base.data), base.width, base.height);
-    halateRgba(out.data, out.width, out.height, halo.preview as 1 | 2, light);
+    halateRgba(out.data, out.width, out.height, halo.preview as 1 | 2, light, haloColour);
     return out;
-  }, [base, haloLevel, light]);
+  }, [base, haloLevel, light, haloColour]);
   return <Compare photo={photo} after={after} label={t('preset')} />;
 }
 
@@ -310,6 +311,7 @@ function ExtraSlotCard({ x, index }: { x: ExtraSlot; index: number }) {
 function HalationProp({ k }: { k: SlotKey }) {
   const on = useStore((s) => halationOf(k, s).on);
   const preview = useStore((s) => halationOf(k, s).preview);
+  const colour = useStore((s) => halationOf(k, s).colour ?? 'red');
   const cinema = !k.startsWith('x-');
   return (
     <Prop label={t('haloLabel')}>
@@ -323,6 +325,7 @@ function HalationProp({ k }: { k: SlotKey }) {
           <div className="chips">
             <span className="muted small">{t('haloPreview')}</span>
             <Segmented value={String(preview)} onChange={(v) => setHalation(k, { preview: Number(v) as 0 | 1 | 2 })} options={[{ value: '0', label: t('haloOff') }, { value: '1', label: t('haloWeak') }, { value: '2', label: t('haloStrong') }]} />
+            {preview > 0 && <Segmented value={colour} onChange={(v) => setHalation(k, { colour: v as 'red' | 'white' })} options={[{ value: 'red', label: t('haloRed') }, { value: 'white', label: t('haloWhite') }]} />}
           </div>
         )}
         <span className="muted small halo-note">{t(cinema ? 'halationCinemaSub' : 'halationSub')}</span>
@@ -466,14 +469,16 @@ const COMMON_RATIOS = ['65:24', '2.39:1', '2:1', '5:4', '7:6'];
 const size = (s: [number, number]): string => `${s[0]}×${s[1]}`;
 
 function RatioRow({ r, active, tour }: { r: RatioItem; active: boolean; tour?: string }) {
-  const problem = ratioProblem(r);
   const p = r.preview;
+  // A ratio narrower than 1:1 is only marked (the input in red, the reason as its tooltip).
+  const portrait = p?.problem === 'ratio-portrait';
+  const problem = portrait ? null : ratioProblem(r);
   const busy = !!r.ratio.trim() && !p;
   return (
     <div className={`ratio-row ${active ? 'on' : ''}`} data-tour={tour} onPointerDownCapture={() => setActiveRatio(r.id)} onFocusCapture={() => setActiveRatio(r.id)}>
       <RatioIcon pixels={p?.icon} width={48} />
       <input
-        className={`input ratio-in ${p?.problem ? 'bad' : ''}`} value={r.ratio} maxLength={16} spellCheck={false} placeholder={t('ratioPlaceholder')} aria-label={t('navRatio')}
+        className={`input ratio-in ${p?.problem ? 'bad' : ''}`} title={portrait ? ratioProblem(r) ?? undefined : undefined} value={r.ratio} maxLength={16} spellCheck={false} placeholder={t('ratioPlaceholder')} aria-label={t('navRatio')}
         autoFocus={!r.ratio} onChange={(e) => setRatio(r.id, { ratio: e.target.value.replace(/[^0-9:.：/xX×]/g, '').replace(/[：/xX×]/g, ':') })}
       />
       <input
@@ -527,7 +532,7 @@ function RatioPane({ r }: { r?: RatioItem }) {
         </div>
         <div className={`chips ratio-out ${p?.sizes ? 'sizes' : ''}`}>
           {p?.sizes && p.sizes.map((s, i) => <span key={i} className="chip"><b>{labels[i]}</b>{size(s)}</span>)}
-          {p?.problem && <span className="chip bad">{r ? ratioProblem(r) : ''}</span>}
+          {p?.problem && p.problem !== 'ratio-portrait' && <span className="chip bad">{r ? ratioProblem(r) : ''}</span>}
           {p?.problem && r && (p.nearest || []).map((n) => <button key={n} className="btn small" onClick={() => setRatio(r.id, { ratio: n })}>{n}</button>)}
         </div>
       </div>

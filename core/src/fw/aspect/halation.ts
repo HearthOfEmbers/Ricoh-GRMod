@@ -28,7 +28,7 @@
  */
 import { FirmwareError } from '../types';
 import { assembleWords, branchTarget, movImmediate } from './arm';
-import { Patch, u16le, u32le } from './build';
+import { Patch, concat, u16le, u32le } from './build';
 import { HALATION_CODE, HALATION_CODE_LENGTH } from './halation-code';
 
 /**
@@ -55,7 +55,12 @@ export const HALATION = {
   gain: [12, 24] as const,
   /** Lift of red, green and blue per unit of light (red first: the red layer is exposed again from behind, a little the green). */
   channels: [1, 0.06, 0.03] as const,
+  /** White (0.8.2, chosen on the camera): every channel lifted alike, a soft white bloom like the GR IV HDF's highlight diffusion. */
+  white: [0.6, 0.6, 0.6] as const,
 };
+
+/** Colour of the glow: red (film halation) or white (highlight diffusion). */
+export type HalationColour = 'red' | 'white';
 
 
 /** JpegEncodeMacroProcess::Execute. */
@@ -149,15 +154,16 @@ export function halationLight(curves?: readonly [ArrayLike<number>, ArrayLike<nu
 /** Without a look (the camera's Standard). */
 export const PLAIN_LIGHT: HalationLight = halationLight();
 
-let lutCache: Uint8Array | undefined;
+const lutCache: Partial<Record<HalationColour, Uint8Array>> = {};
 /** The table of halation.c: lift of red, green, blue (of 255) for light index i (i / 64 units). */
-export function halationLut(): Uint8Array {
-  if (lutCache) return lutCache;
+export function halationLut(colour: HalationColour = 'red'): Uint8Array {
+  const cached = lutCache[colour];
+  if (cached) return cached;
   const out = new Uint8Array(3 * LUT_N);
-  HALATION.channels.forEach((wc, c) => {
+  (colour === 'white' ? HALATION.white : HALATION.channels).forEach((wc, c) => {
     for (let i = 0; i < LUT_N; i++) out[c * LUT_N + i] = Math.round(255 * (1 - Math.exp(-(i / 64) * wc)));
   });
-  lutCache = out;
+  lutCache[colour] = out;
   return out;
 }
 
@@ -189,7 +195,8 @@ export function installHalationModule(p: Patch, looks: readonly HalationLook[], 
   if (first === 0xe1a0c00d) tail = `mov ip,sp;b #${JPEG_EXECUTE + 4}`;
   else if (first >>> 24 === 0xea) tail = `b #${branchTarget(JPEG_EXECUTE, first)}`;
   else fail('unexpected-layout', 'halation: unexpected JPEG encode entry');
-  const lut = p.append(halationLut(), 16);
+  // Red (three channels), then the white glow's table (one, the same for every channel).
+  const lut = p.append(concat([halationLut('red'), halationLut('white').subarray(0, LUT_N)]), 16);
   const table = p.append(new Uint8Array(entries.flatMap((e) => [...e])), 16);
   const ctx = p.append(new Uint8Array([
     ...u32le([CACHE, CACHE_FLUSH_FOR_READ, CACHE_CLEAN, HEAP_ALLOC, HEAP_FREE, stash, lut, table, looks.length, 0]),
@@ -350,13 +357,131 @@ const lift = (v: number, h: number): number => v + Math.floor(((255 - v) * h * 2
  * The module's computation (halation.c, `halate`) in TypeScript, on a YCbCr 4:2:2 picture (Y and
  * the interleaved CbCr plane, `w` bytes per row each), for GR Mod's preview. Same integer steps.
  */
-export function halateYcc(Y: Uint8Array, C: Uint8Array, w: number, h: number, level: 1 | 2, light: HalationLight = PLAIN_LIGHT): void {
+export function halateYcc(Y: Uint8Array, C: Uint8Array, w: number, h: number, level: 1 | 2, light: HalationLight = PLAIN_LIGHT, colour: HalationColour = 'red'): void {
+  if (colour === 'white') halateYccWhite(Y, C, w, h, level, light);
+  else halateYccRed(Y, C, w, h, level, light);
+}
+
+/**
+ * White (highlight diffusion): the light of each highlight spreads in its own colour (three maps,
+ * red, green and blue, each the light times that channel over the brightest one), and each channel
+ * is lifted by its own map. A white lamp gives a white bloom, a red sign a red one.
+ */
+function halateYccWhite(Y: Uint8Array, C: Uint8Array, w: number, h: number, level: 1 | 2, light: HalationLight): void {
   const P = paramBytes();
   const v = new DataView(P.buffer);
   const tab = light.table;
   const narrow = v.getUint16(0, true), wideR = v.getUint16(2, true), mix = v.getUint16(4, true);
   const gain = halationGains()[level - 1];
-  const lut = halationLut();
+  const lut = halationLut('white');
+  let s = 0;
+  while ((w >>> s) > 1024 || (h >>> s) > 1024) s++;
+  const F = 1 << s;
+  const sw = (w + F - 1) >>> s, sh = (h + F - 1) >>> s, n = sw * sh;
+  const maps = [new Uint16Array(n), new Uint16Array(n), new Uint16Array(n)];
+  const acc = [new Uint32Array(sw), new Uint32Array(sw), new Uint32Array(sw)];
+  const q = s >= 2 ? 1 : 0;
+  for (let y = 0; y < h; y += F) {
+    const by = y >>> s, ylim = Math.min(h, y + F);
+    for (const a of acc) a.fill(0);
+    for (let yy = y; yy < ylim; yy += 1 << q) {
+      const row = yy * w;
+      for (let x = 0; x < w; x += 1 << q) {
+        const y0 = Y[row + x], cb = C[row + (x & ~1)] - 128, cr = C[row + (x | 1)] - 128;
+        const R = c8(y0 + ((91881 * cr + 32768) >> 16));
+        const G = c8(y0 - ((22554 * cb + 46802 * cr - 32768) >> 16));
+        const B = c8(y0 + ((116130 * cb + 32768) >> 16));
+        const m = R > G ? (R > B ? R : B) : (G > B ? G : B);
+        const l = tab[m];
+        if (!l || !m) continue;
+        const k = Math.floor((l << 8) / m);
+        acc[0][x >>> s] += (k * R) >>> 8;
+        acc[1][x >>> s] += (k * G) >>> 8;
+        acc[2][x >>> s] += (k * B) >>> 8;
+      }
+    }
+    for (let c = 0; c < 3; c++) for (let x = 0; x < sw; x++) maps[c][by * sw + x] = Math.min(16384, acc[c][x] >>> (2 * (s - q)));
+  }
+  const tmp = new Uint16Array(Math.max(sw, sh));
+  const spread = (a: Uint16Array, rad: number): void => {
+    let r = (rad * sw + 2048) >>> 12;
+    if (r < 1) return;
+    if (r > 200) r = 200;
+    const recip = Math.floor(65536 / (2 * r + 1));
+    const box = (off: number, len: number, step: number): void => {
+      if (len < 2) return;
+      for (let i = 0; i < len; i++) tmp[i] = a[off + i * step];
+      let sum = 0;
+      for (let j = -r; j <= r; j++) sum += tmp[j < 0 ? 0 : j >= len ? len - 1 : j];
+      for (let i = 0; i < len; i++) {
+        const out = i - r, inn = i + r + 1;
+        a[off + i * step] = (sum * recip) >>> 16;
+        sum -= tmp[out < 0 ? 0 : out];
+        sum += tmp[inn >= len ? len - 1 : inn];
+      }
+    };
+    for (let pass = 0; pass < 3; pass++) {
+      for (let y = 0; y < sh; y++) box(y * sw, sw, 1);
+      for (let x = 0; x < sw; x++) box(x, sh, sw);
+    }
+  };
+  for (const m of maps) {
+    const wide = m.slice();
+    spread(m, narrow);
+    spread(wide, wideR);
+    for (let i = 0; i < n; i++) m[i] = (m[i] * mix + wide[i] * (256 - mix)) >>> 8;
+  }
+  const rowv = [new Uint32Array(sw), new Uint32Array(sw), new Uint32Array(sw)];
+  const at = (i: number): number => (i >= LUT_N ? LUT_N - 1 : i);
+  for (let y = 0; y < h; y++) {
+    let fy = (((y << 8) + 128) >> s) - 128;
+    if (fy < 0) fy = 0;
+    let sy0 = fy >> 8; const wy = fy & 255; let sy1 = sy0 + 1;
+    if (sy0 >= sh) sy0 = sh - 1;
+    if (sy1 >= sh) sy1 = sh - 1;
+    let maxv = 0;
+    for (let c = 0; c < 3; c++) {
+      const m = maps[c], rv = rowv[c];
+      for (let i = 0; i < sw; i++) {
+        const val = (m[sy0 * sw + i] * (256 - wy) + m[sy1 * sw + i] * wy) >>> 8;
+        rv[i] = val;
+        if (val > maxv) maxv = val;
+      }
+    }
+    if (lut[at(Math.floor((maxv * gain) / 1024))] === 0) continue;
+    const row = y * w;
+    for (let x = 0; x + 1 < w; x += 2) {
+      let fx = (((x << 8) + 128) >> s) - 128;
+      if (fx < 0) fx = 0;
+      const sx0 = fx >> 8, wx = fx & 255;
+      let sx1 = sx0 + 1;
+      if (sx1 >= sw) sx1 = sw - 1;
+      const hc = [0, 1, 2].map((c) => lut[at(Math.floor((((rowv[c][sx0] * (256 - wx) + rowv[c][sx1] * wx) >>> 8) * gain) / 1024))]);
+      if (!hc[0] && !hc[1] && !hc[2]) continue;
+      const cb = C[row + x] - 128, cr = C[row + x + 1] - 128;
+      let sb = 0, sr = 0;
+      for (let j = 0; j < 2; j++) {
+        const y0 = Y[row + x + j];
+        const R = lift(c8(y0 + ((91881 * cr + 32768) >> 16)), hc[0]);
+        const G = lift(c8(y0 - ((22554 * cb + 46802 * cr - 32768) >> 16)), hc[1]);
+        const B = lift(c8(y0 + ((116130 * cb + 32768) >> 16)), hc[2]);
+        Y[row + x + j] = c8((19595 * R + 38470 * G + 7471 * B + 32768) >> 16);
+        sb += -11059 * R - 21709 * G + 32768 * B;
+        sr += 32768 * R - 27439 * G - 5329 * B;
+      }
+      C[row + x] = c8(128 + ((sb + 65536) >> 17));
+      C[row + x + 1] = c8(128 + ((sr + 65536) >> 17));
+    }
+  }
+}
+
+function halateYccRed(Y: Uint8Array, C: Uint8Array, w: number, h: number, level: 1 | 2, light: HalationLight): void {
+  const P = paramBytes();
+  const v = new DataView(P.buffer);
+  const tab = light.table;
+  const narrow = v.getUint16(0, true), wideR = v.getUint16(2, true), mix = v.getUint16(4, true);
+  const gain = halationGains()[level - 1];
+  const lut = halationLut('red');
   let s = 0;
   while ((w >>> s) > 1024 || (h >>> s) > 1024) s++;
   const F = 1 << s;
@@ -450,7 +575,7 @@ export function halateYcc(Y: Uint8Array, C: Uint8Array, w: number, h: number, le
 }
 
 /** Halation on an RGBA picture (sRGB, through YCbCr 4:2:2 as in the camera), in place; `light` of the slot (`halationLight`). */
-export function halateRgba(data: Uint8ClampedArray, width: number, height: number, level: 1 | 2, light: HalationLight = PLAIN_LIGHT): void {
+export function halateRgba(data: Uint8ClampedArray, width: number, height: number, level: 1 | 2, light: HalationLight = PLAIN_LIGHT, colour: HalationColour = 'red'): void {
   const w = width & ~1;
   if (w < 2 || height < 2) return;
   const Y = new Uint8Array(w * height), C = new Uint8Array(w * height);
@@ -467,7 +592,7 @@ export function halateRgba(data: Uint8ClampedArray, width: number, height: numbe
     C[y * w + x + 1] = Math.max(0, Math.min(255, Math.round(cr / 2)));
   }
   const before = Y.slice(), cbefore = C.slice();
-  halateYcc(Y, C, w, height, level, light);
+  halateYcc(Y, C, w, height, level, light, colour);
   // Only the change is put back, so the rest of the picture keeps its full colour resolution.
   for (let y = 0; y < height; y++) for (let x = 0; x < w; x += 2) {
     const dcb = C[y * w + x] - cbefore[y * w + x], dcr = C[y * w + x + 1] - cbefore[y * w + x + 1];

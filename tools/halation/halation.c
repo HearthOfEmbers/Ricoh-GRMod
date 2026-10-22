@@ -24,7 +24,12 @@
  * table are made by GR Mod (halation.ts); GR Mod's preview runs the same integer steps.
  *
  * Which look and level: `stash` (written by the development step that reads the frame's record,
- * see slots.ts): bits 0..7 the style, 8..15 the level (0 off, 1 weak, 2 strong), bit 16 valid.
+ * see slots.ts): bits 0..7 the style, 8..15 the level (0 off, 1 weak, 2 strong), bit 16 valid,
+ * bit 17 white.
+ *
+ * White (0.8.2, highlight diffusion like the GR IV HDF): the light of each highlight spreads in its
+ * own colour (three maps: the light times red, green, blue over the brightest of them) and each
+ * channel is lifted by its own map, all by the same table: a white lamp blooms white, a red sign red.
  *
  * Position-independent: no global data, every address comes in through `struct ctx`. No division
  * (the module must not need a run-time library).
@@ -57,7 +62,8 @@ struct look {
   u16 light[256];     /* light (0..16384) of a value (the brighter of Y and red) */
 };
 
-#define LUT_N 4096    /* lut[0..N) red, [N..2N) green, [2N..3N) blue: lift towards white, of 255 */
+#define LUT_N 4096    /* lut[0..N) red, [N..2N) green, [2N..3N) blue: lift towards white, of 255;
+                         [3N..4N) the lift of every channel for the white glow */
 
 struct ctx {
   void *(*cache)(void);                              /* 0x538f0448 */
@@ -76,6 +82,7 @@ struct ctx {
 };
 
 #define STASH_VALID 0x10000u
+#define STASH_WHITE 0x20000u
 #define SMALL_MAX 1024u
 #define E_MAX 16384u
 
@@ -241,6 +248,118 @@ out:
   if (small) k->release(small);
 }
 
+/* The white glow: as halate, with a map per channel. */
+static void halate_white(const struct ctx *k, void *cache, const struct picture *p, u32 gain, const u16 *light) {
+  const struct params *P = &k->p;
+  const u8 *lw = k->lut + 3 * LUT_N;
+  u32 w = p->width, h = p->height, s = 0, q, F, sw, sh, x, y, i, n, c;
+  u16 *map[3] = {0, 0, 0}, *row[3] = {0, 0, 0}, *wide = 0, *tmp = 0;
+  u32 *acc = 0;
+  while ((w >> s) > SMALL_MAX || (h >> s) > SMALL_MAX) s++;
+  F = 1u << s;
+  sw = (w + F - 1) >> s; sh = (h + F - 1) >> s;
+  n = sw * sh;
+  for (c = 0; c < 3; c++) {
+    map[c] = (u16 *)k->alloc(n * 2 + 8);
+    row[c] = (u16 *)k->alloc(sw * 2 + 8);
+    if (!map[c] || !row[c]) goto out;
+  }
+  wide = (u16 *)k->alloc(n * 2 + 8);
+  tmp = (u16 *)k->alloc((sw > sh ? sw : sh) * 2 + 8);
+  acc = (u32 *)k->alloc(3 * sw * 4 + 8);
+  if (!wide || !tmp || !acc) goto out;
+  sync(k, cache, p, 0);
+
+  /* 1. light of the brightest channel through the look's table, shared out by colour */
+  q = s >= 2 ? 1 : 0;
+  for (y = 0; y < h; y += F) {
+    u32 by = y >> s, yy, ylim = y + F > h ? h : y + F;
+    for (x = 0; x < 3 * sw; x++) acc[x] = 0;
+    for (yy = y; yy < ylim; yy += 1u << q) {
+      const u8 *yr = p->y + yy * p->stride, *cr = p->c + yy * p->stride;
+      for (x = 0; x < w; x += 1u << q) {
+        s32 Y = yr[x], cb = (s32)cr[x & ~1u] - 128, crr = (s32)cr[x | 1] - 128;
+        s32 R = clamp8(Y + ((91881 * crr + 32768) >> 16));
+        s32 G = clamp8(Y - ((22554 * cb + 46802 * crr - 32768) >> 16));
+        s32 B = clamp8(Y + ((116130 * cb + 32768) >> 16));
+        s32 m = R > G ? (R > B ? R : B) : (G > B ? G : B);
+        u32 l, f;
+        if (!m) continue;
+        l = light[m];
+        if (!l) continue;
+        f = udiv(l << 8, (u32)m);
+        acc[x >> s] += (f * (u32)R) >> 8;
+        acc[sw + (x >> s)] += (f * (u32)G) >> 8;
+        acc[2 * sw + (x >> s)] += (f * (u32)B) >> 8;
+      }
+    }
+    for (c = 0; c < 3; c++) for (x = 0; x < sw; x++) {
+      u32 v = acc[c * sw + x] >> (2 * (s - q));
+      map[c][by * sw + x] = (u16)(v > E_MAX ? E_MAX : v);
+    }
+  }
+
+  /* 2. per channel: the narrow and the wide spread, mixed */
+  for (c = 0; c < 3; c++) {
+    u16 *m = map[c];
+    for (i = 0; i < n; i++) wide[i] = m[i];
+    spread(m, sw, sh, P->narrow, tmp);
+    spread(wide, sw, sh, P->wide, tmp);
+    for (i = 0; i < n; i++) m[i] = (u16)((m[i] * P->mix + wide[i] * (256 - P->mix)) >> 8);
+  }
+
+  /* 3. lift each channel by its own map */
+  for (y = 0; y < h; y++) {
+    s32 fy = (s32)(((y << 8) + 128) >> s) - 128, sy0, sy1, wy;
+    u32 maxv = 0, idx;
+    u8 *yr = p->y + y * p->stride, *cr = p->c + y * p->stride;
+    if (fy < 0) fy = 0;
+    sy0 = fy >> 8; wy = fy & 255; sy1 = sy0 + 1;
+    if ((u32)sy0 >= sh) sy0 = (s32)sh - 1;
+    if ((u32)sy1 >= sh) sy1 = (s32)sh - 1;
+    for (c = 0; c < 3; c++) for (i = 0; i < sw; i++) {
+      u32 v = ((u32)map[c][(u32)sy0 * sw + i] * (u32)(256 - wy) + (u32)map[c][(u32)sy1 * sw + i] * (u32)wy) >> 8;
+      row[c][i] = (u16)v;
+      if (v > maxv) maxv = v;
+    }
+    idx = (maxv * gain) >> 10;
+    if (lw[idx >= LUT_N ? LUT_N - 1 : idx] == 0) continue;
+    for (x = 0; x + 1 < w; x += 2) {
+      s32 fx = (s32)(((x << 8) + 128) >> s) - 128, sx0, sx1, wx, cb, crr, j, sb = 0, sr = 0;
+      u32 hc[3];
+      if (fx < 0) fx = 0;
+      sx0 = fx >> 8; wx = fx & 255; sx1 = sx0 + 1;
+      if ((u32)sx1 >= sw) sx1 = (s32)sw - 1;
+      for (c = 0; c < 3; c++) {
+        idx = ((((u32)row[c][sx0] * (u32)(256 - wx) + (u32)row[c][sx1] * (u32)wx) >> 8) * gain) >> 10;
+        hc[c] = lw[idx >= LUT_N ? LUT_N - 1 : idx];
+      }
+      if (!hc[0] && !hc[1] && !hc[2]) continue;
+      cb = (s32)cr[x] - 128; crr = (s32)cr[x + 1] - 128;
+      for (j = 0; j < 2; j++) {
+        s32 Y = yr[x + j];
+        s32 R = lift(clamp8(Y + ((91881 * crr + 32768) >> 16)), hc[0]);
+        s32 G = lift(clamp8(Y - ((22554 * cb + 46802 * crr - 32768) >> 16)), hc[1]);
+        s32 B = lift(clamp8(Y + ((116130 * cb + 32768) >> 16)), hc[2]);
+        yr[x + j] = (u8)clamp8((19595 * R + 38470 * G + 7471 * B + 32768) >> 16);
+        sb += -11059 * R - 21709 * G + 32768 * B;
+        sr += 32768 * R - 27439 * G - 5329 * B;
+      }
+      cr[x] = (u8)clamp8(128 + ((sb + 65536) >> 17));
+      cr[x + 1] = (u8)clamp8(128 + ((sr + 65536) >> 17));
+    }
+  }
+  sync(k, cache, p, 1);
+out:
+  if (acc) k->release(acc);
+  if (tmp) k->release(tmp);
+  if (wide) k->release(wide);
+  for (c = 0; c < 3; c++) {
+    if (row[c]) k->release(row[c]);
+    if (map[c]) k->release(map[c]);
+  }
+}
+
 /* Entry: k = context, config = JpegEncodeMacroProcess configuration. */
 void halation(const struct ctx *k, u32 *config) {
   u32 st = *k->stash, style, level, i, j, gain, e;
@@ -265,5 +384,9 @@ void halation(const struct ctx *k, u32 *config) {
     for (j = 0; j < i; j++) if (seen[j] && seen[j]->y == p->y) break;
     if (j == i) seen[i] = p;
   }
-  for (i = 0; i < 4; i++) if (seen[i]) halate(k, cache, seen[i], gain, look->light);
+  for (i = 0; i < 4; i++) {
+    if (!seen[i]) continue;
+    if (st & STASH_WHITE) halate_white(k, cache, seen[i], gain, look->light);
+    else halate(k, cache, seen[i], gain, look->light);
+  }
 }

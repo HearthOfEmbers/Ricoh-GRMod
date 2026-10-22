@@ -23,7 +23,7 @@ export interface SlotState { preset?: PresetState; names: Partial<Record<LangCod
  * `name` as typed (empty: the default name of its place), one name for every language.
  */
 /** A slot's halation (the fixed CineStill 800T look): on (always for an added slot), and which level the preview shows (0 = off). */
-export interface HalationState { on: boolean; preview: 0 | 1 | 2 }
+export interface HalationState { on: boolean; preview: 0 | 1 | 2; /** Colour the preview shows (chosen in the camera). */ colour?: 'red' | 'white' }
 export interface ExtraSlot { key: string; name: string; preset?: PresetState; icon: IconState; halation?: HalationState }
 /** A factory Cinema slot (`CY`, `CG`) or the key of an added slot. */
 export type SlotKey = SlotId | string;
@@ -387,7 +387,7 @@ export function extraSpecs(s: State = state): ExtraSlotSpec[] {
 function validHalation(v: unknown): HalationState | null {
   if (!v || typeof v !== 'object') return null;
   const h = v as Partial<HalationState>;
-  return { on: h.on === true, preview: h.preview === 1 || h.preview === 2 ? h.preview : 0 };
+  return { on: h.on === true, preview: h.preview === 1 || h.preview === 2 ? h.preview : 0, ...(h.colour === 'white' ? { colour: 'white' as const } : {}) };
 }
 /** A slot's halation: every added slot has it (the camera switches it); a Cinema slot when it is switched on (with a preset). */
 export function halationOf(k: SlotKey, s: State = state): HalationState {
