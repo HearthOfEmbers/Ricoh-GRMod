@@ -24,7 +24,7 @@
  * table are made by GR Mod (halation.ts); GR Mod's preview runs the same integer steps.
  *
  * Which look and level: `stash` (written by the development step that reads the frame's record,
- * see slots.ts): bits 0..7 the style, 8..15 the level (0 off, 1 weak, 2 strong), bit 16 valid,
+ * see lookstash.ts): bits 0..7 the style, 8..15 the level (0 off, 1 weak, 2 medium, 3 strong), bit 16 valid,
  * bit 17 white.
  *
  * White (0.8.2, highlight diffusion like the GR IV HDF): the light of each highlight spreads in its
@@ -58,7 +58,7 @@ struct params {
 
 /* One look with halation. */
 struct look {
-  u16 gain[2];        /* weak, strong: table index = light * gain >> 10 */
+  u16 gain[4];        /* weak, medium, strong, 0: table index = light * gain >> 10 */
   u16 light[256];     /* light (0..16384) of a value (the brighter of Y and red) */
 };
 
@@ -77,7 +77,7 @@ struct ctx {
   u32 count;          /* entries of `looks` */
   u32 reserved;
   struct params p;
-  u32 magic;          /* 'HAL3' */
+  u32 magic;          /* 'HAL4' */
   u8 look_map[64];    /* style -> entry of `looks` + 1, 0: no halation */
 };
 
@@ -368,7 +368,7 @@ void halation(const struct ctx *k, u32 *config) {
   void *cache;
   if (!(st & STASH_VALID) || !ram(config) || !ram(k->lut) || !ram(k->looks)) return;
   style = st & 0xff; level = (st >> 8) & 0xff;
-  if (style >= 64 || level < 1 || level > 2) return;
+  if (style >= 64 || level < 1 || level > 3) return;
   e = k->look_map[style];
   if (!e || e > k->count) return;
   look = &k->looks[e - 1];

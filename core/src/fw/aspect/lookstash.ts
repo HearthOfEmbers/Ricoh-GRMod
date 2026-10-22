@@ -29,8 +29,20 @@ export const MONO_MODEL = 0x533ef000;
 /** The camera's own black-and-white looks. */
 export const MONO_LOOKS = [13, 14, 15, 16, 25, 26, 27, 28, 29, 30];
 
-/** Store the look: keeps every register but the flags. r3 is the frame's record. */
-export const STASH_ASM = `push {r0,r1};ldrb r0,[r3,#0x79c];ldrb r1,[r3,#0x7a6];orr r0,r0,r1,lsl #8;orr r0,r0,#0x10000;movw r1,#${LOOK_STASH & 65535};movt r1,#${LOOK_STASH >>> 16};str r0,[r1];pop {r0,r1};`;
+/**
+ * Store the look: keeps every register but the flags. r3 is the frame's record. Its Toning byte is
+ * a halation look's encoded setting (halation-ui.ts, 0..11): it is left as the level (0 off,
+ * 1 Weak, 2 Medium, 3 Strong) and STASH_WHITE for the white glow. 0, 1, 2 (Off, Weak and Strong red,
+ * as up to test 042) stay Off, Weak, Strong.
+ */
+export const STASH_ASM = `push {r0,r1};ldrb r0,[r3,#0x79c];ldrb r1,[r3,#0x7a6];
+  cmp r1,#7;movhs r1,#0;
+  cmp r1,#4;subhs r1,r1,#3;orrhs r0,r0,#0x20000;bhs stashlevel;
+  cmp r1,#3;moveq r1,#2;beq stashlevel;
+  cmp r1,#2;moveq r1,#3;
+  stashlevel:orr r0,r0,r1,lsl #8;orr r0,r0,#0x10000;movw r1,#${LOOK_STASH & 65535};movt r1,#${LOOK_STASH >>> 16};str r0,[r1];pop {r0,r1};`;
+/** The white glow's bit in the stash word. */
+export const STASH_WHITE = 0x20000;
 
 export function extendZeroFill(p: Patch): void {
   const w = p.word(ZERO_FILL_END);

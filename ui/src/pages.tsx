@@ -61,7 +61,7 @@ function PhotoCompare({ params }: { params?: color.SlotParams }) {
   const after = useMemo(() => {
     if (!base || !halo) return base;
     const out = new ImageData(new Uint8ClampedArray(base.data), base.width, base.height);
-    halateRgba(out.data, out.width, out.height, halo.preview as 1 | 2, light, haloColour);
+    halateRgba(out.data, out.width, out.height, halo.preview as 1 | 2 | 3, light, haloColour);
     return out;
   }, [base, haloLevel, light, haloColour]);
   return <Compare photo={photo} after={after} label={t('preset')} />;
@@ -303,10 +303,11 @@ function ExtraSlotCard({ x, index }: { x: ExtraSlot; index: number }) {
 }
 
 /**
- * A slot's halation, and the level the preview shows. The look is fixed (fitted to CineStill
- * 800T); in the camera the level is chosen on the slot's parameter screen ("Halation": Off / Weak /
- * Strong). Every added slot has it; Cinema Yellow / Green only with a preset (their Toning then
- * does nothing and becomes the Halation slider) and when it is switched on here.
+ * A slot's halation, and the level and colour the preview shows. The look is fixed (fitted to
+ * CineStill 800T); in the camera it is set on the slot's parameter screen ("Halation": Off / On, Fn
+ * for Strength Weak / Medium / Strong and Colour red / white). Every added slot has it; Cinema
+ * Yellow / Green only with a preset (their Toning then does nothing and becomes Halation) and when
+ * it is switched on here.
  */
 function HalationProp({ k }: { k: SlotKey }) {
   const on = useStore((s) => halationOf(k, s).on);
@@ -324,7 +325,7 @@ function HalationProp({ k }: { k: SlotKey }) {
         {on && (
           <div className="chips">
             <span className="muted small">{t('haloPreview')}</span>
-            <Segmented value={String(preview)} onChange={(v) => setHalation(k, { preview: Number(v) as 0 | 1 | 2 })} options={[{ value: '0', label: t('haloOff') }, { value: '1', label: t('haloWeak') }, { value: '2', label: t('haloStrong') }]} />
+            <Segmented value={String(preview)} onChange={(v) => setHalation(k, { preview: Number(v) as 0 | 1 | 2 | 3 })} options={[{ value: '0', label: t('haloOff') }, { value: '1', label: t('haloWeak') }, { value: '2', label: t('haloMedium') }, { value: '3', label: t('haloStrong') }]} />
             {preview > 0 && <Segmented value={colour} onChange={(v) => setHalation(k, { colour: v as 'red' | 'white' })} options={[{ value: 'red', label: t('haloRed') }, { value: 'white', label: t('haloWhite') }]} />}
           </div>
         )}

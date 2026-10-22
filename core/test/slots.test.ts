@@ -172,12 +172,26 @@ describe.skipIf(!have)('added slots: firmware files', () => {
       return String.fromCharCode(...Array.from({ length: units - 1 }, (_, i) => r[at + 2 * i] | (r[at + 2 * i + 1] << 8)));
     };
     expect([text(0, 852), text(1, 852), text(18, 852), text(19, 852), text(19, 339)]).toEqual(['ハレーション', 'Halation', '光暈', '光晕', '色调']);
+    // the submenu's colour row (0.8.2), next to Grain Effect's own Strength (347)
+    expect([text(0, 878), text(1, 878), text(19, 878), text(20, 878), text(19, 347)]).toEqual(['カラー', 'Colour', '颜色', 'สี', '强度']);
+    // icons: list, colour scale (400 x 60), red and white
+    const iconSize = (id: number): number[] => { const desc = word(aspect.ICON_CATALOG + id * 4); const b = r.subarray(desc - 0x53000000, desc - 0x53000000 + 6); return [b[2] | (b[3] << 8), b[4] | (b[5] << 8)]; };
+    expect([780, 781, 790, 791].map(iconSize)).toEqual([[40, 40], [400, 60], [40, 40], [40, 40]]);
+    // the parameter screens' hooks (shooting and RAW development) and the native readers' clamps
+    for (const at of [0x531c7aa0, 0x531caa94, 0x531c9728, 0x531cb448, 0x531ca810, 0x531cb1bc, 0x531ca698, 0x531cbd9c, 0x531cc7f8, 0x531a6a8c, 0x531a9d64, 0x531aa1e8, 0x531ab4b8, 0x53911afc, 0x537dd7c4, 0x537d7768]) {
+      expect(patch.word(at) >>> 24, at.toString(16)).toBe(0xea);
+    }
     const other = await eng.buildFirmware([], [], [], { dateStamp: true, extraSlots: [slots[0], slots[1], { ...slots[2], halation: false }] });
     expect(other.sha256).not.toBe(b.sha256);
     expect((await eng.inspect(other.file)).verified).toBe(true);
     const none = await eng.buildFirmware([], [], [], { extraSlots: [slotSpec(eng, 0)] });
     const plain = await eng.buildFirmware([], [], [], { extraSlots: [{ ...slotSpec(eng, 0), halation: false }] });
     expect(plain.sha256).toBe(none.sha256);
+    // without halation the screens and the Toning readers stay native
+    const dn = new fw.Firmware(none.file).decoded;
+    const rn = fw.sectionsOf(dn).find((x) => x.name === 'RTOS')!;
+    const pn = new Patch(dn.slice(rn.offset, rn.offset + rn.size));
+    expect([0x531cb1bc, 0x531ca698, 0x53911afc, 0x537dd7c4].map((a) => pn.word(a))).toEqual([0xe3500010, 0xe3500010, 0xe5d367a6, 0xe30f3150]);
   }, 120_000);
 
   it('halation on all six added slots (what GR Mod 0.7.4 always builds), with soft focus and the date imprint', async () => {
@@ -233,14 +247,18 @@ describe.skipIf(!have)('added slots: firmware files', () => {
     const dark = img(false);
     aspect.halateRgba(dark, w, h, 2);
     expect(Array.from(dark.slice(0, 4))).toEqual([30, 30, 30, 255]);
-    const weak = img(true), strong = img(true);
+    const weak = img(true), medium = img(true), strong = img(true);
     aspect.halateRgba(weak, w, h, 1);
-    aspect.halateRgba(strong, w, h, 2);
+    aspect.halateRgba(medium, w, h, 2);
+    aspect.halateRgba(strong, w, h, 3);
     const at = (d: Uint8ClampedArray, x: number, y: number): number[] => Array.from(d.slice((y * w + x) * 4, (y * w + x) * 4 + 3));
     const [r, g, b] = at(strong, 212, 150);
     expect(r).toBeGreaterThan(g + 40);
     expect(g).toBeGreaterThanOrEqual(b - 2);
-    expect(at(strong, 212, 150)[0]).toBeGreaterThan(at(weak, 212, 150)[0]);
+    expect(at(strong, 212, 150)[0]).toBeGreaterThan(at(medium, 212, 150)[0]);
+    expect(at(medium, 212, 150)[0]).toBeGreaterThan(at(weak, 212, 150)[0]);
+    // the camera's three gains: Weak 12, Medium 18, Strong 24 (x 4 in the module)
+    expect(aspect.halationGains()).toEqual([48, 72, 96]);
     expect(at(strong, 390, 10)).toEqual([30, 30, 30]);
   });
 

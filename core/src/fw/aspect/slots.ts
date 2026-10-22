@@ -35,7 +35,8 @@ import { BASE, ICON_CATALOG, LOOKUP_BOUNDS, OFFICIAL_RTOS_LENGTH, Patch, TEXT_CA
 import { linkModule } from './native-link';
 import { LOOK_STASH, STASH_ASM, installLookStash } from './lookstash';
 import { SLOT_PARAMETERS, SLOT_PARAMS_MODULE } from './slotparams-native';
-import { HALATION_LOOKS, HALATION_NAMES, halationIcon, halationScale, installHalationModule, readHalation } from './halation';
+import { HALATION_COLOUR_NAMES, HALATION_LOOKS, HALATION_NAMES, halationColourIcon, halationColourScale, halationIcon, installHalationModule, readHalation } from './halation';
+import { installHalationClamps, installHalationUi } from './halation-ui';
 import type { HalationLook } from './halation';
 import { FirmwareError } from '../types';
 
@@ -50,7 +51,7 @@ export const EXTRA_FIRST_STYLE = 34;
 export const EXTRA_TEXT_ID = 846;
 const EXTRA_TEXT_SPLIT = 6;
 const EXTRA_TEXT_ID_2 = 864;
-/** Icon number of the first added slot's icon: slots 0..11 768..779 (780, 781 are halation's), slots 12.. 782... */
+/** Icon number of the first added slot's icon: slots 0..11 768..779 (780, 781 are halation's), slots 12.. 782..789 (790, 791 halation's). */
 export const EXTRA_ICON_ID = 768;
 const EXTRA_ICON_SPLIT = 12;
 const EXTRA_ICON_ID_2 = 782;
@@ -81,16 +82,23 @@ export interface ExtraSlotSpec {
   halation?: boolean;
 }
 
-/** Text of the parameter name "Halation", icon of its list entry and of its slider scale. */
+/**
+ * Text of the parameter name "Halation", icon of its list entry; in its submenu (0.8.2) the colour
+ * row's name, the colour slider's scale and the red and white row icons. (Icon 781 was the Off /
+ * Weak / Strong scale up to test 042.)
+ */
 export const HALATION_TEXT_ID = 852;
+export const HALATION_COLOUR_TEXT_ID = 878;
 export const HALATION_ICON_ID = 780;
-export const HALATION_SCALE_ICON_ID = 781;
+export const HALATION_COLOUR_SCALE_ICON_ID = 781;
+export const HALATION_RED_ICON_ID = 790;
+export const HALATION_WHITE_ICON_ID = 791;
 /** Text of Cinema's Toning (and of the black-and-white toning, which no added look has). */
 const TONING_TEXT = 339;
 /** Toning's list icon. */
 const TONING_ICON = 0x16f;
-/** The native three-position scale whose panel and track the halation scale reuses. */
-const NATIVE_SCALE_ICON = 0x23b;
+/** The native two-position (Off / On) scale whose panel and track the colour scale reuses. */
+const NATIVE_SCALE_ICON = 0x3a;
 /** The word the development step leaves for the halation module: style | level << 8 | valid. */
 const HALATION_STASH = LOOK_STASH;
 
@@ -781,16 +789,17 @@ function lookupAsm(dst: string, reg: string, tmp: string, table: number): string
 
 /**
  * Halation for `looks` (added slots and Cinema slots with a preset): the parameter's name, list
- * icon and slider scale on the parameter screens, and the module at the JPEG step. Returns the new
- * ICONBIN data. The development step must leave the look for the JPEG step (`lookstash.ts`; the
- * added slots' hook does it when asked, without added slots it is installed here).
+ * icon and screens, and the module at the JPEG step. Returns the new ICONBIN data. The development
+ * step must leave the look for the JPEG step (`lookstash.ts`; the added slots' hook does it when
+ * asked, without added slots it is installed here).
  *
  * For such a look, Cinema's Toning on the parameter screens (shooting: ImageControlDetail-
  * Controller, the style at +0x19C; RAW development: RawDevelopmentImageControlDetailSetController,
  * the look asked from the model) shows as Halation: its name (the subtitle, from a table of texts
- * per parameter kind: Toning is text 339), its icon in the list (0x16F) and its slider scale
- * (Cinema's colour scales 0x23D / 0x23E). The values are Toning's 0..2: Off, Weak, Strong. Which
- * looks: two tables of 64 bytes (by style, by RAW development's number).
+ * per parameter kind: Toning is text 339) and its icon in the list (0x16F). From 0.8.2 it is an
+ * Off / On row like Grain Effect's, and Fn opens Grain Effect's submenu as Halation's (Strength,
+ * Colour); the setting is kept in the Toning byte (`halation-ui.ts`). Which looks: two tables of 64
+ * bytes (by style, by RAW development's number).
  */
 export function installHalation(p: Patch, iconbin: Uint8Array, looks: readonly HalationLook[]): Uint8Array {
   if (looks.length === 0) return iconbin;
@@ -809,16 +818,18 @@ export function installHalation(p: Patch, iconbin: Uint8Array, looks: readonly H
   let iconLength = iconbin.length;
   for (let l = 0; l < 21; l++) {
     const row = p.word(TEXT_CATALOG + l * 4);
-    expectWord(p, row + HALATION_TEXT_ID * 4, 0);
-    const name = HALATION_NAMES[l];
-    const text = p.append(utf16z(name), 4);
-    p.write(row + HALATION_TEXT_ID * 4, u32le([p.append(concat([Uint8Array.from([name.length + 1, 1, 0, 0]), u32le([text])]), 4)]));
+    for (const [id, name] of [[HALATION_TEXT_ID, HALATION_NAMES[l]], [HALATION_COLOUR_TEXT_ID, HALATION_COLOUR_NAMES[l]]] as const) {
+      expectWord(p, row + id * 4, 0);
+      const text = p.append(utf16z(name), 4);
+      p.write(row + id * 4, u32le([p.append(concat([Uint8Array.from([name.length + 1, 1, 0, 0]), u32le([text])]), 4)]));
+    }
   }
-  for (const site of p.textBoundSites) p.setWord(site, movWord(3, Math.max(HALATION_TEXT_ID, movImmediate(p.word(site)))), 'text upper bound');
+  for (const site of p.textBoundSites) p.setWord(site, movWord(3, Math.max(HALATION_COLOUR_TEXT_ID, movImmediate(p.word(site)))), 'text upper bound');
   const nativeScale = wordOf(p.readMapped(ICON_CATALOG + NATIVE_SCALE_ICON * 4, 4));
   const scaleAt = wordOf(p.readMapped(nativeScale + 8, 4)) * 4;
   const native = iconbin.slice(scaleAt, scaleAt + 400 * 60 * 4);
-  for (const [id, w, h, pixels] of [[HALATION_ICON_ID, 40, 40, halationIcon()], [HALATION_SCALE_ICON_ID, 400, 60, halationScale(native)]] as const) {
+  for (const [id, w, h, pixels] of [[HALATION_ICON_ID, 40, 40, halationIcon()], [HALATION_COLOUR_SCALE_ICON_ID, 400, 60, halationColourScale(native)],
+    [HALATION_RED_ICON_ID, 40, 40, halationColourIcon('red')], [HALATION_WHITE_ICON_ID, 40, 40, halationColourIcon('white')]] as const) {
     const pad = (4 - (iconLength % 4)) % 4;
     if (pad) { parts.push(new Uint8Array(pad)); iconLength += pad; }
     expectWord(p, ICON_CATALOG + id * 4, 0);
@@ -826,24 +837,27 @@ export function installHalation(p: Patch, iconbin: Uint8Array, looks: readonly H
     parts.push(pixels);
     iconLength += pixels.length;
   }
-  for (const [site, r] of LOOKUP_BOUNDS) p.setWord(site, movWord(r, Math.max(HALATION_SCALE_ICON_ID, movImmediate(p.word(site)))), 'icon upper bound');
+  for (const [site, r] of LOOKUP_BOUNDS) p.setWord(site, movWord(r, Math.max(HALATION_WHITE_ICON_ID, movImmediate(p.word(site)))), 'icon upper bound');
 
   // Shooting: subtitle (r6 the table entry, r5 the controller).
   hook(p, 0x531ca7cc, 0xe1d610b2, `ldrh r1,[r6,#2];movw ip,#${TONING_TEXT};cmp r1,ip;bne done;ldrb ip,[r5,#0x19c];push {r0};${lookupAsm('ip', 'ip', 'r0', styles)};pop {r0};cmp ip,#0;movwne r1,#${HALATION_TEXT_ID};done:b #0x531ca7d0`, 'halation: name of the parameter');
-  // Shooting: slider scale (r3 the style, r6 the controller).
-  hook(p, 0x531c7ae0, 0xe3530012, `${lookupAsm('ip', 'r3', 'ip', styles)};cmp ip,#0;movwne r3,#${HALATION_SCALE_ICON_ID};bne #0x531c7af8;cmp r3,#0x12;b #0x531c7ae4`, 'halation: slider scale');
   // Shooting: list icon (controller r7, r6).
   for (const [at, ctl] of [[0x531c973c, 'r7'], [0x531c982c, 'r6']] as const) {
     hook(p, at, 0xe300116f, `ldrb r1,[${ctl},#0x19c];push {r0};${lookupAsm('r1', 'r1', 'r0', styles)};pop {r0};cmp r1,#0;movw r1,#${TONING_ICON};movwne r1,#${HALATION_ICON_ID};b #${at + 4}`, 'halation: list icon');
   }
   // RAW development: subtitle (r7 the table entry).
   hook(p, 0x531a833c, 0xe1d710b2, `ldrh r1,[r7,#2];movw ip,#${TONING_TEXT};cmp r1,ip;bne done;push {r0,r2,r3,lr};${RAW_LOOK_CALLS};${lookupAsm('r0', 'r0', 'r2', raws)};cmp r0,#0;movw r1,#${TONING_TEXT};movwne r1,#${HALATION_TEXT_ID};pop {r0,r2,r3,lr};done:b #0x531a8340`, 'halation: name of the parameter (RAW development)');
-  // RAW development: slider scale (r3 the base kind, 8 = Cinema Yellow's).
-  hook(p, 0x531a6acc, 0xe3530008, `push {r0,r1,r2,lr};${RAW_LOOK_CALLS};${lookupAsm('ip', 'r0', 'r1', raws)};pop {r0,r1,r2,lr};ldrb r3,[r6,#0x19b];cmp ip,#0;movwne r3,#${HALATION_SCALE_ICON_ID};bne #0x531a6ae4;cmp r3,#8;b #0x531a6ad0`, 'halation: slider scale (RAW development)');
   // RAW development: list icon.
   for (const at of [0x531a88d0, 0x531a89e8]) {
     hook(p, at, 0xe300116f, `push {r0,r2,r3,lr};${RAW_LOOK_CALLS};${lookupAsm('r0', 'r0', 'r2', raws)};cmp r0,#0;movw r1,#${TONING_ICON};movwne r1,#${HALATION_ICON_ID};pop {r0,r2,r3,lr};b #${at + 4}`, 'halation: list icon (RAW development)');
   }
+
+  // Off / On, Fn to the submenu (Strength, Colour); native Toning readers kept to 0..2.
+  installHalationUi(p, {
+    styles, raws, nameText: HALATION_TEXT_ID, icon: HALATION_ICON_ID, colourText: HALATION_COLOUR_TEXT_ID,
+    colourScale: HALATION_COLOUR_SCALE_ICON_ID, redIcon: HALATION_RED_ICON_ID, whiteIcon: HALATION_WHITE_ICON_ID,
+  });
+  installHalationClamps(p);
 
   // The look of the picture for the JPEG step: without added slots their hook is not there.
   if (p.word(0x539113f8) === 0xe5d3279c) installLookStash(p);

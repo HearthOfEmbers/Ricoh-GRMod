@@ -48,11 +48,11 @@ export const HALATION = {
   /** Share of the narrow spread. */
   mix: 0.6,
   /**
-   * The camera's Weak and Strong: how strongly the spread light lifts the colours. 0.8.2: Strong as
-   * test 036's "normal" Weak, Weak as its "weak" Weak (half of it), chosen on the camera; up to
-   * 0.8.1 Weak was 25, Strong 60 (with the harder start).
+   * The camera's Weak, Medium and Strong: how strongly the spread light lifts the colours. 0.8.2:
+   * Weak as test 036's "weak" Weak, Strong as its "normal" Weak (chosen on the camera), Medium
+   * between; up to 0.8.1 Weak was 25, Strong 60 (with the harder start).
    */
-  gain: [12, 24] as const,
+  gain: [12, 18, 24] as const,
   /** Lift of red, green and blue per unit of light (red first: the red layer is exposed again from behind, a little the green). */
   channels: [1, 0.06, 0.03] as const,
   /** White (0.8.2, chosen on the camera): every channel lifted alike, a soft white bloom like the GR IV HDF's highlight diffusion. */
@@ -75,8 +75,13 @@ const PARAM_BYTES = 16;
 const E_MAX = 16384;
 /** Looks the module knows (style numbers below this). */
 export const HALATION_LOOKS = 64;
-/** Marks the context so that a built file can be read back: 'HAL3' (0.8.2: a table per look); 'HAL2' (0.7.3..0.8.1) and 'HALO' (0.7.2) for added slots only. */
-const CTX_MAGIC = 0x334c4148; // 'HAL3'
+/**
+ * Marks the context so that a built file can be read back: 'HAL4' (0.8.2: three levels, entries of
+ * 4 gains and the light table); 'HAL3' (0.8.2 tests 036..042: two levels); 'HAL2' (0.7.3..0.8.1) and
+ * 'HALO' (0.7.2) for added slots only.
+ */
+const CTX_MAGIC = 0x344c4148; // 'HAL4'
+const CTX_MAGIC_TEST = 0x334c4148; // 'HAL3'
 const CTX_MAGIC_081 = 0x324c4148; // 'HAL2'
 const CTX_MAGIC_072 = 0x4f4c4148; // 'HALO'
 /** Words of the context before its parameters (see `struct ctx`); the magic follows the parameters, the look map the magic. */
@@ -98,9 +103,12 @@ export function paramBytes(): Uint8Array {
   return out;
 }
 
-/** The module's gains (table index = light * gain >> 10) of the camera's Weak and Strong. */
-export function halationGains(): [number, number] {
-  return [Math.round(HALATION.gain[0] * 4), Math.round(HALATION.gain[1] * 4)];
+/** The camera's levels: 1 Weak, 2 Medium, 3 Strong. */
+export type HalationLevel = 1 | 2 | 3;
+
+/** The module's gains (table index = light * gain >> 10) of the camera's Weak, Medium and Strong. */
+export function halationGains(): [number, number, number] {
+  return [Math.round(HALATION.gain[0] * 4), Math.round(HALATION.gain[1] * 4), Math.round(HALATION.gain[2] * 4)];
 }
 
 /** A look's light: 256 values (0..16384), for the brighter of Y and red of a pixel. */
@@ -188,7 +196,7 @@ export function installHalationModule(p: Patch, looks: readonly HalationLook[], 
     if (!(Number.isInteger(l.style) && l.style >= 0 && l.style < HALATION_LOOKS) || map[l.style]) fail('internal', 'halation: style of a look');
     if (!(l.light.table instanceof Uint16Array) || l.light.table.length !== 256 || l.light.table.some((v) => v > E_MAX)) fail('internal', 'halation: light of a look');
     map[l.style] = k + 1;
-    entries.push(u16le([...halationGains(), ...l.light.table]));
+    entries.push(u16le([...halationGains(), 0, ...l.light.table]));
   });
   const first = p.word(JPEG_EXECUTE);
   let tail: string;
@@ -234,7 +242,7 @@ export function readHalation(p: Patch, firstStyle: number, count: number): Set<n
     if (ctx === null) return null;
     const magic = p.word(ctx + MAGIC_AT);
     const out = new Set<number>();
-    if (magic === CTX_MAGIC) {
+    if (magic === CTX_MAGIC || magic === CTX_MAGIC_TEST) {
       const map = p.read(ctx + MAGIC_AT + 4, HALATION_LOOKS);
       const n = p.word(ctx + 8 * 4);
       map.forEach((e, style) => { if (e && e <= n) out.add(style); });
@@ -248,14 +256,17 @@ export function readHalation(p: Patch, firstStyle: number, count: number): Set<n
   }
 }
 
-/** The light of a look of a built image ('HAL3'), or null. */
+/** The light of a look of a built image ('HAL4', or the tests' 'HAL3'), or null. */
 export function readHalationLight(p: Patch, style: number): HalationLight | null {
   try {
     const ctx = contextOf(p);
-    if (ctx === null || p.word(ctx + MAGIC_AT) !== CTX_MAGIC) return null;
+    if (ctx === null) return null;
+    const magic = p.word(ctx + MAGIC_AT);
+    if (magic !== CTX_MAGIC && magic !== CTX_MAGIC_TEST) return null;
     const e = p.read(ctx + MAGIC_AT + 4 + style, 1)[0];
     if (!e || e > p.word(ctx + 8 * 4)) return null;
-    const b = p.read(p.word(ctx + 7 * 4) + (e - 1) * 516 + 4, 512);
+    const [stride, at] = magic === CTX_MAGIC ? [520, 8] : [516, 4];
+    const b = p.read(p.word(ctx + 7 * 4) + (e - 1) * stride + at, 512);
     return { table: Uint16Array.from({ length: 256 }, (_, i) => b[2 * i] | (b[2 * i + 1] << 8)) };
   } catch {
     return null;
@@ -309,30 +320,34 @@ export function halationIcon(): Uint8Array {
 }
 
 /**
- * The slider's scale (400 x 60, as the native ones): the panel and the track of `native` (the
- * three-position scale 0x23B), its marks replaced by Off (an empty circle), Weak and Strong (a
- * light with a thin and a thick red ring) at x = 20, 200, 380.
+ * The colour slider's scale in the Halation submenu (400 x 60, as the native ones): the panel and the
+ * track of `native` (the two-position Off / On scale 0x3A), its labels replaced by a red and a white
+ * light at x = 20 and 380 (the two positions).
  */
-export function halationScale(native: Uint8Array): Uint8Array {
+export function halationColourScale(native: Uint8Array): Uint8Array {
   if (native.length !== 400 * 60 * 4) fail('unexpected-layout', 'halation: the native scale has another size');
   const base = native.slice();
-  // Clear the marks (above the track): back to the panel colour.
+  // Clear the labels (above the track): back to the panel colour.
   for (let y = 2; y < 34; y++) for (let x = 0; x < 400; x++) {
     const i = (y * 400 + x) * 4;
     base[i] = 0; base[i + 1] = 0; base[i + 2] = 0; base[i + 3] = 191;
   }
-  const marks: Paint = (x, y) => {
-    const off = cover(x, y, 20, 17, 6, 8);
-    if (off) return [255, 255, 255, Math.round(255 * off)];
-    for (const [cx, ring] of [[200, 2.2], [380, 4.5]] as const) {
-      const core = cover(x, y, cx, 17, 0, 4);
-      const red = cover(x, y, cx, 17, 6, 6 + ring);
-      if (core) return [255, 255, 255, Math.round(255 * core)];
-      if (red) return [...RED, Math.round(255 * red)];
+  return render(400, 60, (x, y) => {
+    for (const [cx, colour] of [[20, RED], [380, [255, 255, 255]]] as const) {
+      const c = cover(x, y, cx, 17, 0, 7);
+      if (c) return [...colour, Math.round(255 * c)] as [number, number, number, number];
     }
     return null;
-  };
-  return render(400, 60, marks, base);
+  }, base);
+}
+
+/** The colour row's icon in the Halation submenu (40 x 40): a red or a white light. */
+export function halationColourIcon(colour: HalationColour): Uint8Array {
+  const rgb: readonly [number, number, number] = colour === 'white' ? [255, 255, 255] : RED;
+  return render(40, 40, (x, y) => {
+    const c = cover(x, y, 20, 20, 0, 13);
+    return c ? [...rgb, Math.round(255 * c)] : null;
+  });
 }
 
 /**
@@ -347,6 +362,13 @@ export const HALATION_NAMES: readonly string[] = [
   '光晕', 'Halation',
 ];
 
+/** The colour row's name in the Halation submenu, per row of the text catalog (as `HALATION_NAMES`). */
+export const HALATION_COLOUR_NAMES: readonly string[] = [
+  'カラー', 'Colour', 'Couleur', 'Farbe', 'Color', 'Cor', 'Colore', 'Kleur', 'Farve',
+  'Färg', 'Väri', 'Kolor', 'Barva', 'Szín', 'Renk', 'Χρώμα', 'Цвет', '색상', '顏色',
+  '颜色', 'สี',
+];
+
 // -------------------------------------------------------------------------------- preview
 
 const c8 = (n: number): number => (n < 0 ? 0 : n > 255 ? 255 : n);
@@ -357,7 +379,7 @@ const lift = (v: number, h: number): number => v + Math.floor(((255 - v) * h * 2
  * The module's computation (halation.c, `halate`) in TypeScript, on a YCbCr 4:2:2 picture (Y and
  * the interleaved CbCr plane, `w` bytes per row each), for GR Mod's preview. Same integer steps.
  */
-export function halateYcc(Y: Uint8Array, C: Uint8Array, w: number, h: number, level: 1 | 2, light: HalationLight = PLAIN_LIGHT, colour: HalationColour = 'red'): void {
+export function halateYcc(Y: Uint8Array, C: Uint8Array, w: number, h: number, level: HalationLevel, light: HalationLight = PLAIN_LIGHT, colour: HalationColour = 'red'): void {
   if (colour === 'white') halateYccWhite(Y, C, w, h, level, light);
   else halateYccRed(Y, C, w, h, level, light);
 }
@@ -367,7 +389,7 @@ export function halateYcc(Y: Uint8Array, C: Uint8Array, w: number, h: number, le
  * red, green and blue, each the light times that channel over the brightest one), and each channel
  * is lifted by its own map. A white lamp gives a white bloom, a red sign a red one.
  */
-function halateYccWhite(Y: Uint8Array, C: Uint8Array, w: number, h: number, level: 1 | 2, light: HalationLight): void {
+function halateYccWhite(Y: Uint8Array, C: Uint8Array, w: number, h: number, level: HalationLevel, light: HalationLight): void {
   const P = paramBytes();
   const v = new DataView(P.buffer);
   const tab = light.table;
@@ -475,7 +497,7 @@ function halateYccWhite(Y: Uint8Array, C: Uint8Array, w: number, h: number, leve
   }
 }
 
-function halateYccRed(Y: Uint8Array, C: Uint8Array, w: number, h: number, level: 1 | 2, light: HalationLight): void {
+function halateYccRed(Y: Uint8Array, C: Uint8Array, w: number, h: number, level: HalationLevel, light: HalationLight): void {
   const P = paramBytes();
   const v = new DataView(P.buffer);
   const tab = light.table;
@@ -575,7 +597,7 @@ function halateYccRed(Y: Uint8Array, C: Uint8Array, w: number, h: number, level:
 }
 
 /** Halation on an RGBA picture (sRGB, through YCbCr 4:2:2 as in the camera), in place; `light` of the slot (`halationLight`). */
-export function halateRgba(data: Uint8ClampedArray, width: number, height: number, level: 1 | 2, light: HalationLight = PLAIN_LIGHT, colour: HalationColour = 'red'): void {
+export function halateRgba(data: Uint8ClampedArray, width: number, height: number, level: HalationLevel, light: HalationLight = PLAIN_LIGHT, colour: HalationColour = 'red'): void {
   const w = width & ~1;
   if (w < 2 || height < 2) return;
   const Y = new Uint8Array(w * height), C = new Uint8Array(w * height);
