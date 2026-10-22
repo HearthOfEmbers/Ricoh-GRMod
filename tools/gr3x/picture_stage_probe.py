@@ -1,0 +1,139 @@
+"""Films' picture-stage additions (round 3): halation stash, second matrix, JPEG stage chain.
+
+With every patch of the manifest installed:
+  - the still descriptor builder (0x536dc0f4) leaves look | level << 8 | valid in the stash for
+    every native look and film, with each film's build-time level;
+  - the matrix module's wrapper (0x536df3d4) programs each film's post-curve matrix, the identity
+    for every other look, and leaves the pre-curve registers as the firmware computes them;
+  - the JPEG encode entry (0x535047d4) runs the chain of modules and returns into Execute with
+    every register and the stack as on entry; the halation module changes a synthetic 4:2:2
+    picture exactly as GR Mod's reference (halateYcc, written by the build script) for films with
+    halation and leaves it alone otherwise; the diagnostic date module prints on the picture.
+Synthetic objects only; JPEG encoding, the ISP and the camera's real pictures are not executed.
+"""
+import argparse,hashlib,json,struct
+from pathlib import Path
+from unicorn import UC_HOOK_CODE
+from unicorn import arm_const as reg
+from image_control_probe import LookProbe, CONTEXT, COMMON, NATIVE
+from native_probe import NativeProbe, OBJECT, OUTPUT, STACK, STOP
+
+if not __debug__:raise RuntimeError('Validation requires Python assertions')
+
+STASH=0x55804378;EXECUTE=0x535047d4;WRAP=0x536df3d4;PROCESS=0x536deecc;RESET,INIT=0x536dece8,0x536ded70
+CACHE,INVALIDATE,CLEAN,ALLOC,FREE=0x536bbc30,0x536bbcc0,0x536bbcac,0x536af2a8,0x536af2e4
+PLATFORM,GET_TIME=0x536bd838,0x536b6510
+MOBJ,REGS=0x62c00000,0x62c10000;CFG,ARG,PIC=0x62d00000,0x62d00100,0x62d00200
+IMG,HEAP=0x63000000,0x64000000
+IDENTITY=[512,0,0,0,512,0,0,0,512]
+
+def u32(uc,a):return struct.unpack('<I',uc.mem_read(a,4))[0]
+
+class StageProbe(LookProbe):
+    def __init__(self,data,manifest):
+        super().__init__(data,manifest)
+        for base,size in ((0x55800000,0x100000),(0x62c00000,0x200000),(IMG,0x200000),(HEAP,0x800000)):
+            try:self.uc.mem_map(base,size)
+            except Exception:pass
+        self.log={'invalidate':0,'clean':0,'alloc':[],'free':0,'time':0};self.heap=HEAP
+        self.uc.hook_add(UC_HOOK_CODE,self._stage,begin=0x536af000,end=0x536be000)
+    def _stage(self,cpu,at,size,user):
+        ret=lambda v=None:(v is not None and cpu.reg_write(reg.UC_ARM_REG_R0,v),cpu.reg_write(reg.UC_ARM_REG_PC,cpu.reg_read(reg.UC_ARM_REG_LR)))
+        if at==INVALIDATE:self.log['invalidate']+=1;ret()
+        elif at==CLEAN:self.log['clean']+=1;ret()
+        elif at==ALLOC:
+            n=cpu.reg_read(reg.UC_ARM_REG_R0);a=self.heap;self.heap=(a+n+63)&~63;self.log['alloc'].append(n)
+            assert self.heap<HEAP+0x800000;ret(a)
+        elif at==FREE:self.log['free']+=1;ret()
+        elif at==PLATFORM:ret(0x62d00f00)
+        elif at==GET_TIME:
+            # 2026-10-22 17:05:09, as the camera's read-time function lays it out.
+            cpu.mem_write(cpu.reg_read(reg.UC_ARM_REG_R1),struct.pack('<H6BH',2026,10,22,17,5,9,0,0));self.log['time']+=1;ret()
+    def regs_post(self):return [(v&0xfff)-(0x1000 if v&0x800 else 0) for v in struct.unpack('<9H',self.uc.mem_read(REGS+0x1120,18))]
+    def regs_pre(self):return bytes(self.uc.mem_read(REGS+0x20,18))
+
+def picture(Y,C,w,h):return struct.pack('<B3xIII4H2H4x',1,Y,C,w*h,w,h,w,h,0,0)
+
+def run_execute(n,film,w,h,y,c):
+    """Enter the patched Execute and stop where the chain hands over to the original body."""
+    uc=n.uc;uc.mem_write(IMG,y);uc.mem_write(IMG+0x100000,c)
+    uc.mem_write(PIC,picture(IMG,IMG+0x100000,w,h));uc.mem_write(PIC+0x40,picture(IMG,IMG+0x100000,w,h))
+    cfg=bytearray(0x60);struct.pack_into('<4I',cfg,0x3c,PIC,PIC+0x40,0,0);uc.mem_write(CFG,bytes(cfg))
+    uc.mem_write(ARG,struct.pack('<3I',0,0,CFG));uc.mem_write(0x62d00f00,struct.pack('<2I',0,0x62d00f80))
+    uc.mem_write(STASH,struct.pack('<I',film))
+    n.log={'invalidate':0,'clean':0,'alloc':[],'free':0,'time':0};n.heap=HEAP
+    values=[0x62e00000+i*0x100 for i in range(13)];values[0]=0x62d00800;values[1]=ARG
+    for i,v in enumerate(values):uc.reg_write(getattr(reg,'UC_ARM_REG_R'+str(i)),v)
+    uc.reg_write(reg.UC_ARM_REG_SP,STACK);uc.reg_write(reg.UC_ARM_REG_LR,STOP);uc.reg_write(reg.UC_ARM_REG_CPSR,0x13)
+    uc.emu_start(EXECUTE,EXECUTE+4,timeout=900_000_000,count=600_000_000)
+    assert uc.reg_read(reg.UC_ARM_REG_PC)==EXECUTE+4
+    got=[uc.reg_read(getattr(reg,'UC_ARM_REG_R'+str(i))) for i in range(12)]
+    # `mov ip,sp` has just been re-executed: ip = sp, as the original first instruction leaves it.
+    assert got==values[:12] and uc.reg_read(reg.UC_ARM_REG_SP)==STACK and uc.reg_read(reg.UC_ARM_REG_R12)==STACK
+    assert uc.reg_read(reg.UC_ARM_REG_LR)==STOP
+    return bytes(uc.mem_read(IMG,w*h)),bytes(uc.mem_read(IMG+0x100000,w*h))
+
+def verify(data,manifest,reference=None):
+    films=manifest['addedLooks'];entries=manifest['lookEntries'];calls=0;report={}
+    n=StageProbe(data,manifest)
+    # 1. Stash: every look the builder sees leaves its id, its level and the valid bit.
+    if 'jpeg' in entries and 'halation' in entries['jpeg']:
+        for tone in NATIVE+[f['id'] for f in films]:
+            n.uc.mem_write(STASH,b'\xa5'*4);n.descriptor(tone);calls+=1
+            level=next((f['halation'] for f in films if f['id']==tone),0)
+            assert u32(n.uc,STASH)==tone|level<<8|0x10000,(tone,hex(u32(n.uc,STASH)))
+        report['stash_states']=len(NATIVE)+len(films)
+    # 2. Second matrix.
+    if 'postMatrix' in entries:
+        n.uc.mem_write(MOBJ,b'\xa5'*0x60);n.call(RESET,MOBJ);n.call(INIT,MOBJ)
+        order=[f['id'] for f in films]+NATIVE+[f['id'] for f in films][::-1]
+        for tone in order:
+            n.descriptor(tone);desc=bytes(n.uc.mem_read(OUTPUT,0xa0))
+            n.uc.mem_write(REGS,bytes(0x2000));n.call(WRAP,MOBJ,OUTPUT,REGS);calls+=1
+            film=next((f for f in films if f['id']==tone),None)
+            expected=film['postQ9'] if film and film.get('postQ9') else IDENTITY
+            assert n.regs_post()==expected,(tone,n.regs_post(),expected)
+            # The pre-curve stage is the firmware's own result: the unhooked process, then the
+            # register writer, on the same descriptor and module object.
+            pre=n.regs_pre();saved=bytes(n.uc.mem_read(MOBJ,0x60));n.uc.mem_write(OUTPUT,desc)
+            n.uc.mem_write(REGS,bytes(0x2000));n.call(PROCESS,MOBJ,OUTPUT);n.call(0x536df13c,MOBJ,REGS);calls+=2
+            assert n.regs_pre()==pre,tone
+            assert bytes(n.uc.mem_read(MOBJ,0x30))==saved[:0x30],tone
+        report['post_matrix_states']=len(order)
+        report['films_with_post_matrix']=sum(1 for f in films if f.get('postQ9'))
+    # 3. The JPEG stage chain.
+    if 'jpeg' in entries:
+        w,h=320,240
+        y=bytes((16+((x*3+yy*5)%220) if not (140<x<180 and 100<yy<140) else 252) for yy in range(h) for x in range(w))
+        c=bytes((128+((x//2+yy)%40)-20) for yy in range(h) for x in range(w))
+        expected={}
+        if reference:
+            raw=Path(reference).read_bytes();k=0
+            while k<len(raw):
+                look,=struct.unpack_from('<I',raw,k);k+=4
+                expected[look]=(raw[k:k+w*h],raw[k+w*h:k+2*w*h]);k+=2*w*h
+        results={}
+        for tone in [11]+[f['id'] for f in films]:
+            film=next((f for f in films if f['id']==tone),None)
+            level=film['halation'] if film else 0
+            Y,C=run_execute(n,tone|level<<8|0x10000,w,h,y,c);calls+=1
+            diag='dateDiagnostics' in entries['jpeg']
+            if level and 'halation' in entries['jpeg']:
+                if tone in expected and not diag:assert (Y,C)==expected[tone],tone
+                assert Y!=y and len(n.log['alloc'])>0
+            elif not diag:assert (Y,C)==(y,c),tone
+            results[tone]=dict(level=level,changed_luma=sum(a!=b for a,b in zip(Y,y)),allocs=len(n.log['alloc']),frees=n.log['free'],
+                               invalidate=n.log['invalidate'],clean=n.log['clean'],clock_reads=n.log['time'])
+            assert len(n.log['alloc'])==n.log['free']
+        report['jpeg_stage']=results
+        report['halation_matches_reference']=bool(expected) and 'dateDiagnostics' not in entries['jpeg']
+    return dict(schema=1,rtos_sha256=hashlib.sha256(data).hexdigest(),calls=calls,**report,hardware_tested=False,
+        scope='Patched descriptor builder, matrix module wrapper and JPEG entry with synthetic objects; no ISP, encoder or camera picture.')
+
+if __name__=='__main__':
+    p=argparse.ArgumentParser(description=__doc__)
+    for s in ('rtos','manifest','report'):p.add_argument('--'+s,type=Path,required=True)
+    p.add_argument('--reference',type=Path)
+    a=p.parse_args();result=verify(a.rtos.read_bytes(),json.loads(a.manifest.read_text()),a.reference)
+    with a.report.open('x') as f:json.dump(result,f,indent=2);f.write('\n')
+    print(json.dumps(result,indent=2))

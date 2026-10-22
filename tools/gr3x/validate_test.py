@@ -22,6 +22,7 @@ def main():
     for s in ('official','container','manifest','build-report','rtos','boot','reference','output'):
         p.add_argument('--'+s,type=Path,required=True)
     p.add_argument('--base-look-manifest',type=Path)
+    p.add_argument('--halation-reference',type=Path)
     a=p.parse_args();a.output.mkdir()
     data=a.rtos.read_bytes();manifest=json.loads(a.manifest.read_text());build=json.loads(a.build_report.read_text())
     original=a.official.read_bytes();candidate=a.container.read_bytes()
@@ -74,6 +75,14 @@ def main():
             with path.open('x') as f:json.dump(report,f,indent=2);f.write('\n')
             results['look-icons']=dict(passed=True,calls=report['native_calls'],report=path.name,sha256=hashlib.sha256(path.read_bytes()).hexdigest())
             print('look-icons: passed',flush=True)
+        if any(k in manifest['lookEntries'] for k in ('jpeg','postMatrix')):
+            from picture_stage_probe import verify as stage_verify
+            report=stage_verify(data,manifest,a.halation_reference)
+            report['candidate_sha256']=sha
+            path=a.output/'picture-stage.json'
+            with path.open('x') as f:json.dump(report,f,indent=2);f.write('\n')
+            results['picture-stage']=dict(passed=True,calls=report['calls'],report=path.name,sha256=hashlib.sha256(path.read_bytes()).hexdigest())
+            print('picture-stage: passed',flush=True)
         if manifest.get('ownParameters'):
             from slots_probe import verify as slots_verify
             report=slots_verify(data,manifest)

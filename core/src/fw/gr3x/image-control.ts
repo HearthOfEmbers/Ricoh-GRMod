@@ -13,6 +13,8 @@ import { GR3X_PARAMETER_SETTER_LOOKS, GR3X_STANDARD_ACTIVE_CHECKS, GR3X_STANDARD
   GR3X_PHOTO_STYLE_SETTERS, GR3X_LOAD_CALL, GR3X_LOAD_DATA, GR3X_SAVE_CALL, GR3X_SAVE_DATA,
   GR3X_ZERO_FILL_END, GR3X_GAP, GR3X_HEAP_BASE } from './look-addresses';
 import { GR3X_SLOTS_NATIVE } from './slots-native';
+import { GR3X_DEVELOP_LOOK_READ, GR3X_FIRST_FILM, GR3X_HALATION_STASH, GR3X_MATRIX_CALL, GR3X_MATRIX_PROCESS, installGr3xJpegStage } from './jpeg-stage';
+import { halationLight, PLAIN_LIGHT } from '../aspect/halation';
 import { quantizeSlot } from '../../color/camera';
 import type { SlotParams } from '../../color/camera';
 import type { QuantizedSlot } from '../../color/camera';
@@ -25,8 +27,10 @@ export interface Gr3xFilmLook {
   /** Names for particular camera languages (checked against that language's font characters). */
   names?: Partial<Record<string, string>>;
   params?: SlotParams;
-  preset?: { matrixQ13: ArrayLike<number>; curves: [ArrayLike<number>, ArrayLike<number>, ArrayLike<number>] };
+  preset?: { matrixQ13: ArrayLike<number>; curves: [ArrayLike<number>, ArrayLike<number>, ArrayLike<number>]; postQ9?: ArrayLike<number> };
   icon?: Uint8Array;
+  /** T6 only: halation level of this film, fixed in the build (0 off, 1 weak, 2 strong). */
+  halation?: 0 | 1 | 2;
 }
 export interface Gr3xLookOptions {
   /** 1/2 reproduce T5/T5-L1; 3 provides nine independent T6 film slots. */
@@ -36,6 +40,8 @@ export interface Gr3xLookOptions {
   monoReplicas?: boolean;
   /** T6 only: each film keeps its own parameters (T6d) instead of sharing Standard's (T6c). */
   ownParameters?: boolean;
+  /** Test builds only: print the JPEG encoder's picture descriptors on every JPEG (date-imprint diagnostics). */
+  jpegDiagnostics?: boolean;
 }
 const hex = (b: Uint8Array) => Array.from(b, x => x.toString(16).padStart(2, '0')).join('');
 const unhex = (s: string) => Uint8Array.from(s.match(/../g) ?? [], x => parseInt(x, 16));
@@ -68,7 +74,19 @@ function filmBytes(film: Gr3xFilmLook, matrix: number[]): QuantizedSlot {
       p.curves.some(c => c?.length !== 256 || Array.from(c).some((v, i, a) =>
         !Number.isInteger(v) || v < 0 || v > 16383 || (i > 0 && v < a[i-1]))))
     throw new FirmwareError('bad-edit', 'invalid IIIx matrix/RGB-curve data');
-  return { matrixQ13: Int16Array.from(p.matrixQ13), curves: p.curves.map(c => Uint16Array.from(c)) as QuantizedSlot['curves'] };
+  const post = p.postQ9;
+  if (post !== undefined && (post.length !== 9 || Array.from(post).some(v => !Number.isInteger(v) || v < -2047 || v > 2047) ||
+      [0,1,2].some(r => post[r*3] + post[r*3+1] + post[r*3+2] !== 512)))
+    throw new FirmwareError('bad-edit', 'invalid IIIx post-curve matrix');
+  return { matrixQ13: Int16Array.from(p.matrixQ13), curves: p.curves.map(c => Uint16Array.from(c)) as QuantizedSlot['curves'],
+    ...(post ? { postQ9: Int16Array.from(post) } : {}) };
+}
+const Q9_IDENTITY = [512, 0, 0, 0, 512, 0, 0, 0, 512];
+const isIdentityQ9 = (q?: ArrayLike<number>) => !q || Array.from(q).every((v, i) => v === Q9_IDENTITY[i]);
+function q9Bytes(q: ArrayLike<number>): Uint8Array {
+  const out = new Uint8Array(18), v = new DataView(out.buffer);
+  Array.from(q).forEach((x, i) => v.setInt16(i * 2, x, true));
+  return out;
 }
 const REPLICAS = [
   { name: 'M Standard Replica', base: 13, icon: 354, params: { 0x781: 3, 0x782: 5 } },
@@ -134,7 +152,7 @@ export async function buildGr3xImageControls(raw: Uint8Array, options: Gr3xLookO
   const matrix = Array.from({ length: 9 }, (_, i) => mstd.getInt16(i * 2, true));
   const slots = specs.map((spec, i) => {
     const id = menu.addedLooks[i].id;
-    let record = 0, curves = 0;
+    let record = 0, curves = 0, postQ9: Int16Array | undefined, quantizedCurves: QuantizedSlot['curves'] | undefined;
     const curveId = 0x47430000 + id;
     if (spec.film || spec.base === 20) {
       const rec = originalRead(u32(0x55018d94 + spec.base * 4), 84);
@@ -149,18 +167,35 @@ export async function buildGr3xImageControls(raw: Uint8Array, options: Gr3xLookO
         const bytes = new Uint8Array(1536), v = new DataView(bytes.buffer);
         quantized.curves.forEach((c, channel) => c.forEach((x, j) => v.setUint16(channel * 512 + j * 2, x, true)));
         curves = append(bytes);
+        quantizedCurves = quantized.curves;
+        if (!isIdentityQ9(quantized.postQ9)) postQ9 = quantized.postQ9;
       }
     }
+    const halation = extended ? spec.film?.halation ?? 0 : 0;
+    if (![0, 1, 2].includes(halation)) throw new FirmwareError('bad-edit', 'IIIx halation level is 0, 1 or 2');
     return { ...menu.addedLooks[i], nativeBase: spec.base, parameters: Array.from(spec.parameters),
-      parameterAddress: append(spec.parameters), record, curves, curveId, renderingImplemented: true as const };
+      parameterAddress: append(spec.parameters), record, curves, curveId, renderingImplemented: true as const,
+      halation, ...(postQ9 ? { postQ9: Array.from(postQ9) } : {}), quantizedCurves };
   });
+  const halationSlots = slots.filter(s => s.halation > 0);
+  if (halationSlots.length && (!extended || slots.some(s => s.id < GR3X_FIRST_FILM || s.id >= GR3X_FIRST_FILM + 9)))
+    throw new FirmwareError('bad-edit', 'IIIx halation needs the nine T6 film slots');
+  // The halation stash: the development step that reads the frame's look (0x536db7f8) leaves the
+  // look, the film's level and a valid bit in a word the JPEG stage reads (halation.c).
+  const stashLevels = halationSlots.length ? append(Uint8Array.from(slots.slice(0, 9).map(s => s.halation))) : 0;
   const map = (r: number) => slots.map(s => `cmp r${r},#${s.id};moveq r${r},#${s.nativeBase};`).join('');
   // Translate on read without modifying shared state, pointer provenance, flags
   // or another register. Keep these adapters specific to the audited IIIx image.
   const adapters = GR3X_TONE_READS.map(([at, word]) => {
     const dst = (word >>> 12) & 15, src = (word >>> 16) & 15;
     const scratch = [0,1,2,3].find(r => r !== dst && r !== src)!;
-    const entry = code(`push {r${scratch}};mrs r${scratch},cpsr;ldrb r${dst},[r${src},#0x77c];` +
+    const entry = at === GR3X_DEVELOP_LOOK_READ && halationSlots.length ? (() => {
+      if (word !== 0xe5d3277c) throw new FirmwareError('unexpected-instruction', 'IIIx development look read changed');
+      // ldrb r2,[r3,#0x77c]: also store look | level << 8 | valid in the stash (r0, r1, ip saved).
+      return code(`push {r0,r1,ip};mrs r0,cpsr;ldrb r2,[r3,#0x77c];mov ip,#0;sub r1,r2,#${GR3X_FIRST_FILM};cmp r1,#8;bhi stash;` +
+        `${addr(12, stashLevels)}ldrb ip,[ip,r1];stash:orr ip,r2,ip,lsl #8;orr ip,ip,#0x10000;${addr(1, GR3X_HALATION_STASH)}str ip,[r1];` +
+        map(2) + `msr cpsr_f,r0;pop {r0,r1,ip};b #${at + 4};`);
+    })() : code(`push {r${scratch}};mrs r${scratch},cpsr;ldrb r${dst},[r${src},#0x77c];` +
       map(dst) + `msr cpsr_f,r${scratch};pop {r${scratch}};b #${at + 4};`);
     patch(at, word, branchWord(at, entry), 'image control: native base for typed property/ISP/file consumer');
     return { address: at, entry, sourceRegister: src, destinationRegister: dst };
@@ -254,9 +289,32 @@ export async function buildGr3xImageControls(raw: Uint8Array, options: Gr3xLookO
     const save = code(`push {r4,lr};bl #${GR3X_SAVE_DATA};mov r4,r0;bl #${entry('sp_after_save')};mov r0,r4;pop {r4,pc};`);
     patch(GR3X_SAVE_CALL, branchWord(GR3X_SAVE_CALL, GR3X_SAVE_DATA), branchWord(GR3X_SAVE_CALL, save),
       'own film parameters: write the table after the settings save');
-    patch(GR3X_ZERO_FILL_END, GR3X_GAP, GR3X_HEAP_BASE, 'start-up zero fill reaches the heap base (clears the table pointer)');
     return { module: origin, moduleSha256: native.sourceSha256, styles, load, save, exports: { ...native.exports } };
   })() : undefined;
+  // Both the table pointer of own parameters and the halation stash live in the 12 bytes between
+  // the zero-filled data and the heap; the start-up fill is extended to clear them at every start.
+  if (own || halationSlots.length)
+    patch(GR3X_ZERO_FILL_END, GR3X_GAP, GR3X_HEAP_BASE, 'start-up zero fill reaches the heap base (clears the added RAM words)');
+  // Second (post-curve) matrix: the matrix module's process call (0x536df3e8) is followed by
+  // copying the film's Q9 matrix, found by its matrix record (desc+8), into the module's post-curve
+  // fields (obj+0x32, 9 x int16); every other record gets the identity the firmware itself sets
+  // there at start-up. GR III's own processing never writes these fields per picture.
+  const postSlots = slots.filter(s => s.postQ9 && s.record);
+  const postMatrix = postSlots.length ? (() => {
+    const identity = append(q9Bytes(Q9_IDENTITY));
+    const tables = postSlots.map(s => append(q9Bytes(s.postQ9!)));
+    const entry = code(`push {r0,r1,r4,lr};bl #${GR3X_MATRIX_PROCESS};pop {r0,r1};ldr r2,[r1,#8];` +
+      postSlots.map((s, k) => `${addr(3, s.record)}cmp r2,r3;${addr(1, tables[k])}beq copy;`).join('') +
+      `${addr(1, identity)}copy:add r0,r0,#0x32;mov r2,#18;bl #0x5313fd80;pop {r4,pc};`);
+    patch(GR3X_MATRIX_CALL, branchWord(GR3X_MATRIX_CALL, GR3X_MATRIX_PROCESS, 14, true), branchWord(GR3X_MATRIX_CALL, entry, 14, true),
+      'films: post-curve (second) matrix');
+    return { entry, identity, tables };
+  })() : undefined;
+  const jpeg = installGr3xJpegStage({ code, append, patch, u32 }, {
+    halation: halationSlots.length ? { levels: slots.slice(0, 9).map(s => s.halation), light: slots.slice(0, 9).map(s =>
+      s.quantizedCurves ? halationLight(s.quantizedCurves, s.postQ9) : PLAIN_LIGHT) } : undefined,
+    diagnostics: options.jpegDiagnostics === true,
+  });
   const descriptor = code(`push {r1-r3,ip};ldrb r2,[r7,#0x77c];` +
     slots.filter(s => s.record).map(s => `cmp r2,#${s.id};beq slot${s.id};`).join('') +
     `b done;` + slots.filter(s => s.record).map(s => `slot${s.id}:${addr(3, s.record)}str r3,[r4,#8];` +
@@ -281,7 +339,8 @@ export async function buildGr3xImageControls(raw: Uint8Array, options: Gr3xLookO
     ...menu, kind: 'gr3x-image-control-patchset' as const, sites,
     append: { address: menu.append.address, bytes: hex(payload) },
     addedLooks: slots, renderingImplemented: true as const,
-    lookEntries: { aggregate, rawEnum, restriction, enforce, descriptor, gamma, defaults, adapters, setters, activeChecks, activeChecksSet0, ...(own ? { ownParameters: own } : {}) },
+    lookEntries: { aggregate, rawEnum, restriction, enforce, descriptor, gamma, defaults, adapters, setters, activeChecks, activeChecksSet0,
+      ...(own ? { ownParameters: own } : {}), ...(postMatrix ? { postMatrix } : {}), ...(jpeg ? { jpeg } : {}) },
     // sharedParameters: films use Standard's storage (T6c). ownParameters: on top of it, each film's
     // values are swapped into that storage when it is selected (T6d).
     sharedParameters: adjustable, ownParameters: !!own,

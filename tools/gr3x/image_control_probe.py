@@ -35,7 +35,7 @@ class LookProbe(AdjProbe):
         super().__init__(data, {**manifest, 'kind': 'gr3x-adj-patchset'})
         self.queue = []
         self.uc.mem_map(SHIM, 0x1000)
-        if manifest.get('ownParameters'):
+        if manifest.get('ownParameters') or 'jpeg' in manifest.get('lookEntries', {}):
             # The table pointer of own film parameters (0x55804374) is zeroed at every start.
             # Left 0 here, the module stays out of the way and these checks see the T6c
             # behaviour underneath; slots_probe.py exercises the module itself.

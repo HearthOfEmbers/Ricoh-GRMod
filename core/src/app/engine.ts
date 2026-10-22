@@ -140,6 +140,8 @@ export interface SlotRequest {
   preset?: { matrixQ13: ArrayLike<number>; curves: [ArrayLike<number>, ArrayLike<number>, ArrayLike<number>]; postQ9?: ArrayLike<number> };
   icon?: Uint8Array;
   names?: Partial<Record<LangCode, string>>;
+  /** GR III / IIIx films: halation level fixed in the build (0 off, 1 weak, 2 strong). */
+  halation?: 0 | 1 | 2;
 }
 
 /** Soft focus on one negative clarity setting: its row of the clarity table gets the gains of `strength`. */
@@ -718,12 +720,13 @@ export class Engine {
 
   /**
    * Fit a preset to a slot: matrix, curves and (unless `post` is false) the post-curve matrix.
-   * Without it the result is what GR Mod 0.6.1 and earlier made. GR III / IIIx take .xmp and .cube,
-   * without the post-curve matrix (its firmware has no place for it yet).
+   * Without it the result is what GR Mod 0.6.1 and earlier made. GR III / IIIx take .xmp and .cube too.
    */
   convertPreset(kind: 'xmp' | 'cube', text: string, onProgress?: (f: number) => void, options: { post?: boolean } = {}): PresetResult {
     if (this.info.family === 'gr3x') {
-      const c = kind === 'xmp' ? convertGr3xXmp(text, { onProgress }) : convertGr3xCube(text, { onProgress });
+      // The second (post-curve) matrix, as on GR IV: GR III's matrix module has the stage (films only).
+      const post = options.post !== false;
+      const c = kind === 'xmp' ? convertGr3xXmp(text, { onProgress, post }) : convertGr3xCube(text, { onProgress, post });
       return { ...c, ...quantizeSlot(c.params, this.mStdQ13) };
     }
     if (this.layout === null || !this.info.capabilities.presets) requireGr3xPort('preset conversion');
@@ -773,7 +776,8 @@ export class Engine {
           const ascii = given.find(([l, v]) => l === 'en' && /^[\x20-\x7e]+$/.test(v)) ?? given.find(([, v]) => /^[\x20-\x7e]+$/.test(v));
           const name = ascii?.[1] ?? GR3X_FILM_NAMES[i]; validateGr3xLookName(name);
           const own = Object.fromEntries(given.filter(([, v]) => v !== name));
-          return { name, ...(Object.keys(own).length ? { names: own } : {}), ...(r?.preset ? { preset: r.preset } : {}), ...(r?.icon ? { icon: r.icon } : {}) };
+          return { name, ...(Object.keys(own).length ? { names: own } : {}), ...(r?.preset ? { preset: r.preset } : {}), ...(r?.icon ? { icon: r.icon } : {}),
+            ...(r?.halation ? { halation: r.halation } : {}) };
         }),
       } : undefined;
       const r = await this.fixedGr3x(softFocus, looks, menu);

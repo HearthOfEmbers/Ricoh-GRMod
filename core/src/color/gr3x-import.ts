@@ -62,7 +62,7 @@ export function convertGr3xCube(text: string, options: ConvertOptions = {}): Con
   const P = syntheticSamples(2200, 160, 4);
   options.onProgress?.(0.05);
   const fit = fitSlot(P, applyCube(cube, P), {
-    camera: GR3X_CAMERA, maxIterations: 250,
+    camera: GR3X_CAMERA, maxIterations: 250, post: options.post === true,
     onProgress: f => options.onProgress?.(0.05 + f * 0.9),
   });
   const validation = syntheticSamples(1100, 161, 1);
@@ -74,7 +74,7 @@ export function convertGr3xCube(text: string, options: ConvertOptions = {}): Con
   ];
   if (p95DE > 6) warnings.push('Large color differences in parts of this LUT; compare the preview before exporting.');
   options.onProgress?.(1);
-  return { kind: 'cube', title: cube.title, params: { M1: fit.M1, ck: fit.ck },
+  return { kind: 'cube', title: cube.title, params: { M1: fit.M1, ck: fit.ck, ...(fit.P2 ? { P2: fit.P2 } : {}) },
     meanDE, p95DE, warnings, unsupported: [] };
 }
 
@@ -89,7 +89,7 @@ export function convertGr3xXmp(text: string, options: ConvertOptions = {}): Conv
   const P = syntheticSamples(2200, 160, 4);
   options.onProgress?.(0.05);
   const fit = fitSlot(P, full.apply(P), {
-    camera: GR3X_CAMERA, maxIterations: 250,
+    camera: GR3X_CAMERA, maxIterations: 250, post: options.post === true,
     onProgress: f => options.onProgress?.(0.05 + f * 0.9),
   });
   const validation = syntheticSamples(1100, 161, 1);
@@ -102,6 +102,6 @@ export function convertGr3xXmp(text: string, options: ConvertOptions = {}): Conv
   ];
   if (p95DE > 6) warnings.push('Large color differences in parts of this look; compare the preview before exporting.');
   options.onProgress?.(1);
-  return { kind: 'xmp', title: look.title, params: { M1: fit.M1, ck: fit.ck },
+  return { kind: 'xmp', title: look.title, params: { M1: fit.M1, ck: fit.ck, ...(fit.P2 ? { P2: fit.P2 } : {}) },
     meanDE, p95DE, warnings, unsupported: look.unsupported.slice() };
 }
