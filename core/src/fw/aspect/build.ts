@@ -980,6 +980,8 @@ const FILL_FLAG_TEST = 0x53647248;
 const SHOW_BUFFER = [0x53647348, 0x53647404] as const;
 /** Clean and invalidate the data cache by address, (start, length > 0), then DSB. A leaf. */
 const DCACHE_FLUSH_RANGE = 0x53000930;
+/** Columns / rows of the live-view picture painted over on each side that has a strip beside it. */
+const LIVE_VIEW_MARGIN = 4;
 /** The rectangle the buffers were last painted for: two words in the 44 bytes before the heap. */
 const LAST_FILL_RECT = 0x558372e8;
 /** The aspect the live-view layout last laid out. */
@@ -1010,11 +1012,12 @@ function installLiveViewRepaint(patch: Patch, strips: 'magenta' | 'black' = 'bla
      same:pop {r1,r2,r3,ip}
      ldr r3,[r4,#0x31c];b #${FILL_FLAG_TEST + 4}`, at), 16);
   patch.setWord(FILL_FLAG_TEST, branchWord(FILL_FLAG_TEST, stub), 'live view: paint the buffers again when the picture rectangle changes');
-  const [yy, cc] = strips === 'magenta' ? [0x6969, 0xead4] : [0x0000, 0x8080];
   // seg: r0 start, r1 length (<= 0: nothing), r2 value (word); halfword stores at even
   // addresses, so a CbCr pair is never split. Keeps every register.
-  // paint: r0 config, r4 display object, r5 Y of the buffer being shown.
-  const paint = patch.append((at) => assembleWords(
+  // paint: r0 config, r4 display object, r5 Y of the buffer being shown. Paints everything outside
+  // the picture rectangle shrunk by `margin` on each side that has a strip beside it, rows out to
+  // the stride (the padding after the buffer width included).
+  const paintAsm = (yy: number, cc: number, margin: number) =>
     `paint:push {r0-r12,lr}
      movw ip,#${LV_ASPECT & 65535};movt ip,#${LV_ASPECT >>> 16};ldr r1,[ip];cmp r1,#${FIRST_CUSTOM_ID};blo pdone
      cmp r5,#0x40000000;blo pdone;cmp r5,#0xc0000000;bhs pdone
@@ -1030,7 +1033,11 @@ function installLiveViewRepaint(patch: Patch, strips: 'magenta' | 'black' = 'bla
      add r10,r10,r9;cmp r10,r7;bhi pdone
      add r12,r12,r11;cmp r12,r3;bhi pdone
      cmp r9,#0;bne pgo;cmp r10,r7;bne pgo;cmp r11,#0;bne pgo;cmp r12,r3;beq pdone
-     pgo:movw r2,#${yy};movt r2,#${yy}
+     pgo:${margin ? `cmp r9,#0;addne r9,r9,#${margin};cmp r10,r7;subne r10,r10,#${margin}
+     cmp r11,#0;addne r11,r11,#${margin};cmp r12,r3;subne r12,r12,#${margin}
+     cmp r9,r10;bhs pdone;cmp r11,r12;bhs pdone` : 'mov r0,r0'}
+     mov r7,r6
+     movw r2,#${yy};movt r2,#${yy}
      mov r4,#0
      yl:cmp r4,r3;bhs yd
      mul r0,r4,r6;add r0,r0,r5
@@ -1061,9 +1068,18 @@ function installLiveViewRepaint(patch: Patch, strips: 'magenta' | 'black' = 'bla
      tl:sub r7,r5,r6;cmp r7,#2;blo t1;strh r2,[r6],#2;b tl
      t1:cmp r6,r5;bhs fl;strb r2,[r6],#1
      fl:sub r1,r5,r4;mov r0,r4;bl #${DCACHE_FLUSH_RANGE}
-     pop {r0-r7,pc}`, at), 16);
+     pop {r0-r7,pc}`;
+  // Black: the strips and the outermost LIVE_VIEW_MARGIN columns / rows of the picture (test 039
+  // showed a line at the picture's right edge holding a frozen frame from focusing: columns inside
+  // the laid-out rectangle that live view does not write). Magenta (diagnostic): the same margin in
+  // cyan, then the strips in magenta.
+  const paints = strips === 'magenta'
+    ? [paintAsm(0xb3b3, 0x10a6, LIVE_VIEW_MARGIN), paintAsm(0x6969, 0xead4, 0)]
+    : [paintAsm(0x0000, 0x8080, LIVE_VIEW_MARGIN)];
+  const routines = paints.map((src) => patch.append((at) => assembleWords(src, at), 16));
   SHOW_BUFFER.forEach((site) => {
-    const tramp = patch.append((at) => assembleWords(`bl #${paint};mov r1,r5;b #${site + 4}`, at), 16);
+    const tramp = patch.append((at) => assembleWords(
+      `${routines.map((r) => `bl #${r}`).join(';')};mov r1,r5;b #${site + 4}`, at), 16);
     patch.setWord(site, branchWord(site, tramp), 'live view: paint around an added ratio\'s picture in the buffer being shown');
   });
   extendZeroFill(patch);
