@@ -688,6 +688,7 @@ export function WallpaperPage() {
         )}
       </header>
       {!info && <FirmwareHero />}
+      {info?.family === 'gr3x' && <p className="muted small wall-hint">{t('gr3WallHint')}</p>}
       {info && (
         <div className="wall-fit" ref={ref} data-tour-page="wall">
           {fit.tile > 0 && (

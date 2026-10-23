@@ -296,6 +296,8 @@ svg { width: 18px; height: 18px; flex: none; }
 .soft-switch .soft-ico { width: 32px; height: 32px; flex: none; }
 .soft-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .soft-text b { font-weight: 600; }
+/* The detail line may take two lines (GR III's are longer); then it is cut. */
+.soft-switch .soft-text .ellipsis { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; line-height: 1.4; }
 .extras { display: flex; flex-direction: column; padding: 0; flex: none; }
 .extras .soft-switch { padding: 8px 14px; }
 .extras .soft-switch + .soft-switch { border-top: 1px solid var(--line); }
@@ -331,8 +333,11 @@ svg { width: 18px; height: 18px; flex: none; }
 .pop-sep { height: 1px; background: var(--line); margin: 4px 0; }
 
 /* The official firmware on Ricoh's site. */
-.dialog.online { width: 460px; }
-.online-models { margin: 2px 0 12px; }
+.dialog.online { width: 620px; }
+.online-models { margin: 2px 0 12px; overflow-x: auto; scrollbar-width: none; }
+.online-models::-webkit-scrollbar { display: none; }
+.online-models .seg { display: flex; min-width: 100%; }
+.online-models .seg button { flex: 1 0 auto; white-space: nowrap; padding: 0 8px; }
 .online-models.off { opacity: 0.5; pointer-events: none; }
 .fw-rel { position: relative; display: flex; align-items: center; gap: 12px; width: 100%; min-height: 60px; padding: 10px 14px; border: 1px solid var(--line2); border-radius: 10px; background: none; text-align: left; overflow: hidden; transition: background 0.1s, border-color 0.1s; }
 button.fw-rel:hover:not(:disabled) { background: var(--hover); border-color: var(--faint); }
@@ -491,3 +496,5 @@ button.fw-rel:disabled { cursor: default; }
 .wall-name { height: 30px; padding: 3px 0 0; overflow: visible; }
 .wall-name .input { width: 100%; min-width: 0; height: 26px; padding-top: 0; padding-bottom: 0; font-size: 13px; }
 .wall-name .input.bad { border-color: var(--danger, #d64545); }
+
+.wall-hint { margin: -4px 0 12px; }
