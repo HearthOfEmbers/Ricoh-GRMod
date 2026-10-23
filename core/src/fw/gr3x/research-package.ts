@@ -23,6 +23,9 @@ import type { Gr3xMenuRatio } from './geometry';
 const unhex = (s: string) => Uint8Array.from(s.match(/../g) ?? [], b => parseInt(b, 16));
 const roundFrame = (n: number) => Math.ceil(n / FRAME_SIZE) * FRAME_SIZE;
 
+/** ICONBIN's partition and RAM area are 0x1800000 bytes; GR Mod keeps 256 KB of them free. */
+export const GR3X_ICONBIN_MAX = 0x1800000 - 0x40000;
+
 export async function buildGr3xResearchContainer(raw: Uint8Array) {
   const result = await buildContainer(raw, 'research');
   return { ...result, report: { ...result.report, flashable: false as const } };
@@ -55,6 +58,14 @@ async function buildContainer(raw: Uint8Array, purpose: 'research' | 'hardware-t
   const rtosGrowth = roundFrame(addition.length + recipe.length + record.length + 4);
   const iconGrowth = roundFrame(pixels.length);
   const rtosEnd = rtos.offset + rtos.size, iconEnd = icon.offset + icon.size;
+  // The camera writes sections one after the other and checks a section against its partition
+  // only when it gets to it (0x5362c88c): ICONBIN (partition 4, 0x1800000 bytes, also the size of
+  // its RAM area at 0x51600000) comes after BOOT, RTOS and LINUX, so an oversized ICONBIN would be
+  // refused with the new RTOS already written and the old partition table. Refused here instead,
+  // with 256 KB to spare; RTOS must end below its initialised data at 0x55000000 (its partition is
+  // 0x4000000).
+  if (icon.size + iconGrowth > GR3X_ICONBIN_MAX) throw new FirmwareError('no-space', 'IIIx icons exceed the ICONBIN partition (fewer power-off pictures or films)');
+  if (rtos.size + rtosGrowth > 0x4000000 || 0x53000000 + rtos.size + rtosGrowth > 0x55000000) throw new FirmwareError('no-space', 'IIIx RTOS exceeds its partition');
   // Power-off pictures: RES records (two frames each) after the A: files, before the first B: file (shutdown.ts).
   const pictures = features.pictures ?? [];
   let resAt = 0, resCountOffset = 0, resCount = 0, resBlock: Uint8Array = new Uint8Array();

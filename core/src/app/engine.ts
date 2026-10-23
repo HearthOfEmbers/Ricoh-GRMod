@@ -106,7 +106,7 @@ export interface FirmwareInfo {
   experimental?: boolean;
   models: CameraModel[];
   factoryRatios: string[];
-  /** `menuPictures`: power-off pictures chosen in the camera's menu (GR IV: End Screen submenu; GR III: a Setup line after End Screen). */
+  /** `menuPictures`: power-off pictures chosen in the camera's menu (End Screen submenu on both; GR III builds of round 5 had a Setup line after End Screen). */
   capabilities: { build: boolean; presets: boolean; wallpaper: boolean; factoryEntry: boolean; bridge: boolean; menuPictures: boolean };
   features: { softFocus: 'clarity' | 'adj'; dateStamp: boolean; monoUnlock: boolean;
     /** GR III / IIIx: the most films a build can have (9; 20 on the experimental GR III build, where

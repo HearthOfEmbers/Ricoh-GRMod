@@ -217,7 +217,7 @@ def verify_v2(data,manifest,seed=1106,steps=5000):
     start-up check of looks a build does not have."""
     films=manifest['filmCount'];n=SlotsProbe(data,manifest);rng=random.Random(seed+films);cpu=n.uc;calls=0
     own=manifest['lookEntries']['ownParameters'];fn=lambda name:own['module']+own['exports'][name]
-    assert set(own['exports'])=={'sp_style','sp_after_load','sp_after_save','sp_hal','sp_hal_put','sp_hal_text','sp_hal_level'}
+    assert set(own['exports'])=={'sp_style','sp_after_load','sp_after_save','sp_hal','sp_hal_put','sp_hal_text','sp_hal_level','sp_hal_backup','sp_hal_restore'}
     looks=list(range(11,23))+list(range(64,64+films))
     def owner(look):return 0 if look==11 else look-63 if 64<=look<64+films else None
     cpu.mem_write(SETTINGS,struct.pack('<I',REC))
@@ -245,6 +245,13 @@ def verify_v2(data,manifest,seed=1106,steps=5000):
             look=rng.choice(looks+[63,64+films,83,84,255]);s=rng.choice([0,1,2,2,3,255]);v=rng.choice([0,1,2,2,3,255])
             n.call(fn('sp_hal_put'),look,s,v);calls+=1
             if 64<=look<64+films and s<3 and v<3:levels[look-64][s]=v;counts['levels_set']+=1
+        elif op<0.82:
+            # The parameter screen opens (backup), the slider moves, then OK (keep) or Cancel (restore).
+            n.call(fn('sp_hal_backup'));kept=[list(x) for x in levels];calls+=1
+            for _ in range(rng.randrange(4)):
+                look=rng.choice(looks);s=rng.randrange(3);v=rng.randrange(3);n.call(fn('sp_hal_put'),look,s,v);calls+=1
+                if 64<=look<64+films:levels[look-64][s]=v
+            if rng.random()<0.5:n.call(fn('sp_hal_restore'));levels=kept;calls+=1
         elif op<0.95:
             look=rng.choice(looks+[64+films,83,0]);s=rng.randrange(4)
             want=levels[look-64][s] if 64<=look<64+films and s<3 else 0

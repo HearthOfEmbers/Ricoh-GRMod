@@ -107,6 +107,10 @@ def verify(original,new,manifest,build,reference):
     import struct
     assert struct.unpack_from('<I',old,part['start']+16+4+16)[0]==0x4000000
     assert rt['end']-rt_start<0x4000000
+    # ICONBIN (partition 4, also its RAM area at 0x51600000): the camera refuses an oversized one only
+    # after writing RTOS, so it must fit with room to spare (256 KB kept free).
+    assert struct.unpack_from('<I',old,part['start']+16+4+4*16)[0]==0x1800000
+    assert icon_new['end']-(icon_new['start']+16)<=0x1800000-0x40000
     revision=build.get('revision','T4-SF1' if soft else 'T4')
     assert revision in ('research','T4','T4-SF1','T5','T5-L1','T6')
     if revision.startswith('T5') or revision=='T6':assert manifest['kind']=='gr3x-image-control-patchset'
@@ -147,6 +151,7 @@ def verify(original,new,manifest,build,reference):
         if manifest.get('dateImprint'):expected['dateImprint']=True
         if manifest.get('dateImprint') and manifest['dateImprint'].get('form')=='submenu':expected['dateMenu']='submenu'
         if manifest.get('pictures'):expected['pictures']=build['pictures']
+        if manifest.get('pictures') and manifest['pictures'].get('form')=='submenu':expected.update(pictureMenu='submenu',pictureIds=manifest['pictures']['choices'])
         assert recipe==expected,recipe
         padding=start+length
     assert not any(dec[padding:rt['end']-4-len(marker)])

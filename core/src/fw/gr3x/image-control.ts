@@ -312,7 +312,7 @@ export async function buildGr3xImageControls(raw: Uint8Array, options: Gr3xLookO
   const activeChecksSet0 = adjustable ? GR3X_STANDARD_ACTIVE_CHECKS_SET0.map(at => {
     // ldr r3,[r3,#0x1c0] reads the active set (byte 0) and set 0's stored look (byte 2).
     const entry = code(`push {r0,r1};mrs r0,cpsr;ldr r3,[r3,#0x1c0];and r1,r3,#0xff0000;` +
-      slots.map(s => `cmp r1,#${s.id << 16};biceq r3,r3,#0xff0000;orreq r3,r3,#${s.nativeBase << 16};`).join('') +
+      mapped.map(s => `cmp r1,#${s.id << 16};biceq r3,r3,#0xff0000;orreq r3,r3,#${s.nativeBase << 16};`).join('') +
       `msr cpsr_f,r0;pop {r0,r1};b #${at + 4};`);
     patch(at, 0xe59331c0, branchWord(at, entry), 'image control: a film counts as Standard for the live-value update (set 0)');
     return { address: at, entry };
@@ -345,7 +345,8 @@ export async function buildGr3xImageControls(raw: Uint8Array, options: Gr3xLookO
   // Round 6: the Halation line of a film on the parameter screen (halation-screen.ts).
   const halationScreen = round6 ? installGr3xHalationScreen({ code, append, patch, u32: (a: number) => u32(a), read: originalRead },
     { films: capacity, textId: menu.extraTextIds[0], iconId: menu.extraIconIds[0], scaleIconId: menu.extraIconIds[1],
-      hal: own2Entry('sp_hal'), put: own2Entry('sp_hal_put'), text: own2Entry('sp_hal_text') }) : undefined;
+      hal: own2Entry('sp_hal'), put: own2Entry('sp_hal_put'), text: own2Entry('sp_hal_text'),
+      backup: own2Entry('sp_hal_backup'), restore: own2Entry('sp_hal_restore') }) : undefined;
   // Both the table pointer of own parameters and the halation stash live in the 12 bytes between
   // the zero-filled data and the heap; the start-up fill is extended to clear them at every start.
   // (Already done by the End Screen submenu, whose list mode is the third of those words.)

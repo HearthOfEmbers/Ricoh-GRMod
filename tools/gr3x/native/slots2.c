@@ -13,6 +13,9 @@
  *     "Halation" line the parameter screen shows for a film (image-control.ts): read and set by
  *     the screen through sp_hal / sp_hal_put / sp_hal_text, read by the development step for the
  *     JPEG's halation through sp_hal_level (the film of the frame, the active photo set);
+ *   - the parameter screen's Cancel puts the levels back as they were when it opened, as the
+ *     camera does with every other parameter (sp_hal_backup / sp_hal_restore at its backup and
+ *     restore of the parameters, 0x532c337c / 0x532c34a8);
  *   - the record is version 2; a version-1 record (nine films) is taken over (its nine films'
  *     values; Halation off);
  *   - at start, a photo set whose look is a film this build does not have (a build with fewer
@@ -68,6 +71,8 @@ typedef struct {
     uint8_t h[FILMS][SETS];
     uint8_t pad[AWORDS * 4u - ABYTES];
     uint32_t rec[REC_WORDS];
+    uint32_t backed_up;
+    uint8_t hb[FILMS][SETS];      /* the levels when the parameter screen opened (Cancel) */
 } State;
 
 static uint32_t field(uint32_t j, uint32_t set) {
@@ -253,4 +258,20 @@ uint32_t sp_hal_level(uint32_t look) {
     const uint8_t *rec = *SETTINGS;
     if (!rec || rec[MOVIE] != 0u) return 0u;
     return sp_hal(look, rec[ACTIVE_SET]);
+}
+
+/* The parameter screen opens (the camera backs its parameters up): keep the levels. */
+void sp_hal_backup(void) {
+    State *s = state();
+    if (!s || !s->loaded) return;
+    copy_bytes(&s->hb[0][0], &s->h[0][0], HBYTES);
+    s->backed_up = 1;
+}
+
+/* Cancel (the camera restores its parameters): the levels as they were. */
+void sp_hal_restore(void) {
+    State *s = state();
+    if (!s || !s->loaded || !s->backed_up) return;
+    for (uint32_t i = 0; i < HBYTES; i++)
+        if ((&s->h[0][0])[i] != (&s->hb[0][0])[i]) { (&s->h[0][0])[i] = (&s->hb[0][0])[i]; s->dirty = 1; }
 }

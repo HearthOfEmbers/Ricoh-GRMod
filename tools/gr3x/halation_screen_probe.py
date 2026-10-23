@@ -150,6 +150,15 @@ def verify(data,manifest):
                 else:assert n.native==[('hdr',0x6205c000,v)]
                 hooks+=1
     report['hook_cases']=hooks
+    # Cancel: the thunks of the parameter backup and restore keep and put back the levels.
+    for at,body in ((0x532c337c,0x532c325c),(0x532c34a8,0x532c33c8)):
+        if at==0x532c34a8:n.call(fn('sp_hal_put'),64,0,(level(64,0)+1)%3);assert n.call(fn('sp_hal'),64,0)!=level(64,0)
+        c.reg_write(reg.UC_ARM_REG_SP,STACK);c.reg_write(reg.UC_ARM_REG_LR,0x5a5a5a5a);c.reg_write(reg.UC_ARM_REG_R0,0x6205c000)
+        c.emu_start(at,body,count=5000)
+        assert c.reg_read(reg.UC_ARM_REG_PC)==body and c.reg_read(reg.UC_ARM_REG_SP)==STACK and c.reg_read(reg.UC_ARM_REG_LR)==0x5a5a5a5a and c.reg_read(reg.UC_ARM_REG_R0)==0x6205c000
+        calls+=1
+    assert n.call(fn('sp_hal'),64,0)==level(64,0)   # Cancel put the level back
+    report['cancel_restores']=True
     return dict(schema=1,rtos_sha256=hashlib.sha256(data).hexdigest(),films=films,calls=calls,**report,hardware_tested=False,
         scope='Patched ImageControlDetailController functions and hook stubs with a synthetic controller; widgets not drawn.')
 

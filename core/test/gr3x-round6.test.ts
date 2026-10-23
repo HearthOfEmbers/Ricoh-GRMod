@@ -46,4 +46,14 @@ describe.skipIf(!input)('GR III round 6: date imprint menu as GR IV', () => {
     await expect(engine.buildFirmware([{ slot: 'F12', preset }], ratios, [], { filmCount: 11 })).rejects.toMatchObject({ code: 'bad-edit' });
     await expect(engine.buildFirmware([], ratios, [], { filmCount: 21 })).rejects.toMatchObject({ code: 'bad-edit' });
   }, 600000);
+  it('builds the End Screen submenu with stable picture ids, up to eight pictures and twenty films', async () => {
+    const rgb = new Uint8Array(720 * 480 * 3).map((_, i) => (i * 7) & 255);
+    const jpeg = engine.encodeMenuPicture(rgb);
+    const pictures = Array.from({ length: 8 }, (_, k) => ({ id: 0x9000000 + k * 977, name: `Pic ${k + 1}`, jpeg }));
+    const built = await engine.buildFirmware([], ratios, [], { filmCount: 20, dateStamp: true, adjSoftFocus: true, shutdownPictures: pictures });
+    const summary = await (await Engine.open(raw)).inspect(built.file);
+    expect(summary).toMatchObject({ verified: true, dateStamp: true });
+    expect(summary.shutdownPictures?.map(p => [p.id, p.name])).toEqual(pictures.map(p => [p.id, p.name]));
+    await expect(engine.buildFirmware([], ratios, [], { shutdownPictures: [pictures[0], { ...pictures[1], id: pictures[0].id }] })).rejects.toThrow();
+  }, 900000);
 });

@@ -45,11 +45,16 @@ const round = Number(process.env.GR3X_ROUND ?? 3), diagnostics = process.env.GR3
 if (dateImprint && diagnostics) throw new Error('GR3X_DATE and GR3X_DIAG are not combined');
 // GR3X_PICTURES='[{"name":"Sunset","rgb":"/path/720x480.rgb"},…]' (round 5): power-off pictures (shutdown.ts).
 const { encodeGr3xPicture } = await import('../../core/src/fw/gr3x/shutdown.ts');
-const pictures = process.env.GR3X_PICTURES ? await Promise.all(JSON.parse(process.env.GR3X_PICTURES).map(async p => ({ name: p.name, jpeg: encodeGr3xPicture(new Uint8Array(await readFile(p.rgb))) }))) : [];
+// GR3X_PICTURE_MENU=list rebuilds round 5's Setup line; the default is round 6's End Screen submenu
+// (as GR IV), where each picture has a stable identity ("id" in GR3X_PICTURES, else 0x1000 * k + 7).
+const pictureMenu = process.env.GR3X_PICTURE_MENU ?? 'submenu';
+if (!['list', 'submenu'].includes(pictureMenu)) throw new Error('GR3X_PICTURE_MENU is list or submenu');
+const pictures = process.env.GR3X_PICTURES ? await Promise.all(JSON.parse(process.env.GR3X_PICTURES).map(async (p, k) => ({ name: p.name, jpeg: encodeGr3xPicture(new Uint8Array(await readFile(p.rgb))),
+  ...(pictureMenu === 'submenu' ? { id: p.id ?? 0x1000 * (k + 1) + 7 } : {}) }))) : [];
 // GR3X_DATE_MENU=list rebuilds round 4's single list; the default is round 6's submenu (as GR IV).
 const dateMenu = process.env.GR3X_DATE_MENU ?? 'submenu';
 if (!['list', 'submenu'].includes(dateMenu)) throw new Error('GR3X_DATE_MENU is list or submenu');
-const features = { adjSoftFocus: round >= 3, ...(dateImprint ? { dateImprint, dateMenu } : {}), ...(pictures.length ? { pictures } : {}) };
+const features = { adjSoftFocus: round >= 3, ...(dateImprint ? { dateImprint, dateMenu } : {}), ...(pictures.length ? { pictures, pictureMenu } : {}) };
 // GR3X_FILMS=n (round 6): n films (1..20; the nine T6 films first, then plain ones), each with the
 // Halation line in the camera (no level in the build). Not with GR3X_DIAG.
 const filmCount = process.env.GR3X_FILMS ? Number(process.env.GR3X_FILMS) : undefined;

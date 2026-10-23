@@ -29,6 +29,9 @@
  *    "W" / "S" (sp_hal_text), the slider's start (0x531adca0) and current position (0x531b0514)
  *    the stored level (sp_hal), and moving the slider (0x531b0d8c, OnChangeSliderViewValueIndex's
  *    kind 10) stores the level (sp_hal_put) instead of calling SetColorToneHdrIntense.
+ *  - The screen's backup of the parameters when it opens (0x532c337c, called only by this screen,
+ *    0x531b1060 / 0x531b10c8) and their restore on Cancel (0x532c34a8, 0x531acd14 / 0x531b0b30) also
+ *    keep and put back the levels (sp_hal_backup / sp_hal_restore).
  * The development step leaves the level of the frame's film for the JPEG's halation (image-control.ts,
  * sp_hal_level).
  */
@@ -47,6 +50,7 @@ const SUBTITLE = 0x531b0254, SCALE = 0x531adcbc, START = 0x531adca0, POSITION = 
 const LIST_TEXT = 0x531af494, LIST_ICON = 0x531af4a8, SETTER = 0x531b0d8c;
 const STORED_GETTER = 0x532c70e4, LIVE_GETTER = 0x532c297c, TEXT_OF_VALUE = 0x532aca68, HDR_SETTER = 0x532c0894;
 const TONING_ICON = 0x1e9, TONING_TEXT = 0x12f;
+const BACKUP = 0x532c337c, BACKUP_BODY = 0x532c325c, RESTORE = 0x532c34a8, RESTORE_BODY = 0x532c33c8;
 
 export interface Gr3xHalationScreenProgram {
   code(source: string): number;
@@ -57,8 +61,9 @@ export interface Gr3xHalationScreenProgram {
 }
 export interface Gr3xHalationScreenOptions {
   films: number; textId: number; iconId: number; scaleIconId: number;
-  /** slots2.c: sp_hal(look, set), sp_hal_put(look, set, value), sp_hal_text(look, set, text). */
-  hal: number; put: number; text: number;
+  /** slots2.c: sp_hal(look, set), sp_hal_put(look, set, value), sp_hal_text(look, set, text),
+   * sp_hal_backup(), sp_hal_restore(). */
+  hal: number; put: number; text: number; backup: number; restore: number;
 }
 
 const bl = (at: number, target: number) => (0xeb000000 | (((target - (at + 8)) >> 2) & 0xffffff)) >>> 0;
@@ -130,6 +135,16 @@ export function installGr3xHalationScreen(p: Gr3xHalationScreenProgram, o: Gr3xH
   const setter = p.code(`${film('r2', 'r4')}bhi native;mov r2,r1;ldrb r0,[r4,#0x198];ldrb r1,[r4,#0x199];bl #${o.put};b #${SETTER + 4};
     native:bl #${HDR_SETTER};b #${SETTER + 4};`);
   p.patch(SETTER, bl(SETTER, HDR_SETTER), bl(SETTER, setter), 'halation: store the level');
+  // --- Cancel: the screen backs the parameters up when it opens (0x532c337c, a thunk to 0x532c325c)
+  // and restores them on Cancel (0x532c34a8, a thunk to 0x532c33c8); the levels go with them.
+  const thunk = (at: number, target: number, fn: number, what: string) => {
+    if (p.u32(at) !== branchWord(at, target)) fail(`thunk at ${at.toString(16)}`);
+    const stub = p.code(`push {r0-r3,ip,lr};bl #${fn};pop {r0-r3,ip,lr};b #${target};`);
+    p.patch(at, branchWord(at, target), branchWord(at, stub), what);
+    return stub;
+  };
+  const backup = thunk(BACKUP, BACKUP_BODY, o.backup, 'halation: kept when the parameter screen opens');
+  const restore = thunk(RESTORE, RESTORE_BODY, o.restore, 'halation: put back on Cancel');
   void TONING_TEXT;
-  return { table, lists: [l0, l12], base, subtitle, scale, start, position, listText, listIcon, setter };
+  return { table, lists: [l0, l12], base, subtitle, scale, start, position, listText, listIcon, setter, backup, restore };
 }
