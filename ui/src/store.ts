@@ -291,7 +291,7 @@ async function openFirmware(raw: Uint8Array, name: string, persist: boolean): Pr
     set({ info, raw, model, fwName: info.filename, fwBusy: false, copyInfo: {}, copySel: [],
       ...(!sameFamily ? { slots: emptySlots(), activeSlot: 'CY' as const, soft: false, dateStamp: false, monoUnlock: false } : {}),
       ...(info.family === 'gr3x' ? { page: sameFamily ? state.page : 'ratio' as const, bridgeOpen: false, bridgeAfter: undefined,
-        soft: sameFamily && state.soft, dateStamp: false, monoUnlock: sameFamily && state.monoUnlock && info.features.monoUnlock,
+        soft: sameFamily && state.soft, dateStamp: sameFamily && state.dateStamp && info.features.dateStamp, monoUnlock: sameFamily && state.monoUnlock && info.features.monoUnlock,
         // A list made for the other family does not carry over; an IIIx/III list does.
         ...(sameFamily && state.ratios.length ? {} : { ratios: t4Ratios() }) } : {}) });
     if (info.family === 'gr3x') ratiosChanged(true);

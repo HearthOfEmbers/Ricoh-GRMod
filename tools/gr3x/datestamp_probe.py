@@ -1,0 +1,232 @@
+"""Date imprint on GR III 2.10 / IIIx 1.60 (core/src/fw/gr3x/datestamp.ts), every patch of the
+manifest installed:
+
+  - texts and icons: the name in all 21 language rows, the two style names, two 40x40 icons in the
+    added ICONBIN data;
+  - still menu: TopMenuController's builder stores, for each model (0 ND filter, 1 HDF), a
+    descriptor that is the official one without the other model's item, plus the new line at the
+    end of the last page; registers and the rest of the builder as before;
+  - controller plumbing: the factory gets Horizon Correction's id for the new id and every other
+    id unchanged; the key map read gives Horizon's id for the new id and every other value
+    unchanged; SelectMenuController::SetCurrentMenu selects record 118 for the new id and the
+    official record for Horizon's;
+  - the list table: records 0..117 as the official bytes, record 118 the new list (count 3, draw,
+    set, is current), all 15 table sites moved; the list's handlers on the setting byte 0x9a2 of
+    the settings record, including a record pointer of 0, stray values and exactly one current
+    value; the menu line's icons and title;
+  - the picture side: the patched Execute entry runs GR III's module and returns into Execute with
+    every register as on entry; for each value of the setting byte (and a record pointer of 0) the
+    pictures equal those GR IV's camera-tested module draws with the same setting and clock
+    (0, 2 and 7 nothing; 1 and 3 the date), and planes below 0x5d000000 are never written.
+UI widgets, singletons, cache maintenance and the clock are substitutes; the camera's menus, keys
+and encoder are not executed.
+"""
+import argparse,base64,hashlib,json,re,struct
+from pathlib import Path
+from unicorn import Uc,UC_ARCH_ARM,UC_MODE_ARM,UC_HOOK_CODE
+from unicorn import arm_const as reg
+from adj_probe import AdjProbe
+from native_probe import STACK,STOP
+
+if not __debug__:raise RuntimeError('Validation requires Python assertions')
+ROOT=Path(__file__).resolve().parents[2]
+
+NEW,HORIZON=0x020001a0,0x0200007d
+PTR,OFFSET=0x55063f34,0x9a2
+REC=0x62058000
+BUILDER,MENU_TABLE,STILL=0x5319a778,0x55001eb8,0x53b36dec
+APP,SPEC,MODEL=0x5320ad88,0x5320c09c,0x532dbee8
+FACTORY,KEYREAD,GETTER=0x5316f3b8,0x53221a4c,0x53228c4c
+SETCUR=0x531b9640
+TABLE,REC_SIZE,RECORDS=0x53b3c6c0,0x40,117
+SITES=[(0x531b9fdc,0x531b9fe8,4),(0x531ba154,0x531ba158,3),(0x531ba19c,0x531ba1a4,4),(0x531ba24c,0x531ba250,3),
+  (0x531ba2b0,0x531ba2b4,3),(0x531ba4c0,0x531ba4c4,3),(0x531ba520,0x531ba524,4),(0x531ba648,0x531ba64c,3),
+  (0x531ba800,0x531ba804,5),(0x531ba9a0,0x531ba9a8,3),(0x531baa60,0x531baa68,3),(0x531bab3c,0x531bab44,3),
+  (0x531bdfc4,0x531bdfc8,3),(0x531be084,0x531be08c,8),(0x531be400,0x531be404,3)]
+LINE_ICON,TITLE,LIST_ITEM=0x5339de20,0x5339dc70,0x5339e8b0
+EXECUTE=0x535047d4
+CACHE,INVALIDATE,CLEAN,PLATFORM,GET_TIME=0x536bbc30,0x536bbcc0,0x536bbcac,0x536bd838,0x536b6510
+CLOCK=(2026,10,22,21,56,43)
+NAMES=['Vkopírování data','Datostempel','Date Imprint','Päiväysleima','Impression date','Datumseinbelichtung','Αποτύπωση ημ/νίας',
+  'Dátumbélyegző','Stampa data','日付写し込み','날짜 각인','Datumafdruk','Nadruk daty','Impressão de data',
+  'Впечатывание даты','拍摄时间戳','Impresión de fecha','Datumstämpel','ประทับวันที่','拍攝時間戳','Tarih baskısı']
+ROWS=[9,2,4,5,16,13,8,11,1,17,3,12,0,7,20,6,14,10,19,15,18]
+SHORT,LONG="'26 10 08",'2026.10.08 17:34'
+CFG,ARG,DESC,PLAT=0x558c0000,0x558c0100,0x558c0200,0x558c0f00
+MAIN,PV,TH,LOW=0x63000000,0x63800000,0x63a00000,0x5c000000
+SW,SH,MW,MH=2048,1400,1920,1280
+
+def u32(c,a):return struct.unpack('<I',bytes(c.mem_read(a,4)))[0]
+def movw(r,v,top=False):return (0xe3400000 if top else 0xe3000000)|(r<<12)|((v>>12)&15)<<16|(v&0xfff)
+def ret(cpu,v=None):
+    if v is not None:cpu.reg_write(reg.UC_ARM_REG_R0,v)
+    cpu.reg_write(reg.UC_ARM_REG_PC,cpu.reg_read(reg.UC_ARM_REG_LR))
+
+class DateProbe(AdjProbe):
+    def __init__(s,data,manifest):
+        super().__init__(data,manifest);s.model=1;s.ui=[];s.time=0
+        for base,size in ((0x55800000,0x100000),(0x63000000,0x1000000),(LOW,0x800000)):
+            try:s.uc.mem_map(base,size)
+            except Exception:pass
+    def _hook(s,cpu,at,size,user):
+        R=lambda n:cpu.reg_read(getattr(reg,'UC_ARM_REG_R%d'%n))
+        if at==MODEL:ret(cpu,s.model)
+        elif at==SPEC:ret(cpu,0x62055000)
+        elif at in (LINE_ICON,TITLE,LIST_ITEM):s.ui.append((at,R(0),R(1),R(2)));ret(cpu,0)
+        elif at in (INVALIDATE,CLEAN):ret(cpu)
+        elif at==CACHE:ret(cpu,0x5536d1b4)
+        elif at==PLATFORM:ret(cpu,PLAT)
+        elif at==GET_TIME:cpu.mem_write(R(1),struct.pack('<HBBBBB',*CLOCK));s.time+=1;ret(cpu)
+        else:AdjProbe._hook(s,cpu,at,size,user)
+    def setting(s,byte,pointer=True):
+        s.uc.mem_write(REC,bytes(0xb28));s.uc.mem_write(REC+OFFSET,bytes([byte]))
+        s.uc.mem_write(PTR,struct.pack('<I',REC if pointer else 0))
+    def byte(s):return s.uc.mem_read(REC+OFFSET,1)[0]
+
+def gr4_reference(setting,pictures):
+    """GR IV's camera-tested module (aspect/datestamp-code.ts) on the same pictures and clock."""
+    code=base64.b64decode(re.search(r"DATESTAMP_CODE = '([^']+)'",(ROOT/'core/src/fw/aspect/datestamp-code.ts').read_text()).group(1))
+    mu=Uc(UC_ARCH_ARM,UC_MODE_ARM);ORG=0x10000;STUB=0x70000000
+    mu.mem_map(ORG,0x10000);mu.mem_write(ORG,code);mu.mem_map(0x60000000,0x100000);mu.mem_map(STUB,0x100000)
+    for base,size in ((0x63000000,0x1000000),(LOW,0x800000)):mu.mem_map(base,size)
+    for i in range(5):mu.mem_write(STUB+i*16,struct.pack('<I',0xe12fff1e))
+    def hook(uc,addr,size,ud):
+        i=(addr-STUB)//16
+        if i==0:uc.reg_write(reg.UC_ARM_REG_R0,0x70001000)
+        if i==3:uc.reg_write(reg.UC_ARM_REG_R0,0x70001000)
+        if i==4:uc.mem_write(uc.reg_read(reg.UC_ARM_REG_R1),struct.pack('<HBBBBB',*CLOCK))
+    mu.hook_add(UC_HOOK_CODE,hook,begin=STUB,end=STUB+0x50)
+    mu.mem_write(0x70001004,struct.pack('<I',0x70002000));mu.mem_write(0x70003000,bytes([setting]))
+    mu.mem_write(0x70004000,struct.pack('<6I',*(STUB+i*16 for i in range(5)),0x70003000))
+    for a,b in pictures['memory']:mu.mem_write(a,b)
+    descs=pictures['descriptors']
+    for i,d in enumerate(descs):mu.mem_write(0x70005000+i*0x20,d)
+    mu.mem_write(0x70006000+0x3c,struct.pack('<4I',*(0x70005000+i*0x20 for i in range(4))))
+    mu.reg_write(reg.UC_ARM_REG_SP,0x600f0000);mu.reg_write(reg.UC_ARM_REG_LR,0x70000ff0)
+    mu.reg_write(reg.UC_ARM_REG_R0,0x70004000);mu.reg_write(reg.UC_ARM_REG_R1,0x70006000)
+    mu.emu_start(ORG,0x70000ff0,count=400_000_000)
+    return [bytes(mu.mem_read(a,len(b))) for a,b in pictures['memory']]
+
+def pictures(main=MAIN):
+    """Main picture (a window of a larger buffer), 720x480 screennail, 160x120 thumbnail, and the
+    whole buffer again with the same planes (as the camera lists it)."""
+    y=bytes(((x*7+r*3)%160+40) for r in range(SH) for x in range(SW));c=bytes((120+(x%2)*20) for r in range(SH) for x in range(SW))
+    py=bytes([110])*(736*480);pc=bytes([128,128])*(736*480//2);ty=bytes([100])*(160*120);tc=bytes([128])*(160*120)
+    mainc=main+0x300000
+    d=lambda yp,cp,w,h,st,ch:struct.pack('<B3xIIIHHHHHH4x',1,yp,cp,0,w,h,st,ch,0,0)
+    return {'memory':[(main,y),(mainc,c),(PV,py),(PV+0x100000,pc),(TH,ty),(TH+0x8000,tc)],
+            'descriptors':[d(main,mainc,MW,MH,SW,SH),d(PV,PV+0x100000,720,480,736,480),d(TH,TH+0x8000,160,120,160,120),d(main,mainc,SW,SH,SW,SH)]}
+
+def execute(p,pics):
+    uc=p.uc
+    for a,b in pics['memory']:uc.mem_write(a,b)
+    for i,d in enumerate(pics['descriptors']):uc.mem_write(DESC+i*0x20,d)
+    cfg=bytearray(0x60);struct.pack_into('<4I',cfg,0x3c,*(DESC+i*0x20 for i in range(4)));uc.mem_write(CFG,bytes(cfg))
+    uc.mem_write(ARG,struct.pack('<3I',0,0,CFG));uc.mem_write(PLAT,struct.pack('<2I',0,PLAT+0x80))
+    values=[0x62e00000+i*0x100 for i in range(13)];values[0]=0x62d00800;values[1]=ARG
+    for i,v in enumerate(values):uc.reg_write(getattr(reg,'UC_ARM_REG_R'+str(i)),v)
+    uc.reg_write(reg.UC_ARM_REG_SP,STACK);uc.reg_write(reg.UC_ARM_REG_LR,STOP);uc.reg_write(reg.UC_ARM_REG_CPSR,0x13)
+    p.time=0
+    uc.emu_start(EXECUTE,EXECUTE+4,timeout=900_000_000,count=400_000_000)
+    assert uc.reg_read(reg.UC_ARM_REG_PC)==EXECUTE+4
+    assert [uc.reg_read(getattr(reg,'UC_ARM_REG_R'+str(i))) for i in range(12)]==values[:12]
+    assert uc.reg_read(reg.UC_ARM_REG_SP)==STACK and uc.reg_read(reg.UC_ARM_REG_R12)==STACK and uc.reg_read(reg.UC_ARM_REG_LR)==STOP
+    return [bytes(uc.mem_read(a,len(b))) for a,b in pics['memory']]
+
+def verify(data,manifest):
+    e=manifest['entries'];ids=manifest['dateImprint'];assert ids
+    p=DateProbe(data,manifest);c=p.uc;calls=0;report={}
+    orig=lambda a,n:data[a-0x53000000:a-0x53000000+n]
+    # 1. Texts and icons.
+    roots=manifest['catalogs']['textRoots']
+    for row,lang in enumerate(ROWS):
+        for tid,text in ((ids['name'],NAMES[lang]),(ids['short'],SHORT),(ids['long'],LONG)):
+            rec=u32(c,u32(c,roots+row*4)+tid*4);units,lines,_,at=struct.unpack('<BBHI',bytes(c.mem_read(rec,8)))
+            assert (units,lines)==(len(text)+1,1) and bytes(c.mem_read(at,units*2)).decode('utf-16le')==text+'\0',(row,tid)
+    icons=bytes.fromhex(manifest['iconAddition']['bytes']);origin=manifest['iconAddition']['originalLength']
+    for k in ('iconShort','iconLong'):
+        w,h,o=struct.unpack('<HHI',bytes(c.mem_read(u32(c,manifest['catalogs']['iconRoot']+ids[k]*4),8)))
+        assert (w,h)==(40,40) and o*4>=origin and o*4-origin+6400<=len(icons)
+    # 2. Still menu per model.
+    still=orig(STILL,0x384)
+    def items(d):return [(struct.unpack_from('<I',d,0x8c+i*8)[0],struct.unpack_from('<I',d,0x1bc+i*4)[0],struct.unpack_from('<I',d,0x254+i*8)[0]) for i in range(38)]
+    official=items(still)
+    for model,drop,firsts in ((0,25,[0,8,16,19,25,30,34]),(1,13,[0,8,15,18,25,30,34])):
+        p.model=model;c.mem_write(MENU_TABLE,struct.pack('<I',STILL))
+        regs=[0x7000+i for i in range(4)]
+        for i,v in enumerate(regs):c.reg_write(getattr(reg,'UC_ARM_REG_R'+str(i)),v)
+        c.reg_write(reg.UC_ARM_REG_SP,STACK);c.reg_write(reg.UC_ARM_REG_LR,STOP);c.reg_write(reg.UC_ARM_REG_R12,0x4444)
+        c.emu_start(BUILDER,BUILDER+4,count=1000);calls+=1
+        assert [c.reg_read(getattr(reg,'UC_ARM_REG_R'+str(i))) for i in range(4)]==regs and c.reg_read(reg.UC_ARM_REG_SP)==STACK
+        assert c.reg_read(reg.UC_ARM_REG_LR)==STOP and c.reg_read(reg.UC_ARM_REG_R12)==STACK  # mov ip,sp re-executed
+        d=bytes(c.mem_read(u32(c,MENU_TABLE),0x384));got=items(d)
+        want=[x for i,x in enumerate(official) if i!=drop]+[(e['dateLine'],NEW,0)]
+        assert got==want,(model,)
+        assert d[0x68]==7 and list(d[0x80:0x87])==firsts and d[0x8b]==38
+        assert d[:0x80]==still[:0x80] and d[0x87:0x8b]==still[0x87:0x8b]   # page titles and the rest unchanged
+        assert all(struct.unpack_from('<I',d,0x8c+i*8+4)[0]==0 for i in range(38))
+    report['menus']={'nd':'official without HDF + date','hdf':'official without ND + date'}
+    # 3. Factory, key map, SetCurrentMenu.
+    ids_seen=sorted({x[1] for x in official}|{HORIZON,0x020000ba,0x0200013a,0x0200013b,NEW,NEW+1,0x08000000})
+    for cid in ids_seen:
+        c.reg_write(reg.UC_ARM_REG_R0,0x62056000);c.reg_write(reg.UC_ARM_REG_R1,cid);c.reg_write(reg.UC_ARM_REG_SP,STACK)
+        c.emu_start(FACTORY,FACTORY+4,count=50)
+        assert c.reg_read(reg.UC_ARM_REG_R1)==(HORIZON if cid==NEW else cid) and c.reg_read(reg.UC_ARM_REG_R3)==0x13b
+        assert c.reg_read(reg.UC_ARM_REG_R0)==0x62056000
+        c.mem_write(0x62057000,struct.pack('<I',cid))
+        assert p.call(e['dateKeys'],0x62057000)==(HORIZON if cid==NEW else cid);calls+=1
+    assert u32(c,KEYREAD)==(0xeb000000|(((e['dateKeys']-(KEYREAD+8))>>2)&0xffffff))
+    obj=0x62059000
+    for cid,want in ((NEW,118),(HORIZON,44)):
+        c.mem_write(obj,bytes(0x200));p.call(SETCUR,obj,cid);calls+=1
+        assert c.mem_read(obj+0x198,1)[0]==want,(hex(cid),c.mem_read(obj+0x198,1)[0])
+    # 4. List table and handlers.
+    table=None
+    for lo,hi,r in SITES:
+        a,b=u32(c,lo),u32(c,hi);va=(a&0xfff)|((a>>4)&0xf000)|(((b&0xfff)|((b>>4)&0xf000))<<16)
+        assert a==movw(r,va&0xffff) and b==movw(r,va>>16,True);table=table or va;assert va==table
+    assert table==e['dateListTable'] and table!=TABLE
+    assert bytes(c.mem_read(table,118*REC_SIZE))==orig(TABLE,118*REC_SIZE)
+    rec=bytes(c.mem_read(table+118*REC_SIZE,REC_SIZE));f=struct.unpack('<16I',rec)
+    assert f[0]==0x10000 and f[1]==ids['name'] and f[2:10]==(e['dateCount'],0,e['dateDraw'],0,e['dateSet'],0,e['dateIsCurrent'],0) and not any(f[10:])
+    assert p.call(e['dateCount'],0)==3
+    for v,(icon,text) in enumerate(((344,2),(ids['iconShort'],ids['short']),(ids['iconLong'],ids['long']))):
+        p.ui=[];p.call(e['dateDraw'],0x62056000,0x6205a000,v);calls+=1
+        assert p.ui==[(LIST_ITEM,0x6205a000,icon,text)],(v,p.ui)
+    states={}
+    for stored in (0,1,2,3,4,7,0xff):
+        p.setting(stored);cur=[p.call(e['dateIsCurrent'],0,v) for v in range(3)];calls+=3
+        norm=stored if stored in (1,3) else 0
+        assert cur==[int(norm==0),int(norm==1),int(norm==3)] and p.byte()==norm,(stored,cur,p.byte())
+        p.ui=[];p.setting(stored);p.call(e['dateLine'],0x62056000,0x6205b000);calls+=1
+        icon={0:344,1:ids['iconShort'],3:ids['iconLong']}[norm]
+        assert p.ui==[(LINE_ICON,0x6205b000,icon,p.ui[0][3]),(TITLE,0x6205b000,ids['name'],ids['name'])],(stored,p.ui)
+        states[stored]=norm
+    for v,byte in ((0,0),(1,1),(2,3)):
+        p.setting(0x55);p.call(e['dateSet'],0,v);assert p.byte()==byte;calls+=1
+    p.setting(1);p.call(e['dateSet'],0,3);p.call(e['dateSet'],0,0xffffffff);assert p.byte()==1;calls+=2
+    p.setting(1,pointer=False)
+    assert [p.call(e['dateIsCurrent'],0,v) for v in range(3)]==[1,0,0];p.call(e['dateSet'],0,2);assert p.byte()==1;calls+=4
+    report['list']={'values':3,'stored_normalised':{hex(k):v for k,v in states.items()}}
+    # 5. Pictures: the same as GR IV's module, for every setting value.
+    pics=pictures();base=[b for _,b in pics['memory']];results={}
+    for stored,pointer in ((0,True),(1,True),(2,True),(3,True),(7,True),(1,False)):
+        p.setting(stored,pointer);got=execute(p,pics);calls+=1
+        ref=gr4_reference(stored if pointer else 0,pics)
+        assert got==ref,(stored,pointer)
+        changed=sum(sum(a!=b for a,b in zip(x,y)) for x,y in zip(got,base))
+        assert (changed>0)==(pointer and stored in (1,3)),(stored,pointer,changed)
+        results[f'{stored}{"" if pointer else " (no record)"}']=changed
+    assert results['3']>results['1']
+    low=pictures(LOW);p.setting(1);got=execute(p,low)
+    assert got[:2]==[b for _,b in low['memory']][:2]   # main picture below 0x5d000000: untouched
+    report['pictures']=dict(changed_bytes=results,equal_to_gr4_module=True,low_main_plane_untouched=True)
+    return dict(schema=1,rtos_sha256=hashlib.sha256(data).hexdigest(),calls=calls,**report,hardware_tested=False,
+        scope='Patched builder, factory, key map read, list SetCurrentMenu, list handlers and JPEG entry with substitutes for UI widgets, model, cache and clock.')
+
+if __name__=='__main__':
+    a=argparse.ArgumentParser(description=__doc__)
+    for s in ('rtos','manifest','report'):a.add_argument('--'+s,type=Path,required=True)
+    x=a.parse_args();result=verify(x.rtos.read_bytes(),json.loads(x.manifest.read_text()))
+    with x.report.open('x') as f:json.dump(result,f,indent=2);f.write('\n')
+    print(json.dumps(result,indent=2))

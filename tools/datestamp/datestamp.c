@@ -33,7 +33,14 @@ struct ctx {
   void (*clean)(void *cache, u32 addr, u32 n);       /* 0x538f04c4 */
   void *(*platform)(void);                           /* 0x538f21a0 */
   void (*get_time)(void *clock, u8 *time);           /* 0x538ea9b0 */
+#ifdef SETTING_RECORD
+  /* GR III: the setting byte is at `offset` in the user-settings record, whose address is kept
+   * at `record` (0 until the settings are loaded: off). */
+  const u8 *const volatile *record;
+  u32 offset;
+#else
   const u8 *setting;                                 /* bit 0: on, bit 1: with year and time */
+#endif
 #ifdef GR3_WORDS
   const volatile u32 *words;                         /* GR III test builds: halation stash, halation status */
 #endif
@@ -372,7 +379,15 @@ void datestamp(const struct ctx *k, u32 *config) {
   u32 n = 0, i, j, setting;
   struct picture *seen[4];
   void *cache, *platform;
+#ifdef SETTING_RECORD
+  {
+    const u8 *r = *k->record;
+    if (!ram(r) || k->offset >= 0x1000u) return;
+    setting = r[k->offset];
+  }
+#else
   setting = *k->setting;
+#endif
   if (setting > (SETTING_ON | SETTING_LONG) || !(setting & SETTING_ON) || !ram(config)) return;
 #ifdef DIAG
   diag(k, k->cache(), config);

@@ -40,7 +40,9 @@ const films = [], conversions = [], sources = [];
 // second matrix fitted, CineStill 800T with strong halation. GR3X_DIAG=1: test build that prints the
 // JPEG encoder's picture descriptors on every JPEG and turns film 1 into a red/blue swap through the
 // second matrix (an unmistakable check that the camera applies that stage).
-const round = Number(process.env.GR3X_ROUND ?? 3), diagnostics = process.env.GR3X_DIAG === '1';
+// GR3X_DATE=1 (round 4): the date imprint with its still-menu line (datestamp.ts); not with GR3X_DIAG.
+const round = Number(process.env.GR3X_ROUND ?? 3), diagnostics = process.env.GR3X_DIAG === '1', dateImprint = process.env.GR3X_DATE === '1';
+if (dateImprint && diagnostics) throw new Error('GR3X_DATE and GR3X_DIAG are not combined');
 const provenance = JSON.parse(await readFile(join(root, 'examples/gr3x/T6/SOURCES.json'), 'utf8'));
 for (const [index, name] of T6_FILM_NAMES.entries()) {
   const source = provenance[index];
@@ -64,7 +66,7 @@ const adjSoftFocus = round >= 3;
 const soft = adjSoftFocus ? [] : [{ level: -1, strength: 'weak' }, { level: -2, strength: 'medium' }, { level: -3, strength: 'strong' }];
 // Films keep their own parameters (T6d) unless GR3X_SHARED=1 rebuilds T6c (shared with Standard).
 const ownParameters = process.env.GR3X_SHARED !== '1';
-const result = await buildGr3xTestFirmware(raw, soft, { films, monoReplicas: false, displayRevision: 3, ...(ownParameters ? { ownParameters } : {}), ...(diagnostics ? { jpegDiagnostics: true } : {}) }, menu, { adjSoftFocus });
+const result = await buildGr3xTestFirmware(raw, soft, { films, monoReplicas: false, displayRevision: 3, ...(ownParameters ? { ownParameters } : {}), ...(diagnostics ? { jpegDiagnostics: true } : {}) }, menu, { adjSoftFocus, ...(dateImprint ? { dateImprint } : {}) });
 const target = resolve(directory);
 await mkdir(target);
 const json = async (name, value) => writeFile(join(target, name), JSON.stringify(value, null, 2) + '\n', { flag: 'wx' });
@@ -104,7 +106,7 @@ try {
     if (!section) throw new Error('Missing original section: ' + name);
     await writeFile(join(temporary, name.toLowerCase() + '.bin'), decoded.subarray(section.offset, section.offset + section.size));
   }
-  await writeFile(join(temporary, 'base.json'), JSON.stringify(await buildGr3xAdjResearch(raw, menu, { adjSoftFocus })));
+  await writeFile(join(temporary, 'base.json'), JSON.stringify(await buildGr3xAdjResearch(raw, menu, { adjSoftFocus, ...(dateImprint ? { dateImprint } : {}) })));
   const run = spawnSync(python, [join(here, 'validate_test.py'), '--official', resolve(input),
     '--container', join(target, 'UNVALIDATED.bin'), '--manifest', join(target, 'patch-manifest.json'),
     '--build-report', join(target, 'build-report.json'), '--rtos', join(temporary, 'rtos.bin'),
@@ -116,9 +118,9 @@ try {
   if (!summary.all_checks_passed || summary.candidate_sha256 !== result.report.outputSha256) throw new Error('T6 validation/hash mismatch');
   // Fresh Engine inspection must rebuild identical bytes from the embedded recipe.
   const inspected = await (await Engine.open(raw)).inspect(result.bytes);
-  if (!inspected.verified || inspected.monoUnlock || inspected.slots.length !== 9 || inspected.slots.some((s, i) => s.names.en !== films[i].name)) throw new Error('T6 fresh-engine reconstruction failed');
+  if (!inspected.verified || inspected.monoUnlock || inspected.dateStamp !== dateImprint || inspected.slots.length !== 9 || inspected.slots.some((s, i) => s.names.en !== films[i].name)) throw new Error('T6 fresh-engine reconstruction failed');
   await json('reconstruction-check.json', { verified: true, sha256: inspected.sha256, monoReplicas: inspected.monoUnlock,
-    slotNames: inspected.slots.map(s => s.names.en), hardwareTested: false });
+    slotNames: inspected.slots.map(s => s.names.en), dateImprint: inspected.dateStamp, hardwareTested: false });
   await copyFile(join(root, 'docs/' + (result.report.filename === 'fwdc239b.bin' ? 'GR3_HDF_210_TEST.txt' : 'GR3X_T6_TEST.txt')), join(target, '请先阅读.txt'));
   await writeFile(join(target, 'SHA256SUMS.txt'), result.report.outputSha256 + '  ' + result.report.filename + '\n', { flag: 'wx' });
   await rename(join(target, 'UNVALIDATED.bin'), join(target, result.report.filename));

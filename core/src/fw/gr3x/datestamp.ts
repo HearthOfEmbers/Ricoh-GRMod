@@ -1,0 +1,223 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/**
+ * GR III 2.10 / IIIx 1.60: the date imprint (GR IV: ../aspect/datestamp.ts, datestamp-menu.ts).
+ *
+ * The picture side is GR IV's module (tools/datestamp/datestamp.c), built for GR III with
+ * -DSTRICT_PLANES -DSETTING_RECORD (tools/gr3x/compile_diag.py): it reads its setting through the
+ * settings-record pointer and writes only picture planes above 0x5d000000. It runs at the start of
+ * JpegEncodeMacroProcess::Execute (0x535047d4), after the halation when both are built
+ * (jpeg-stage.ts chains in front of it). Confirmed on a GR III with the diagnostic build 7b: the
+ * pictures are YCbCr 4:2:2 (format 1), the main picture 6000 x 4000 with a 6144 pitch at 0x62..,
+ * the configuration at 0x5c00.. (2026-10-22).
+ *
+ * The setting is byte 0x9a2 of the user-settings record (*0x55063f34), padding between
+ * SetupMovieTransmit's flag (0x9a0) and the word SetupAutoPowerOff (0x9a4), next to the ADJ soft
+ * focus byte 0x9a1 (adj-softfocus.ts: the default builder clears the block, the default merge
+ * only copies flagged fields, nothing else reads or writes 0x9a1..3; the record is saved, loaded
+ * and copied to U1-U3 whole). 0 off, 1 "'26 10 22", 3 "2026.10.22 17:34" (bit 0 on, bit 1 long,
+ * as GR IV); any other value counts as, and is reset to, off.
+ *
+ * The menu: one line "Date Imprint" at the end of the still menu's last page (Shooting Assist,
+ * after Horizon Correction), opening a list of three values: Off / '26 10 22 / 2026.10.22 17:34.
+ * (GR IV has a submenu with two lists; one list is enough and needs no submenu record.)
+ *
+ *  - Still menu. TopMenuController's builder (0x5319a778) reads the five tab descriptors
+ *    (0x384 bytes) from the table at 0x55001eb8; the still descriptor (0x53b36dec) already has
+ *    38 items, the most a descriptor holds. Two of them are model-specific and never both
+ *    visible: ND Filter (item 13, only on the GR III with ND filter, visibility 0x531966e4) and
+ *    HDF (item 25, only on the HDF, 0x53196708). Two copies of the descriptor are appended, each
+ *    without one of them and with the new line at the end; on entry the builder stores the one
+ *    for the camera's model (0x532dbee8: 0 ND, 1 HDF) in the table. Every model sees exactly the
+ *    official menu plus the new line. The builder is the table's only reader.
+ *  - Controller id 0x020001a0 (unused; GR III's ids end at 0x02000140). The factory (0x5316f3b8)
+ *    hands out Horizon Correction's list controller (0x0200007d) for it, and ActionModel::OnEvent
+ *    (key handling: an unknown id asserts and ignores every key) gets Horizon's id for it from
+ *    its single read at 0x53221a4c. The other readers of the current id compare it with live-view
+ *    ids and fall through for any other id.
+ *  - List records (SelectMenuController, 0x40 bytes: +4 title, +8 count, +0x10 draw(item, value),
+ *    +0x18 set(value), +0x20 is current(value), each a member pointer with a zero adjustment) in a
+ *    table of 117 at 0x53b3c6c0 addressed from 15 places; the table is copied with one more record,
+ *    118 (117 is the value the constructor starts with), modelled on Horizon's record 44.
+ *    SetCurrentMenu (0x531b9640) maps the new id to it. The constructor's scan for the longest
+ *    list ends 117 records after the table start (an immediate), so it still covers exactly the
+ *    official records.
+ *  - Texts: the name (21 languages, GR IV's) and the two value names; Off is the camera's text 2.
+ *  - Icons: the camera's OFF (344) and two new 40 x 40 style icons (GR IV's).
+ */
+import { assembleWords, branchWord, movWord } from '../aspect/arm';
+import { FirmwareError } from '../types';
+import { GR3X_DATESTAMP_CODE } from './picture-modules';
+import { GR3X_JPEG_EXECUTE } from './jpeg-stage';
+
+export const GR3X_DATE_SETTINGS_POINTER = 0x55063f34;
+export const GR3X_DATE_OFFSET = 0x9a2;
+export const GR3X_DATE_MENU_ID = 0x020001a0;
+const HORIZON_ID = 0x0200007d;
+
+const BUILDER = 0x5319a778, MENU_TABLE = 0x55001eb8, STILL_MENU = 0x53b36dec;
+const DESCRIPTOR = 0x384, MAX_ITEMS = 38;
+const D_PAGES = 0x68, D_FIRST = 0x80, D_COUNT = 0x8b, D_DRAW = 0x8c, D_ID = 0x1bc, D_VISIBLE = 0x254;
+const ND_ITEM = 13, HDF_ITEM = 25;
+const OFFICIAL_FIRSTS = [0, 8, 16, 19, 26, 31, 35];
+const FIRSTS_WITHOUT_ND = [0, 8, 15, 18, 25, 30, 34];
+const FIRSTS_WITHOUT_HDF = [0, 8, 16, 19, 25, 30, 34];
+const APP = 0x5320ad88, SPEC_MODEL = 0x5320c09c, MODEL_NUMBER = 0x532dbee8;
+const FACTORY = 0x5316f3b8;
+const KEY_MAP_READ = 0x53221a4c, CURRENT_ID_GETTER = 0x53228c4c;
+const SELECT_SET_CURRENT = 0x531b9640, SELECT_RECORD_BYTE = 0x198;
+const SELECT_TABLE = 0x53b3c6c0, SELECT_RECORD = 0x40, SELECT_RECORDS = 117, HORIZON_RECORD = 44;
+const SELECT_CONSTRUCTOR_START = 0x531be7c4;
+const SELECT_SCAN_END = 0x531ba534;
+/** The 15 places that address the list table (movw/movt pairs and their register). */
+const SELECT_SITES: readonly (readonly [number, number, number])[] = [
+  [0x531b9fdc, 0x531b9fe8, 4], [0x531ba154, 0x531ba158, 3], [0x531ba19c, 0x531ba1a4, 4], [0x531ba24c, 0x531ba250, 3],
+  [0x531ba2b0, 0x531ba2b4, 3], [0x531ba4c0, 0x531ba4c4, 3], [0x531ba520, 0x531ba524, 4], [0x531ba648, 0x531ba64c, 3],
+  [0x531ba800, 0x531ba804, 5], [0x531ba9a0, 0x531ba9a8, 3], [0x531baa60, 0x531baa68, 3], [0x531bab3c, 0x531bab44, 3],
+  [0x531bdfc4, 0x531bdfc8, 3], [0x531be084, 0x531be08c, 8], [0x531be400, 0x531be404, 3],
+];
+export const GR3X_DATE_RECORD = SELECT_RECORDS + 1;
+const LINE_VALUE_ICON = 0x5339de20, TOP_SET_TITLE = 0x5339dc70, LIST_SET_ITEM = 0x5339e8b0;
+const ICON_OFF = 344, TEXT_OFF = 2;
+const HORIZON_HANDLERS = { title: 362, count: 0x531b3b04, draw: 0x531b5310, set: 0x531b6de4, isCurrent: 0x531b8544 };
+
+const CACHE = 0x536bbc30, CACHE_FLUSH_FOR_READ = 0x536bbcc0, CACHE_CLEAN = 0x536bbcac, PLATFORM = 0x536bd838, GET_TIME = 0x536b6510;
+
+export interface Gr3xDateProgram {
+  code(source: string): number;
+  append(bytes: Uint8Array): number;
+  patch(address: number, expected: number, replacement: number, reason: string): void;
+  word(address: number): number;
+  read(address: number, size: number): Uint8Array;
+}
+export interface Gr3xDateIds { name: number; short: number; long: number; iconShort: number; iconLong: number }
+
+const lo = (v: number) => v & 0xffff, hi = (v: number) => v >>> 16;
+const fail = (message: string): never => { throw new FirmwareError('unexpected-layout', message); };
+const u32 = (v: readonly number[]) => { const b = new Uint8Array(v.length * 4), d = new DataView(b.buffer); v.forEach((x, i) => d.setUint32(i * 4, x >>> 0, true)); return b; };
+const bl = (at: number, target: number) => (0xeb000000 | (((target - (at + 8)) >> 2) & 0xffffff)) >>> 0;
+
+/** r2 = settings record (or 0), r3 = setting byte, normalised: 1 or 3 as stored, anything else 0
+ * (and stored back as 0). Flags are not kept. `n` makes the label unique. */
+const load = (n: string) => `movw r2,#${lo(GR3X_DATE_SETTINGS_POINTER)};movt r2,#${hi(GR3X_DATE_SETTINGS_POINTER)};ldr r2,[r2];mov r3,#0;
+  cmp r2,#0;beq ld${n};ldrb r3,[r2,#${GR3X_DATE_OFFSET}];cmp r3,#1;cmpne r3,#3;movne r3,#0;strbne r3,[r2,#${GR3X_DATE_OFFSET}];ld${n}:`;
+
+export function gr3xDateModule(): Uint8Array {
+  const raw = Uint8Array.from(atob(GR3X_DATESTAMP_CODE), c => c.charCodeAt(0));
+  if (raw.length % 4) fail('date imprint module length');
+  return raw;
+}
+
+/** The picture side: the module behind a stub at the start of Execute. Returns the stub, which
+ * ends by carrying on with Execute; the halation (jpeg-stage.ts) goes in front of it. */
+export function installGr3xDateImprintStage(p: Gr3xDateProgram) {
+  const guards: readonly (readonly [number, number])[] = [
+    [GR3X_JPEG_EXECUTE, 0xe1a0c00d], [GR3X_JPEG_EXECUTE + 4, 0xe92ddff0], [GR3X_JPEG_EXECUTE + 0x18, 0xe5914008],
+    [CACHE, 0xe30d01b4], [CACHE_FLUSH_FOR_READ, 0xe1a0c00d], [CACHE_CLEAN, 0xe1a00001], [PLATFORM, 0xe1a0c00d], [GET_TIME, 0xe5d0300c],
+  ];
+  for (const [at, w] of guards) if (p.word(at) !== w) fail(`IIIx date imprint guard at ${at.toString(16)}`);
+  const ctx = p.append(u32([CACHE, CACHE_FLUSH_FOR_READ, CACHE_CLEAN, PLATFORM, GET_TIME, GR3X_DATE_SETTINGS_POINTER, GR3X_DATE_OFFSET]));
+  const module = p.append(gr3xDateModule());
+  const stub = p.code(`push {r0-r3,ip,lr};ldr r1,[r1,#8];movw r0,#${lo(ctx)};movt r0,#${hi(ctx)};bl #${module};pop {r0-r3,ip,lr};
+    mov ip,sp;b #${GR3X_JPEG_EXECUTE + 4};`);
+  p.patch(GR3X_JPEG_EXECUTE, 0xe1a0c00d, branchWord(GR3X_JPEG_EXECUTE, stub), 'date imprint: JPEG encode step');
+  return { dateStage: stub, dateModule: module, dateContext: ctx };
+}
+
+/** The menu line, its list and the controller plumbing. */
+export function installGr3xDateImprintMenu(p: Gr3xDateProgram, ids: Gr3xDateIds) {
+  // --- Checks of the official code and data this relies on.
+  const guards: readonly (readonly [number, number])[] = [
+    [BUILDER, 0xe1a0c00d], [BUILDER + 4, movWord(3, lo(MENU_TABLE))], [BUILDER + 0x10, movWord(3, hi(MENU_TABLE), true)],
+    [FACTORY, movWord(3, 0x13b)], [FACTORY + 4, 0xe1a0c00d], [FACTORY + 8, movWord(3, 0x200, true)],
+    [KEY_MAP_READ, bl(KEY_MAP_READ, CURRENT_ID_GETTER)], [CURRENT_ID_GETTER, 0xe5900000], [CURRENT_ID_GETTER + 4, 0xe12fff1e],
+    [SELECT_SET_CURRENT, 0xe28134fe], [SELECT_SET_CURRENT + 4, 0xe1a0c00d],
+    [SELECT_CONSTRUCTOR_START, 0xe3a0e075], // mov lr,#117: the list constructor starts with record 117
+    [SELECT_SCAN_END, 0xe2847d75], // add r7,r4,#0x1d40: the longest-list scan ends 117 records on
+    [APP, 0xe1a0c00d], [SPEC_MODEL, 0xe1a0c00d], [LINE_VALUE_ICON, 0xe1a0c00d], [TOP_SET_TITLE, 0xe1a0c00d], [LIST_SET_ITEM, 0xe1a0c00d],
+  ];
+  for (const [at, w] of guards) if (p.word(at) !== w >>> 0) fail(`IIIx date imprint menu guard at ${at.toString(16)}`);
+  if (new DataView(p.read(MENU_TABLE, 4).buffer).getUint32(0, true) !== STILL_MENU) fail('IIIx still menu descriptor');
+  const still = p.read(STILL_MENU, DESCRIPTOR), dv = new DataView(still.buffer);
+  if (still[D_PAGES] !== 7 || [...still.subarray(D_FIRST, D_FIRST + 7)].join() !== OFFICIAL_FIRSTS.join() || still[D_COUNT] !== MAX_ITEMS)
+    fail('IIIx still menu pages');
+  const id = (i: number) => dv.getUint32(D_ID + i * 4, true), visible = (i: number) => dv.getUint32(D_VISIBLE + i * 8, true);
+  if (id(ND_ITEM) !== 0x02000069 || visible(ND_ITEM) !== 0x531966e4 || id(HDF_ITEM) !== 0x0200013f || visible(HDF_ITEM) !== 0x53196708)
+    fail('IIIx ND / HDF menu items');
+  if (id(35) !== 0x0200007b || id(36) !== 0x0200007c || id(37) !== HORIZON_ID) fail('IIIx Shooting Assist items');
+  for (let i = 0; i < MAX_ITEMS; i++) if (id(i) === GR3X_DATE_MENU_ID) fail('IIIx date imprint id in use');
+  // Both visibility functions ask the same model number (0 ND, 1 HDF).
+  for (const v of [0x531966e4, 0x53196708]) {
+    if (p.word(v + 0xc) !== bl(v + 0xc, APP) || p.word(v + 0x10) !== bl(v + 0x10, SPEC_MODEL) || p.word(v + 0x14) !== bl(v + 0x14, MODEL_NUMBER))
+      fail('IIIx model visibility');
+  }
+  const horizon = p.read(SELECT_TABLE + HORIZON_RECORD * SELECT_RECORD, SELECT_RECORD), hv = new DataView(horizon.buffer);
+  const H = HORIZON_HANDLERS;
+  if (hv.getUint32(0, true) !== 0x10000 || hv.getUint32(4, true) !== H.title || hv.getUint32(8, true) !== H.count || hv.getUint32(0x10, true) !== H.draw ||
+    hv.getUint32(0x18, true) !== H.set || hv.getUint32(0x20, true) !== H.isCurrent || [0xc, 0x14, 0x1c, 0x24].some(o => hv.getUint32(o, true) !== 0) ||
+    horizon.subarray(0x28).some(b => b !== 0)) fail('IIIx Horizon Correction list record');
+  for (const [low, high, r] of SELECT_SITES)
+    if (p.word(low) !== movWord(r, lo(SELECT_TABLE)) || p.word(high) !== movWord(r, hi(SELECT_TABLE), true)) fail('IIIx list table site');
+
+  // --- The line of the still menu: the current value's icon and the name.
+  const icon = (dst: string, n: string) => `cmp r3,#1;movwlo ${dst},#${ICON_OFF};beq i${n}s;bhi i${n}l;b i${n}d;
+    i${n}s:movw ${dst},#${ids.iconShort};b i${n}d;i${n}l:movw ${dst},#${ids.iconLong};i${n}d:`;
+  const line = p.code(`push {r4,lr};mov r4,r1;${load('a')}${icon('r1', 'a')}mov r0,r4;bl #${LINE_VALUE_ICON};
+    mov r0,r4;movw r1,#${ids.name};mov r2,r1;pop {r4,lr};b #${TOP_SET_TITLE};`);
+  // --- The list (this = r0; draw: item r1, value r2; set / is current: value r1).
+  const count = p.code('mov r0,#3;bx lr;');
+  const draw = p.code(`mov r0,r1;cmp r2,#1;beq ds;bhi dl;movw r1,#${ICON_OFF};mov r2,#${TEXT_OFF};b #${LIST_SET_ITEM};
+    ds:movw r1,#${ids.iconShort};movw r2,#${ids.short};b #${LIST_SET_ITEM};
+    dl:movw r1,#${ids.iconLong};movw r2,#${ids.long};b #${LIST_SET_ITEM};`);
+  const set = p.code(`cmp r1,#2;bxhi lr;movw r2,#${lo(GR3X_DATE_SETTINGS_POINTER)};movt r2,#${hi(GR3X_DATE_SETTINGS_POINTER)};ldr r2,[r2];
+    cmp r2,#0;bxeq lr;cmp r1,#2;moveq r1,#3;strb r1,[r2,#${GR3X_DATE_OFFSET}];bx lr;`);
+  // Exactly one value is current (the byte is normalised first).
+  const isCurrent = p.code(`${load('c')}cmp r3,#3;moveq r3,#2;cmp r3,r1;moveq r0,#1;movne r0,#0;bx lr;`);
+  const record = horizon.slice(), rv = new DataView(record.buffer);
+  rv.setUint32(4, ids.name, true); rv.setUint32(8, count, true); rv.setUint32(0x10, draw, true); rv.setUint32(0x18, set, true); rv.setUint32(0x20, isCurrent, true);
+  const table = p.append(new Uint8Array([...p.read(SELECT_TABLE, GR3X_DATE_RECORD * SELECT_RECORD), ...record]));
+  for (const [low, high, r] of SELECT_SITES) {
+    p.patch(low, movWord(r, lo(SELECT_TABLE)), movWord(r, lo(table)), 'date imprint: list records, low half');
+    p.patch(high, movWord(r, hi(SELECT_TABLE), true), movWord(r, hi(table), true), 'date imprint: list records, high half');
+  }
+  const current = p.code(`movw ip,#${lo(GR3X_DATE_MENU_ID)};movt ip,#${hi(GR3X_DATE_MENU_ID)};cmp r1,ip;
+    moveq r3,#${GR3X_DATE_RECORD};strbeq r3,[r0,#${SELECT_RECORD_BYTE}];bxeq lr;
+    add r3,r1,#0xfe000000;b #${SELECT_SET_CURRENT + 4};`);
+  p.patch(SELECT_SET_CURRENT, 0xe28134fe, branchWord(SELECT_SET_CURRENT, current), 'date imprint: list record');
+
+  // --- Two still-menu descriptors, one per model.
+  const descriptor = (drop: number, firsts: readonly number[]) => {
+    const d = still.slice(), v = new DataView(d.buffer);
+    const items = Array.from({ length: MAX_ITEMS }, (_, i) => i).filter(i => i !== drop);
+    items.forEach((i, j) => {
+      d.set(still.subarray(D_DRAW + i * 8, D_DRAW + i * 8 + 8), D_DRAW + j * 8);
+      d.set(still.subarray(D_ID + i * 4, D_ID + i * 4 + 4), D_ID + j * 4);
+      d.set(still.subarray(D_VISIBLE + i * 8, D_VISIBLE + i * 8 + 8), D_VISIBLE + j * 8);
+    });
+    const last = MAX_ITEMS - 1;
+    v.setUint32(D_DRAW + last * 8, line, true); v.setUint32(D_DRAW + last * 8 + 4, 0, true);
+    v.setUint32(D_ID + last * 4, GR3X_DATE_MENU_ID, true);
+    v.setUint32(D_VISIBLE + last * 8, 0, true); v.setUint32(D_VISIBLE + last * 8 + 4, 0, true);
+    d.set(firsts, D_FIRST);
+    d[D_COUNT] = MAX_ITEMS;
+    return d;
+  };
+  const withoutNd = p.append(descriptor(ND_ITEM, FIRSTS_WITHOUT_ND));
+  const withoutHdf = p.append(descriptor(HDF_ITEM, FIRSTS_WITHOUT_HDF));
+  const builder = p.code(`push {r0-r3,ip,lr};bl #${APP};bl #${SPEC_MODEL};bl #${MODEL_NUMBER};
+    movw r1,#${lo(withoutHdf)};movt r1,#${hi(withoutHdf)};cmp r0,#1;movweq r1,#${lo(withoutNd)};movteq r1,#${hi(withoutNd)};
+    movw r2,#${lo(MENU_TABLE)};movt r2,#${hi(MENU_TABLE)};str r1,[r2];
+    pop {r0-r3,ip,lr};mov ip,sp;b #${BUILDER + 4};`);
+  p.patch(BUILDER, 0xe1a0c00d, branchWord(BUILDER, builder), 'date imprint: still menu for this model');
+
+  // --- Controller id: Horizon Correction's list controller and key map.
+  const factory = p.code(`movw ip,#${lo(GR3X_DATE_MENU_ID)};movt ip,#${hi(GR3X_DATE_MENU_ID)};cmp r1,ip;
+    movweq r1,#${lo(HORIZON_ID)};movteq r1,#${hi(HORIZON_ID)};movw r3,#0x13b;b #${FACTORY + 4};`);
+  p.patch(FACTORY, movWord(3, 0x13b), branchWord(FACTORY, factory), 'date imprint: list controller');
+  const keys = p.code(`ldr r0,[r0];movw ip,#${lo(GR3X_DATE_MENU_ID)};movt ip,#${hi(GR3X_DATE_MENU_ID)};cmp r0,ip;
+    movweq r0,#${lo(HORIZON_ID)};movteq r0,#${hi(HORIZON_ID)};bx lr;`);
+  p.patch(KEY_MAP_READ, bl(KEY_MAP_READ, CURRENT_ID_GETTER), bl(KEY_MAP_READ, keys), 'date imprint: key map of the list');
+  void assembleWords;
+  return { dateLine: line, dateCount: count, dateDraw: draw, dateSet: set, dateIsCurrent: isCurrent, dateListTable: table,
+    dateSetCurrent: current, dateMenuWithoutNd: withoutNd, dateMenuWithoutHdf: withoutHdf, dateBuilder: builder,
+    dateFactory: factory, dateKeys: keys };
+}

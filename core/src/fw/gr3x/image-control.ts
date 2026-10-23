@@ -311,7 +311,15 @@ export async function buildGr3xImageControls(raw: Uint8Array, options: Gr3xLookO
       'films: post-curve (second) matrix');
     return { entry, identity, tables };
   })() : undefined;
-  const jpeg = installGr3xJpegStage({ code, append, patch, u32 }, {
+  // The date imprint (adj layer) already sits at Execute's entry: the halation goes in front of it.
+  const dateStage = (menu.entries as Record<string, number>).dateStage;
+  const retarget = (at: number, replacement: number, reason: string) => {
+    const site = sites.find(s => s.address === at);
+    if (!site || !site.reason.startsWith('date imprint')) throw new FirmwareError('unexpected-instruction', 'IIIx JPEG entry is not the date imprint');
+    site.replacement = hex(wordsToBytes([replacement])); site.reason = reason;
+  };
+  const jpeg = installGr3xJpegStage({ code, append, patch, u32, retarget }, {
+    after: dateStage,
     halation: halationSlots.length ? { levels: slots.slice(0, 9).map(s => s.halation), light: slots.slice(0, 9).map(s =>
       s.quantizedCurves ? halationLight(s.quantizedCurves, s.postQ9) : PLAIN_LIGHT) } : undefined,
     diagnostics: options.jpegDiagnostics === true,

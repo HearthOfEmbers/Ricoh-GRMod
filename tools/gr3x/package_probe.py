@@ -86,7 +86,7 @@ def verify(original,new,manifest,build,reference):
             assert recipe['schema']==(1 if revision=='T5' else 2) and len(recipe['films'])<=2
             assert len(manifest['addedLooks'])==2+6*recipe['monoReplicas']
         padding=start+length
-    if not is_t4(m) or manifest.get('adjSoftFocus'):
+    if not is_t4(m) or manifest.get('adjSoftFocus') or manifest.get('dateImprint'):
         # The ratio list follows the film recipe; it must name exactly the manifest's added ratios.
         magic=b'GR3X-RATIO-RECIPE\0'
         assert dec[padding:padding+len(magic)]==magic
@@ -95,6 +95,7 @@ def verify(original,new,manifest,build,reference):
         recipe=json.loads(dec[start:start+length])
         expected={'schema':1,'ratios':[{'ratio':m.ratios[i],'name':m.names[i]} for i,_,_ in m.custom]}
         if manifest.get('adjSoftFocus'):expected['adjSoftFocus']=True
+        if manifest.get('dateImprint'):expected['dateImprint']=True
         assert recipe==expected,recipe
         padding=start+length
     assert not any(dec[padding:rt['end']-4-len(marker)])

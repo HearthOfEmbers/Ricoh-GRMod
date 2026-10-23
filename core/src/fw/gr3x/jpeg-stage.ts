@@ -32,7 +32,7 @@ import { FirmwareError } from '../types';
 import { branchWord, wordsToBytes } from '../aspect/arm';
 import { halationLut, halationModule, paramBytes } from '../aspect/halation';
 import type { HalationLight } from '../aspect/halation';
-import { GR3X_DATESTAMP_DIAG_CODE, GR3X_HALATION_STATUS_CODE } from './datestamp-diag';
+import { GR3X_DATESTAMP_DIAG_CODE, GR3X_HALATION_STATUS_CODE } from './picture-modules';
 
 export const GR3X_JPEG_EXECUTE = 0x535047d4;
 export const GR3X_DEVELOP_LOOK_READ = 0x536db7f8;
@@ -65,11 +65,16 @@ export interface Gr3xJpegProgram {
   append(bytes: Uint8Array): number;
   patch(address: number, expected: number, replacement: number, reason: string): void;
   u32(address: number): number;
+  /** Point the already patched Execute entry (the date imprint's, datestamp.ts) at another stub. */
+  retarget?(address: number, replacement: number, reason: string): void;
 }
 export interface Gr3xJpegOptions {
   /** Per film (looks 64..72): level 0 off, 1 weak, 2 strong, and the film's light (halationLight). */
   halation?: { levels: readonly number[]; light: readonly HalationLight[] };
   diagnostics?: boolean;
+  /** The date imprint's stub, already at Execute's entry: the chain ends there instead (halation
+   * first, then the date, as on GR IV). */
+  after?: number;
 }
 
 const u32le = (words: readonly number[]) => wordsToBytes(words.map(w => w >>> 0));
@@ -77,9 +82,11 @@ const addr = (r: string, a: number) => `movw ${r},#${a & 65535};movt ${r},#${a >
 
 export function installGr3xJpegStage(p: Gr3xJpegProgram, o: Gr3xJpegOptions) {
   if (!o.halation && !o.diagnostics) return undefined;
+  if (o.after !== undefined && (o.diagnostics || !p.retarget))
+    throw new FirmwareError('bad-edit', 'IIIx date imprint and the diagnostic date module are not combined');
   for (const [at, word] of GUARDS) if (p.u32(at) !== word) throw new FirmwareError('unexpected-instruction', `IIIx JPEG stage guard at ${at.toString(16)}`);
   // Built back to front: each stub ends by entering the next one (or Execute itself).
-  let tail = `mov ip,sp;b #${GR3X_JPEG_EXECUTE + 4};`, first = 0;
+  let tail = o.after !== undefined ? `b #${o.after};` : `mov ip,sp;b #${GR3X_JPEG_EXECUTE + 4};`, first = 0;
   const entries: Record<string, number> = {};
   if (o.diagnostics) {
     const on = p.append(Uint8Array.of(1, 0, 0, 0));
@@ -112,6 +119,7 @@ export function installGr3xJpegStage(p: Gr3xJpegProgram, o: Gr3xJpegOptions) {
     if (o.diagnostics) entries.halationStatus = GR3X_HALATION_STATUS;
     tail = `b #${stub};`; first = stub;
   }
-  p.patch(GR3X_JPEG_EXECUTE, 0xe1a0c00d, branchWord(GR3X_JPEG_EXECUTE, first), 'JPEG encode step: GR Mod picture modules');
+  if (o.after !== undefined) p.retarget!(GR3X_JPEG_EXECUTE, branchWord(GR3X_JPEG_EXECUTE, first), 'JPEG encode step: halation, then the date imprint');
+  else p.patch(GR3X_JPEG_EXECUTE, 0xe1a0c00d, branchWord(GR3X_JPEG_EXECUTE, first), 'JPEG encode step: GR Mod picture modules');
   return entries;
 }

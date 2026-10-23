@@ -365,6 +365,7 @@ function FeatureSwitches({ mono, boxRef, from }: { mono: boolean; boxRef?: (el: 
   const date = useStore((s) => s.dateStamp);
   const looks = useStore((s) => s.monoUnlock);
   const gr3x = useStore(s => s.info?.family === 'gr3x');
+  const dateOk = useStore(s => !!s.info?.features.dateStamp);
   const own = useRef<HTMLDivElement | null>(null);
   // Moved to the other column: glide from where it was (FLIP). Rectangles are in window pixels,
   // the transform is in the zoomed interface's pixels.
@@ -381,7 +382,7 @@ function FeatureSwitches({ mono, boxRef, from }: { mono: boolean; boxRef?: (el: 
   return (
     <div className="card extras" data-tour="ic-soft" ref={(el) => { own.current = el; boxRef?.(el); }}>
       <FeatureRow icon={Ico.soft} title={t('navSoft')} sub={t(gr3x ? 'gr3xSoftSub' : 'softAdjSub')} on={soft} onChange={setSoft} />
-      {!gr3x && <FeatureRow icon={Ico.date} title={t('navDate')} sub={t('dateSub')} on={date} onChange={setDateStamp} />}
+      {(!gr3x || dateOk) && <FeatureRow icon={Ico.date} title={t('navDate')} sub={t(gr3x ? 'gr3xDateSub' : 'dateSub')} on={date} onChange={setDateStamp} />}
       {gr3x && <p className="small muted">{t('gr3xFilmHint')}<br />{t('gr3xFixedLooks')}</p>}
       {!mono && !gr3x && <FeatureRow icon={Ico.mono} title={t(gr3x ? 'gr3xReplicaTitle' : 'navMono')} sub={t(gr3x ? 'gr3xReplicaSub' : 'monoSub')} on={looks} onChange={setMonoUnlock} />}
     </div>
