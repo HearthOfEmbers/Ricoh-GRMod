@@ -75,6 +75,7 @@ import { GR3X_CLARITY_OFFSET } from '../fw/gr3x/clarity';
 import { GR3X_FILM_IDS, GR3X_FILM_NAMES, GR3X_LOOK_CHARS, gr3xAllowedChars, gr3xLookResources, validateGr3xLookName } from '../fw/gr3x/look-resources';
 import { readGr3xLookRecipe } from '../fw/gr3x/look-recipe';
 import type { Gr3xLookOptions } from '../fw/gr3x/image-control';
+import { GR3X_MAX_FILMS } from '../fw/gr3x/image-control';
 import { convertGr3xCube, convertGr3xXmp } from '../color/gr3x-import';
 import type { CameraModel } from '../wallpaper';
 
@@ -107,7 +108,10 @@ export interface FirmwareInfo {
   factoryRatios: string[];
   /** `menuPictures`: power-off pictures chosen in the camera's menu (GR IV: End Screen submenu; GR III: a Setup line after End Screen). */
   capabilities: { build: boolean; presets: boolean; wallpaper: boolean; factoryEntry: boolean; bridge: boolean; menuPictures: boolean };
-  features: { softFocus: 'clarity' | 'adj'; dateStamp: boolean; monoUnlock: boolean };
+  features: { softFocus: 'clarity' | 'adj'; dateStamp: boolean; monoUnlock: boolean;
+    /** GR III / IIIx: the most films a build can have (9; 20 on the experimental GR III build, where
+     * the number is chosen with BuildOptions.filmCount and Halation is set in the camera). */
+    maxFilms?: number };
   version: string;
   sha256: string;
   slots: SlotInfoView[];
@@ -232,6 +236,9 @@ export interface BuildOptions {
   dateStampFixed?: number;
   /** Test builds only: print the encoder configuration on the 720x480 picture. */
   dateStampDiag?: boolean;
+  /** GR III (experimental): the number of films, 1..20 (`features.maxFilms`), each with a Halation
+   * line in the camera. Absent: the nine-film T6 build. */
+  filmCount?: number;
 }
 
 export interface ShutdownImage {
@@ -315,16 +322,16 @@ export class Engine {
   private monoWords: { offset: number; bytes: Uint8Array }[] | null = null;
   private gr3xCandidates = new Map<string, Promise<FirmwareBuild>>();
 
-  private fixedGr3x(softFocus: readonly SoftFocusRequest[] = [], looks?: Gr3xLookOptions, menu: readonly Gr3xMenuRatio[] = GR3X_T4_MENU, adjSoftFocus = false, dateImprint = false, pictures: readonly Gr3xPictureSpec[] = [], dateMenu: 'list' | 'submenu' = 'submenu'): Promise<FirmwareBuild> {
+  private fixedGr3x(softFocus: readonly SoftFocusRequest[] = [], looks?: Gr3xLookOptions, menu: readonly Gr3xMenuRatio[] = GR3X_T4_MENU, adjSoftFocus = false, dateImprint = false, pictures: readonly Gr3xPictureSpec[] = [], dateMenu: 'list' | 'submenu' = 'submenu', pictureMenu: 'list' | 'submenu' = 'submenu'): Promise<FirmwareBuild> {
     const requests = [...softFocus].sort((a, b) => a.level - b.level);
-    const key = JSON.stringify({ requests, looks, menu, adjSoftFocus, dateImprint, dateMenu, pictures: pictures.map(p => ({ name: p.name, jpeg: Array.from(p.jpeg) })) });
+    const key = JSON.stringify({ requests, looks, menu, adjSoftFocus, dateImprint, dateMenu, pictureMenu, pictures: pictures.map(p => ({ id: p.id, name: p.name, jpeg: Array.from(p.jpeg) })) });
     let candidate = this.gr3xCandidates.get(key);
     if (candidate) return candidate;
-    candidate = buildGr3xTestFirmware(this.raw, requests, looks, menu, { adjSoftFocus, ...(dateImprint ? { dateImprint, dateMenu } : {}), ...(pictures.length ? { pictures } : {}) }).then(r => ({
+    candidate = buildGr3xTestFirmware(this.raw, requests, looks, menu, { adjSoftFocus, ...(dateImprint ? { dateImprint, dateMenu } : {}), ...(pictures.length ? { pictures, pictureMenu } : {}) }).then(r => ({
       file: r.bytes, sha256: r.report.outputSha256, decodedSha256: r.decodedSha256,
       changedFrames: r.changedFrames, changedBytes: r.changedBytes,
       ranges: r.report.ranges, checks: r.report.checks, features: { ...(looks?.monoReplicas ? { monoUnlock: true } : {}), ...(adjSoftFocus ? { adjSoftFocus: true } : {}), ...(dateImprint ? { dateStamp: true } : {}),
-        ...(pictures.length ? { shutdown: { pictures: pictures.map((p, k) => ({ id: k + 1, name: p.name, jpeg: p.jpeg })), factory: [] } } : {}) },
+        ...(pictures.length ? { shutdown: { pictures: pictures.map((p, k) => ({ id: p.id ?? k + 1, name: p.name, jpeg: p.jpeg })), factory: [] } } : {}) },
       ratios: gr3xCustoms(r.manifest.menu).map(x => {
         const plan = planGr3xRatio(x.ratio);
         return { id: x.id, name: x.name, ratio: x.ratio, actual: plan.actual, sizes: plan.sizes };
@@ -370,9 +377,9 @@ export class Engine {
         // Power-off pictures: the experimental GR III build only (tested there first).
         capabilities: { build: true, presets: true, wallpaper: false, factoryEntry: false, bridge: false, menuPictures: profile.experimental === true },
         // The date imprint is offered in the experimental GR III build only (tested there first).
-        features: { softFocus: 'adj', dateStamp: profile.experimental === true, monoUnlock: false },
+        features: { softFocus: 'adj', dateStamp: profile.experimental === true, monoUnlock: false, maxFilms: profile.experimental === true ? GR3X_MAX_FILMS : 9 },
         version: profile.version, sha256: profile.sha256, bridge: false,
-        slots: GR3X_FILM_IDS.map((id, i) => ({
+        slots: GR3X_FILM_IDS.slice(0, profile.experimental === true ? GR3X_MAX_FILMS : 9).map((id, i) => ({
           id, defaultName: GR3X_FILM_NAMES[i], icon: lookResources.film.slice(),
           names: Object.fromEntries(LANGS.map(l => [l, { text: GR3X_FILM_NAMES[i], capacity: 24 }])) as SlotInfoView['names'],
         })), tiles: lookResources.tiles, contentArea: CONTENT_AREA,
@@ -453,6 +460,7 @@ export class Engine {
       let adjSoftFocus = false, dateImprint = false;
       let pictures: Gr3xPictureSpec[] = [];
       let dateMenu: 'list' | 'submenu' = 'list';
+      let pictureMenu: 'list' | 'submenu' = 'list';
       if (!official) try {
         // Read only recognized negative gain rows, rebuild from the verified
         // original, and compare the entire file. A valid container or metadata
@@ -465,7 +473,7 @@ export class Engine {
           looks = readGr3xLookRecipe(appended);
           const build = readGr3xBuildRecipe(appended);
           if (build) {
-            menu = planGr3xMenu(build.ratios); adjSoftFocus = build.adjSoftFocus; dateImprint = build.dateImprint; dateMenu = build.dateMenu;
+            menu = planGr3xMenu(build.ratios); adjSoftFocus = build.adjSoftFocus; dateImprint = build.dateImprint; dateMenu = build.dateMenu; pictureMenu = build.pictureMenu;
             // Power-off pictures: the names from the recipe, the JPEGs from the file's own RES section.
             if (build.pictures.length) {
               if (build.pictures.length > GR3X_MAX_PICTURES) throw new FirmwareError('bad-edit', 'IIIx picture recipe');
@@ -473,28 +481,28 @@ export class Engine {
               pictures = build.pictures.map((name, k) => {
                 const jpeg = resFile(decoded, gr3xPicturePath(k), dir);
                 if (!jpeg) throw new FirmwareError('bad-edit', 'IIIx picture missing');
-                return { name, jpeg };
+                return { name, jpeg, ...(build.pictureMenu === 'submenu' ? { id: build.pictureIds[k] } : {}) };
               });
             }
           }
         }
         const changes = clarityChanges(decoded, GR3X_CLARITY_OFFSET);
         if (changes.every(c => SOFT_FOCUS_LEVELS.includes(c.level as SoftFocusLevel) && c.strength !== 'custom')) {
-          candidate = await this.fixedGr3x(changes as SoftFocusRequest[], looks ?? undefined, menu, adjSoftFocus, dateImprint, pictures, dateMenu);
+          candidate = await this.fixedGr3x(changes as SoftFocusRequest[], looks ?? undefined, menu, adjSoftFocus, dateImprint, pictures, dateMenu, pictureMenu);
           softFocus = changes;
         }
       } catch { /* unrecognized input remains non-writable */ }
       const matched = candidate !== null && sha256 === candidate.sha256 && raw.length === candidate.file.length;
       return { sha256, kind: official ? 'official' : matched ? 'modified' : 'unknown', verified: official || matched,
         changedBytes: matched ? candidate!.changedBytes : 0,
-        slots: matched && looks ? this.info.slots.slice(0, looks.displayRevision === 3 ? 9 : 2).map((s, i) => ({
+        slots: matched && looks ? GR3X_FILM_IDS.slice(0, looks.filmCount ?? (looks.displayRevision === 3 ? 9 : 2)).map((id, i) => ({ id, icon: this.info.slots[i]?.icon ?? this.info.tiles.film })).map((s, i) => ({
           id: s.id, names: Object.fromEntries(LANGS.map(l => [l, looks!.films?.[i]?.names?.[l] || looks!.films?.[i]?.name || GR3X_FILM_NAMES[i]])) as Record<LangCode, string>,
           icon: looks!.films?.[i]?.icon ?? s.icon, colorChanged: !!(looks!.films?.[i]?.preset || looks!.films?.[i]?.params),
           nameChanged: (!!looks!.films?.[i]?.name && looks!.films?.[i]?.name !== GR3X_FILM_NAMES[i]) || !!looks!.films?.[i]?.names,
           iconChanged: !!looks!.films?.[i]?.icon,
         })) : [], ratios: matched ? candidate!.ratios : [], softFocus: matched ? softFocus : [],
         adjSoftFocus: matched && adjSoftFocus, dateStamp: matched && dateImprint, monoUnlock: matched && looks?.monoReplicas === true, extraSlots: [],
-        ...(matched && pictures.length ? { shutdownPictures: pictures.map((p, k) => ({ id: k + 1, name: p.name, jpeg: p.jpeg })) } : {}) };
+        ...(matched && pictures.length ? { shutdownPictures: pictures.map((p, k) => ({ id: p.id ?? k + 1, name: p.name, jpeg: p.jpeg })) } : {}) };
     }
     if (raw.length === BRIDGE_SIZE && sha256 === BRIDGE_SHA256) return { sha256, kind: 'bridge', changedBytes: 0, verified: true, slots: [], ratios: [], softFocus: [], adjSoftFocus: false, dateStamp: false, monoUnlock: false, extraSlots: [] };
     const describe = (d: Uint8Array): FirmwareSummary['slots'] =>
@@ -779,7 +787,7 @@ export class Engine {
   /** Build a firmware file. The result has passed the built-in self-check (otherwise this throws). */
   async buildFirmware(requests: SlotRequest[], ratios: readonly RatioSpec[] = [], softFocus: readonly SoftFocusRequest[] = [], options: BuildOptions = {}): Promise<FirmwareBuild> {
     if (this.info.family === 'gr3x') {
-      if (Object.entries(options).some(([k, v]) => k !== 'monoUnlock' && k !== 'adjSoftFocus' && k !== 'dateStamp' && k !== 'shutdownPictures' && Boolean(v)))
+      if (Object.entries(options).some(([k, v]) => k !== 'monoUnlock' && k !== 'adjSoftFocus' && k !== 'dateStamp' && k !== 'shutdownPictures' && k !== 'filmCount' && v !== undefined && v !== false && !(Array.isArray(v) && !v.length)))
         throw new FirmwareError('gr3x-unsupported', 'added Image Control slots and the test settings of the date imprint are not ported to GR III / IIIx');
       if (options.shutdownPictures?.length && !this.info.capabilities.menuPictures)
         throw new FirmwareError('gr3x-unsupported', 'power-off pictures are tested on the GR III build first');
@@ -787,15 +795,21 @@ export class Engine {
         throw new FirmwareError('gr3x-unsupported', 'the date imprint is tested on the GR III build first');
       // 1..7 added ratios; the T4 seven keep the tested T4 menu (see planGr3xMenu).
       const menu = planGr3xMenu(ratios.map(r => ({ ratio: r.ratio, name: r.name })));
-      // Legacy replica builds remain reproducible, but T6 uses all nine slots for films.
-      const ids = options.monoUnlock ? GR3X_FILM_IDS.slice(0, 2) : GR3X_FILM_IDS;
+      // 0: no films (as when nothing is chosen).
+      const filmCount = options.filmCount || undefined;
+      if (options.filmCount === 0 && requests.length) throw new FirmwareError('bad-edit', 'film changes without films');
+      if (filmCount !== undefined && (options.monoUnlock || !Number.isInteger(filmCount) || filmCount < 1 || filmCount > (this.info.features.maxFilms ?? 9) || filmCount > GR3X_MAX_FILMS || (this.info.features.maxFilms ?? 9) < GR3X_MAX_FILMS))
+        throw new FirmwareError('bad-edit', 'the number of films is 1..20 (experimental GR III build)');
+      // Legacy replica builds remain reproducible, but T6 uses all nine slots for films (round 6: filmCount).
+      const ids = options.monoUnlock ? GR3X_FILM_IDS.slice(0, 2) : GR3X_FILM_IDS.slice(0, filmCount ?? 9);
       if (requests.length > ids.length || new Set(requests.map(r => r.slot)).size !== requests.length ||
           requests.some(r => !ids.includes(r.slot))) throw new FirmwareError('bad-edit', 'unknown or duplicate IIIx film slot');
-      const looks: Gr3xLookOptions | undefined = requests.length || options.monoUnlock ? {
+      const looks: Gr3xLookOptions | undefined = requests.length || options.monoUnlock || filmCount !== undefined ? {
         displayRevision: options.monoUnlock ? 2 : 3,
         monoReplicas: !!options.monoUnlock,
         // Each film keeps its own parameters (T6d); recipes without the flag rebuild T6c.
         ...(options.monoUnlock ? {} : { ownParameters: true }),
+        ...(filmCount !== undefined ? { filmCount } : {}),
         films: ids.map((slot, i) => {
           const r = requests.find(r => r.slot === slot);
           // Each camera language may have its own name. Languages without one show the default:
@@ -805,12 +819,13 @@ export class Engine {
           const name = ascii?.[1] ?? GR3X_FILM_NAMES[i]; validateGr3xLookName(name);
           const own = Object.fromEntries(given.filter(([, v]) => v !== name));
           return { name, ...(Object.keys(own).length ? { names: own } : {}), ...(r?.preset ? { preset: r.preset } : {}), ...(r?.icon ? { icon: r.icon } : {}),
-            ...(r?.halation ? { halation: r.halation } : {}) };
+            // Round 6: Halation is set in the camera (each film has the line).
+            ...(r?.halation && filmCount === undefined ? { halation: r.halation } : {}) };
         }),
       } : undefined;
       if (options.adjSoftFocus && softFocus.length) throw new FirmwareError('bad-clarity', 'soft focus on the ADJ lever and on the clarity table cannot be combined');
       const r = await this.fixedGr3x(softFocus, looks, menu, !!options.adjSoftFocus, !!options.dateStamp,
-        (options.shutdownPictures ?? []).map(p => ({ name: p.name, jpeg: p.jpeg })));
+        (options.shutdownPictures ?? []).map(p => ({ id: p.id, name: p.name, jpeg: p.jpeg })));
       return { ...r, file: r.file.slice() };
     }
     if (this.layout === null || !this.info.capabilities.build) requireGr3xPort('custom firmware');

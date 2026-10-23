@@ -69,6 +69,8 @@ def verify(data, base, manifest):
     stock, patched = LookProbe(data, base), LookProbe(data, manifest)
     slots = manifest['addedLooks']
     mapping = {s['id']: s['nativeBase'] for s in slots}
+    # Round 6: the adapters map every reserved film look (64..83) to Standard, built or not.
+    adapted = {64 + k: 11 for k in range(20)} if manifest.get('filmCount') else mapping
     calls, adapter_cases = 0, 0
     # Every byte value and all four condition bits. Only the intended destination
     # register changes; the caller's flags and stack are exactly preserved.
@@ -86,7 +88,7 @@ def verify(data, base, manifest):
                 patched.uc.mem_write(COMMON + 0x77c, bytes([identity]))
                 patched.uc.emu_start(site['address'], site['address'] + 4, count=100)
                 assert patched.uc.reg_read(reg.UC_ARM_REG_PC) == site['address'] + 4
-                registers[dest] = mapping.get(identity, identity)
+                registers[dest] = adapted.get(identity, identity)
                 assert patched.uc.reg_read(reg.UC_ARM_REG_CPSR) == cpsr
                 assert all(patched.uc.reg_read(getattr(reg, 'UC_ARM_REG_R' + str(i))) == v
                            for i, v in enumerate(registers))

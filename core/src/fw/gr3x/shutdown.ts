@@ -81,7 +81,10 @@ export const GR3X_PICTURE_LINE_NAMES: readonly string[] = [
 export const GR3X_PICTURE_ORIGINAL: readonly string[] = GR3X_PICTURE_LINE_NAMES.map((_, row) =>
   row === 0 ? 'オリジナル' : row === 18 || row === 19 ? '原始' : 'Original');
 
+export const GR3X_JPEG_TABLE_COUNT = 13;
 export interface Gr3xPictureSpec {
+  /** Round 6 (End Screen submenu): stable identity 1..0xffffffff, what the camera remembers. */
+  id?: number;
   /** Name in the camera's list: 1..GR3X_PICTURE_NAME_MAX printable ASCII characters. */
   name: string;
   /** 720 x 480 baseline JPEG (4:2:0) of exactly GR3X_PICTURE_JPEG_BYTES bytes (encodeGr3xPicture). */
@@ -264,11 +267,31 @@ export function installGr3xPictureSetupLine(p: Gr3xPictureProgram, line: number)
   return { pictureSetupMenu: copy };
 }
 
-/** The picture request and the extended table of full-screen JPEGs. */
-export function installGr3xPictureStage(p: Gr3xPictureProgram, n: number) {
+/** Round 6: the Setup menu with End Screen (item 10) opening the End Screen submenu (endscreen.ts). */
+export function installGr3xEndScreenSetup(p: Gr3xPictureProgram, line: number) {
+  if (p.word(SETUP_ENTRY_IMAGE) !== SETUP_MENU) fail('unexpected-layout', 'IIIx Setup menu entry');
+  if (new DataView(p.read(SETUP_ENTRY_RAM, 4).buffer).getUint32(0, true) !== SETUP_MENU) fail('unexpected-layout', 'IIIx Setup menu entry (RAM)');
+  const setup = p.read(SETUP_MENU, DESCRIPTOR), sv = new DataView(setup.buffer);
+  if (setup[D_PAGES] !== 11 || [...setup.subarray(D_FIRST, D_FIRST + 11)].join() !== SETUP_FIRSTS.join() || setup[D_COUNT] !== SETUP_ITEMS ||
+    sv.getUint32(D_ID + END_SCREEN_ITEM * 4, true) !== END_SCREEN_ID || sv.getUint32(D_DRAW + END_SCREEN_ITEM * 8, true) !== END_SCREEN_DRAW ||
+    sv.getUint32(D_DRAW + END_SCREEN_ITEM * 8 + 4, true) !== 0 || sv.getUint32(D_VISIBLE + END_SCREEN_ITEM * 8, true) !== 0)
+    fail('unexpected-layout', 'IIIx Setup menu is not the official one');
+  for (let i = 0; i < SETUP_ITEMS; i++) if (sv.getUint32(D_ID + i * 4, true) === GR3X_PICTURE_MENU_ID) fail('unexpected-layout', 'IIIx picture id in use');
+  const d = setup.slice(), dv = new DataView(d.buffer);
+  dv.setUint32(D_DRAW + END_SCREEN_ITEM * 8, line, true);
+  dv.setUint32(D_ID + END_SCREEN_ITEM * 4, GR3X_PICTURE_MENU_ID, true);
+  const copy = p.append(d);
+  p.patch(SETUP_ENTRY_IMAGE, SETUP_MENU, copy, 'power-off pictures: Setup > End Screen opens the End Screen submenu');
+  return { endScreenSetupMenu: copy };
+}
+
+/** The picture request and the extended table of full-screen JPEGs. `pick: false` (round 6's End
+ * Screen submenu, endscreen.ts): the table only, the request is endscreen.ts's. */
+export function installGr3xPictureStage(p: Gr3xPictureProgram, n: number, o: { pick?: boolean } = {}) {
+  const withPick = o.pick !== false;
   if (n < 1 || n > GR3X_MAX_PICTURES) fail('internal', 'IIIx power-off picture count');
   const guards: readonly (readonly [number, number])[] = [
-    [REQUEST, 0xe1a0c00d], [JOIN, JOIN_WORD], [JOIN - 4, 0xe3a07002], // mov r7,#2 (GoodBye), then the join
+    [REQUEST, 0xe1a0c00d], ...(withPick ? [[JOIN, JOIN_WORD]] as const : []), [JOIN - 4, 0xe3a07002], // mov r7,#2 (GoodBye), then the join
     [JOIN + 0x24, 0xe1a01007], [JOIN + 0x2c, 0xeb000000 | (((PLAYBACK_JPEG - (JOIN + 0x2c + 8)) >> 2) & 0xffffff)], // mov r1,r7; bl request
     [PLAYBACK_JPEG, 0xe1a0c00d],
     [JPEG_TABLE_SITE[0], movWord(12, lo(JPEG_TABLE))], [JPEG_TABLE_SITE[1], movWord(12, hi(JPEG_TABLE), true)],
@@ -286,6 +309,7 @@ export function installGr3xPictureStage(p: Gr3xPictureProgram, n: number) {
   const table = p.append(new Uint8Array([...original, ...u32(entries)]));
   p.patch(JPEG_TABLE_SITE[0], movWord(12, lo(JPEG_TABLE)), movWord(12, lo(table)), 'power-off pictures: JPEG table, low half');
   p.patch(JPEG_TABLE_SITE[1], movWord(12, hi(JPEG_TABLE), true), movWord(12, hi(table), true), 'power-off pictures: JPEG table, high half');
+  if (!withPick) return { pictureTable: table, pictureEntries: entries[0] };
   // r7 = the table index the camera chose; r2, r3 are free here (set again before use).
   const pick = p.code(`movw r2,#${lo(SETTINGS_POINTER)};movt r2,#${hi(SETTINGS_POINTER)};ldr r2,[r2];cmp r2,#0;beq keep;
     ldrb r3,[r2,#${GR3X_PICTURE_OFFSET}];sub r3,r3,#1;cmp r3,#${n - 1};addls r7,r3,#${JPEG_TABLE_COUNT};

@@ -97,6 +97,14 @@ def main():
             with path.open('x') as f:json.dump(report,f,indent=2);f.write('\n')
             results['own-film-parameters']=dict(passed=True,calls=report['calls'],report=path.name,sha256=hashlib.sha256(path.read_bytes()).hexdigest())
             print('own-film-parameters: passed',flush=True)
+        if manifest.get('filmCount'):
+            from halation_screen_probe import verify as screen_verify
+            report=screen_verify(data,manifest)
+            report['candidate_sha256']=sha
+            path=a.output/'halation-screen.json'
+            with path.open('x') as f:json.dump(report,f,indent=2);f.write('\n')
+            results['halation-screen']=dict(passed=True,calls=report['calls'],report=path.name,sha256=hashlib.sha256(path.read_bytes()).hexdigest())
+            print('halation-screen: passed',flush=True)
     summary=dict(schema=1,kind='gr3x-adj9-'+build['revision']+'-validation',candidate_sha256=sha,
                  all_checks_passed=True,checks=results,native_function_cases=sum(r['calls'] for r in results.values()),
                  container_checks=len(build['checks']),patch_sites=len(manifest['sites']),

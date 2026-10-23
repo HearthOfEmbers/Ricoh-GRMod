@@ -59,7 +59,9 @@ import { assembleWords, branchWord, movWord } from '../aspect/arm';
 import { FirmwareError } from '../types';
 import { GR3X_DATESTAMP_CODE } from './picture-modules';
 import { GR3X_JPEG_EXECUTE } from './jpeg-stage';
-import { GR3X_PICTURE_MENU_ID, installGr3xPictureList, installGr3xPictureSetupLine } from './shutdown';
+import { GR3X_PICTURE_MENU_ID, installGr3xEndScreenSetup, installGr3xPictureList, installGr3xPictureSetupLine } from './shutdown';
+import { GR3X_END_SCREEN_ID as END_SCREEN_ID, GR3X_PICTURE_LIST_ID, GR3X_PICTURE_MODE } from './endscreen';
+import { GR3X_GAP, GR3X_HEAP_BASE, GR3X_ZERO_FILL_END } from './look-addresses';
 import type { Gr3xPictureIds } from './shutdown';
 
 export const GR3X_DATE_SETTINGS_POINTER = 0x55063f34;
@@ -119,6 +121,7 @@ const SUB_SITES: readonly (readonly [number, number, number])[] = [
 ];
 const TOP_SET_TWO_ICONS = 0x5339df08, SUB_SET_ICON = 0x533a6a70;
 const ICON_ON = 345, TEXT_ON = 1;
+const END_SCREEN_TITLE = 665;
 
 const lo = (v: number) => v & 0xffff, hi = (v: number) => v >>> 16;
 const fail = (message: string): never => { throw new FirmwareError('unexpected-layout', message); };
@@ -166,11 +169,15 @@ export function installGr3xDateImprintMenu(p: Gr3xDateProgram, ids: Gr3xDateIds)
  * shutdown.ts), in that order as list records 118 and up. With the date imprint alone the bytes
  * are those of round 4 (camera-tested): the pictures' parts are only added when there are pictures.
  */
-export function installGr3xMenuAdditions(p: Gr3xDateProgram, o: { date?: Gr3xDateIds; dateForm?: Gr3xDateForm; picture?: Gr3xPictureIds }) {
+/** Round 6: Setup's End Screen line opens a submenu (Type / Picture, endscreen.ts). */
+export interface Gr3xEndScreenMenu { typeText: number; pictureText: number; lineType: number; linePicture: number }
+
+export function installGr3xMenuAdditions(p: Gr3xDateProgram, o: { date?: Gr3xDateIds; dateForm?: Gr3xDateForm; picture?: Gr3xPictureIds; endScreen?: Gr3xEndScreenMenu }) {
   const ids = o.date;
+  if (o.picture && o.endScreen) fail('IIIx pictures: list or submenu');
   const sub = !!ids && o.dateForm === 'submenu';
   if (sub && (ids!.onOff === undefined || ids!.style === undefined)) fail('IIIx date imprint submenu texts');
-  if (!ids && !o.picture) fail('no IIIx menu additions');
+  if (!ids && !o.picture && !o.endScreen) fail('no IIIx menu additions');
   // --- Checks of the official code and data this relies on.
   const guards: readonly (readonly [number, number])[] = [
     ...(ids ? [[BUILDER, 0xe1a0c00d], [BUILDER + 4, movWord(3, lo(MENU_TABLE))], [BUILDER + 0x10, movWord(3, hi(MENU_TABLE), true)]] as const : []),
@@ -180,7 +187,7 @@ export function installGr3xMenuAdditions(p: Gr3xDateProgram, o: { date?: Gr3xDat
     [SELECT_CONSTRUCTOR_START, 0xe3a0e075], // mov lr,#117: the list constructor starts with record 117
     [SELECT_SCAN_END, 0xe2847d75], // add r7,r4,#0x1d40: the longest-list scan ends 117 records on
     [APP, 0xe1a0c00d], [SPEC_MODEL, 0xe1a0c00d], [LINE_VALUE_ICON, 0xe1a0c00d], [TOP_SET_TITLE, 0xe1a0c00d], [LIST_SET_ITEM, 0xe1a0c00d],
-    ...(sub ? [[SUB_SET_CURRENT, 0xe28134fe], [SUB_SET_CURRENT + 4, 0xe1a0c00d], [SUB_CONSTRUCTOR_START, 0xe3a02011], // mov r2,#17
+    ...(sub || o.endScreen ? [[SUB_SET_CURRENT, 0xe28134fe], [SUB_SET_CURRENT + 4, 0xe1a0c00d], [SUB_CONSTRUCTOR_START, 0xe3a02011], // mov r2,#17
       [TOP_SET_TWO_ICONS, 0xe1a0c00d], [SUB_SET_ICON, 0xe1a0c00d]] as const : []),
   ];
   for (const [at, w] of guards) if (p.word(at) !== w >>> 0) fail(`IIIx date imprint menu guard at ${at.toString(16)}`);
@@ -260,6 +267,19 @@ export function installGr3xMenuAdditions(p: Gr3xDateProgram, o: { date?: Gr3xDat
     lists.push({ id: GR3X_DATE_MENU_ID, title: ids.name, count, draw, set, isCurrent });
     Object.assign(entries, { dateLine: line, dateCount: count, dateDraw: draw, dateSet: set, dateIsCurrent: isCurrent });
   }
+  if (o.endScreen) {
+    // The End Screen submenu (D-Range's record as the model): title End Screen, Type / Picture.
+    const E = o.endScreen;
+    const tpl = p.read(SUB_TABLE + D_RANGE_RECORD * SUB_RECORD, SUB_RECORD), tv = new DataView(tpl.buffer);
+    if (tv.getUint16(2, true) !== 337 || tpl[6] !== 2 || tv.getUint32(0x14, true) !== 0x02000077 || tv.getUint32(0x18, true) !== 0x02000078 ||
+      tv.getUint32(0x1c, true) !== 0x10000000 || [0x40, 0x48, 0x4c, 0x50, 0x54, 0x58, 0x5c, 0x60].some(o => tv.getUint32(o, true) !== 0))
+      fail('IIIx D-Range Correction submenu record');
+    const record = tpl.slice(), rv = new DataView(record.buffer);
+    rv.setUint16(2, END_SCREEN_TITLE, true); rv.setUint16(8, E.typeText, true); rv.setUint16(10, E.pictureText, true);
+    rv.setUint32(0x14, END_SCREEN_ID, true); rv.setUint32(0x18, GR3X_PICTURE_LIST_ID, true);
+    rv.setUint32(0x3c, E.lineType, true); rv.setUint32(0x40, 0, true); rv.setUint32(0x44, E.linePicture, true); rv.setUint32(0x48, 0, true);
+    submenus.push({ id: GR3X_PICTURE_MENU_ID, record });
+  }
   if (o.picture) {
     const pe = installGr3xPictureList(p, o.picture);
     lists.push({ id: GR3X_PICTURE_MENU_ID, title: o.picture.title, count: pe.pictureCount, draw: pe.pictureDraw, set: pe.pictureSet, isCurrent: pe.pictureIsCurrent });
@@ -323,10 +343,25 @@ export function installGr3xMenuAdditions(p: Gr3xDateProgram, o: { date?: Gr3xDat
     Object.assign(entries, { dateMenuWithoutNd: withoutNd, dateMenuWithoutHdf: withoutHdf, dateBuilder: builder });
   }
   if (o.picture) Object.assign(entries, installGr3xPictureSetupLine(p, entries.pictureLine));
+  if (o.endScreen) {
+    // Setup's End Screen line opens the submenu, drawn as Setup's other submenu lines.
+    const setupLine = p.code(`push {r4,lr};mov r4,r1;mov r0,r4;mov r1,#0;bl #${LINE_VALUE_ICON};mov r0,r4;movw r1,#${END_SCREEN_TITLE};mov r2,r1;
+      pop {r4,lr};b #${TOP_SET_TITLE};`);
+    Object.assign(entries, { endScreenSetupLine: setupLine }, installGr3xEndScreenSetup(p, setupLine));
+    // The picture list's mode is in the gap before the heap: the start-up fill clears it.
+    p.patch(GR3X_ZERO_FILL_END, GR3X_GAP, GR3X_HEAP_BASE, 'start-up zero fill reaches the heap base (clears the added RAM words)');
+  }
 
   // --- Controller ids: Horizon Correction's list controller and key map.
-  const mapped = [...lists.map(l => [l.id, HORIZON_ID] as const), ...submenus.map(m => [m.id, D_RANGE_ID] as const)];
-  const factory = p.code(mapped.map(([id, to]) => `movw ip,#${lo(id)};movt ip,#${hi(id)};cmp r1,ip;
+  const mapped = [...lists.map(l => [l.id, HORIZON_ID] as const), ...submenus.map(m => [m.id, D_RANGE_ID] as const),
+    ...(o.endScreen ? [[GR3X_PICTURE_LIST_ID, END_SCREEN_ID] as const] : [])];
+  // With the End Screen submenu the factory also sets the End Screen list's mode: picture list
+  // (asked for GR3X_PICTURE_LIST_ID) or the camera's own (asked for End Screen itself).
+  const factory = o.endScreen ? p.code([...mapped.map(([id, to]) => [id, to, id === GR3X_PICTURE_LIST_ID ? 1 : -1] as const), [END_SCREEN_ID, END_SCREEN_ID, 0] as const]
+    .map(([id, to, mode], k) => `movw ip,#${lo(id)};movt ip,#${hi(id)};cmp r1,ip;bne f${k};movw r1,#${lo(to)};movt r1,#${hi(to)};` +
+      (mode >= 0 ? `mov ip,#${mode};movw r3,#${lo(GR3X_PICTURE_MODE)};movt r3,#${hi(GR3X_PICTURE_MODE)};str ip,[r3];` : '') + `b done;f${k}:`).join('') +
+    `done:movw r3,#0x13b;b #${FACTORY + 4};`)
+    : p.code(mapped.map(([id, to]) => `movw ip,#${lo(id)};movt ip,#${hi(id)};cmp r1,ip;
     movweq r1,#${lo(to)};movteq r1,#${hi(to)};`).join('') + `movw r3,#0x13b;b #${FACTORY + 4};`);
   p.patch(FACTORY, movWord(3, 0x13b), branchWord(FACTORY, factory), o.picture ? `${what}: list controller` : 'date imprint: list controller');
   const keys = p.code('ldr r0,[r0];' + mapped.map(([id, to]) => `movw ip,#${lo(id)};movt ip,#${hi(id)};cmp r0,ip;

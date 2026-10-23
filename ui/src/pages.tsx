@@ -16,6 +16,7 @@ import {
   setDateStamp,
   setMonoUnlock,
   extraName, extraNameProblem, extraProblem, halationOf, removeExtraSlot, setExtraCount, setExtraName, setHalation, slotOf,
+  filmCountChoosable, setFilmCount,
   setWallName, wallMax, wallMenuProblem,
 } from './store';
 import type { ExtraSlot, RatioItem, WallItem } from './store';
@@ -135,7 +136,9 @@ function Compare({ photo, after, label }: { photo: ImageData | null; after: Imag
 /** The preview; `below` (with its height in `belowH`) goes under the picture, which leaves room for it. */
 function PreviewPane({ below, belowH = 0 }: { below?: ReactNode; belowH?: number }) {
   const gr3x = useStore(s => s.info?.family === 'gr3x');
-  const slotOptions = useStore(s => s.info?.slots ?? []);
+  const allSlots = useStore(s => s.info?.slots);
+  const filmCount = useStore(s => (filmCountChoosable(s) ? s.filmCount : -1));
+  const slotOptions = useMemo(() => (allSlots ? (filmCount >= 0 ? allSlots.slice(0, filmCount) : allSlots) : []), [allSlots, filmCount]);
   const slots = useStore(s => s.slots);
   const mode = useStore((s) => s.previewMode);
   const active = useStore((s) => s.activeSlot);
@@ -181,6 +184,8 @@ function PreviewPane({ below, belowH = 0 }: { below?: ReactNode; belowH?: number
 
 function SlotCard({ id }: { id: SlotId }) {
   const slot = useStore((s) => s.slots[id]);
+  // The experimental GR III build: Halation is set in the camera; here only the preview level.
+  const choosable = useStore((s) => filmCountChoosable(s));
   const info = useStore((s) => s.info)!;
   const lang = useStore((s) => s.lang);
   const active = useStore((s) => s.activeSlot === id);
@@ -227,7 +232,7 @@ function SlotCard({ id }: { id: SlotId }) {
             <Prop label={t('haloLabel')}>
               <div className="halo">
                 <Segmented value={String(slot.halation ?? 0)} onChange={(v) => setFilmHalation(id, Number(v) as 0 | 1 | 2)} options={[{ value: '0', label: t('haloOff') }, { value: '1', label: t('haloWeak') }, { value: '2', label: t('haloStrong') }]} />
-                <span className="muted small halo-note">{t('gr3xHalationSub')}</span>
+                <span className="muted small halo-note">{t(choosable ? 'halationSub' : 'gr3xHalationSub')}</span>
               </div>
             </Prop>
           )}
@@ -242,6 +247,30 @@ function SlotCard({ id }: { id: SlotId }) {
         </div>
       </div>
     </DropZone>
+  );
+}
+
+/** The experimental GR III build: how many films are added (0 to maxFilms), as GR IV's added slots. */
+function FilmCountHead() {
+  const n = useStore((s) => s.filmCount);
+  const max = useStore((s) => s.info?.features.maxFilms ?? 9);
+  return (
+    <div className="card extras-head" data-tour="ic-extra">
+      <div className="extras-row">
+        <span className="page-icon soft-ico">{Ico.plus}</span>
+        <div className="soft-text">
+          <b>{t('filmCountTitle')}</b>
+          <span className="muted small ellipsis">{t('filmCountSub', { n: max })}</span>
+        </div>
+        <div className="film-stepper">
+          <button className="btn small icon-only" aria-label={t('filmFewer')} title={t('filmFewer')} disabled={n <= 0} onClick={() => setFilmCount(n - 1)}>−</button>
+          <select aria-label={t('filmCountTitle')} value={n} onChange={(e) => setFilmCount(Number(e.target.value))}>
+            {Array.from({ length: max + 1 }, (_, i) => <option key={i} value={i}>{i === 0 ? t('extraNone') : t('filmCountLabel', { n: i })}</option>)}
+          </select>
+          <button className="btn small icon-only" aria-label={t('filmMore')} title={t('filmMore')} disabled={n >= max} onClick={() => setFilmCount(n + 1)}>+</button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -396,7 +425,10 @@ type Place = 'left' | 'right';
  * the preview on the right, and back when there is room again.
  */
 function IcBody() {
-  const slots = useStore(s => s.info!.slots);
+  const allSlots = useStore(s => s.info!.slots);
+  const choosable = useStore((s) => filmCountChoosable(s));
+  const filmCount = useStore((s) => s.filmCount);
+  const slots = useMemo(() => (choosable ? allSlots.slice(0, filmCount) : allSlots), [allSlots, choosable, filmCount]);
   const gr3x = useStore((s) => s.info?.family === 'gr3x');
   const cardsRef = useRef<HTMLDivElement>(null);
   const boxRef = useRef<HTMLDivElement | null>(null);
@@ -437,7 +469,7 @@ function IcBody() {
   return (
     <div className="ic" data-tour-page="ic">
       {gr3x
-        ? <div className="cards" ref={cardsRef}>{slots.map((slot) => <SlotCard key={slot.id} id={slot.id} />)}{place === 'left' && switches}</div>
+        ? <div className="cards" ref={cardsRef}>{choosable && <FilmCountHead />}{slots.map((slot) => <SlotCard key={slot.id} id={slot.id} />)}{place === 'left' && switches}</div>
         : (
         <div className="cards" ref={cardsRef}>
         <SlotCard id="CY" /><SlotCard id="CG" />

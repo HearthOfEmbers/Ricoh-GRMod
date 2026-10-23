@@ -24,7 +24,9 @@ class IconProbe(LookProbe):
         self.uc.mem_write(VIEW, bytes(0x300))
         put(self.uc, VIEW + 0x1f0, CHILD)
         put(self.uc, VIEW + 0x174, CHILD)
-        self.uc.mem_write(VIEW + 0x1a9, bytes([24]))
+        # The widget count the list's constructor stores (0x531abc4c): the maximum look count + 2
+        # (24 with nine films; 12 + n + 2 in round 6).
+        self.uc.mem_write(VIEW + 0x1a9, bytes([self.call(0x532c2b7c, OBJECT) + 2]))
 
 
 def verify(data, base, manifest):
@@ -54,7 +56,8 @@ def verify(data, base, manifest):
                 identity = fixed.call(0x532c2c80, OBJECT, i)
                 expected_icons.append(ids[identity] if identity in ids else stock.call(0x532935dc, OBJECT, identity))
             expected_icons += [stock.call(0x532a9988, OBJECT, n) for n in (23, 24)]
-            assert len(expected_icons) <= 24, 'look list exceeds native widget capacity'
+            widgets = fixed.uc.mem_read(VIEW + 0x1a9, 1)[0]
+            assert widgets == 14 + len(ids) and len(expected_icons) <= widgets, 'look list exceeds native widget capacity'
             for i, icon in enumerate(expected_icons):
                 fixed.ui = []
                 fixed.call(0x531a0690, VIEW, i)
@@ -62,7 +65,7 @@ def verify(data, base, manifest):
                 calls += 1
             fixed.ui = []
             fixed.call(0x531ab7e4, VIEW)
-            expected_icons += [0] * (24 - len(expected_icons))
+            expected_icons += [0] * (widgets - len(expected_icons))
             expected = [event for i, icon in enumerate(expected_icons)
                         for event in ((0x53394758, CHILD, i), (0x533a1734, CHILD, icon))]
             assert fixed.ui == expected

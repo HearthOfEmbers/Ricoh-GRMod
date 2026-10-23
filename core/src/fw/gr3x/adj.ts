@@ -10,7 +10,9 @@ import { installGr3xAdjSoftFocus } from './adj-softfocus';
 import { DATESTAMP_LONG_TEXT, DATESTAMP_NAMES, DATESTAMP_ON_OFF_NAMES, DATESTAMP_SHORT_TEXT, DATESTAMP_STYLE_NAMES, drawStyleIcon } from '../aspect/datestamp-menu';
 import type { Gr3xDateForm } from './datestamp';
 import { installGr3xDateImprintStage, installGr3xMenuAdditions } from './datestamp';
-import { checkGr3xPictures, gr3xPictureIcon, GR3X_PICTURE_LINE_NAMES, GR3X_PICTURE_ORIGINAL, installGr3xPictureStage } from './shutdown';
+import { checkGr3xPictures, gr3xPictureIcon, GR3X_PICTURE_LINE_NAMES, GR3X_PICTURE_ORIGINAL, installGr3xPictureStage, GR3X_JPEG_TABLE_COUNT } from './shutdown';
+import { GR3X_FACTORY_PICTURES, GR3X_PICTURE_NAMES, GR3X_PREVIEW_H, GR3X_PREVIEW_W, GR3X_TYPE_NAMES, gr3xPreview, installGr3xEndScreen } from './endscreen';
+import { readRes, resFile } from '../aspect/res';
 import type { Gr3xPictureSpec } from './shutdown';
 import { sectionsOf, sha256Hex } from '../container';
 import { FirmwareError } from '../types';
@@ -65,6 +67,9 @@ export interface Gr3xAdjFeatures {
   dateMenu?: Gr3xDateForm;
   /** Power-off pictures: a Setup line after End Screen, the files in RES (shutdown.ts). */
   pictures?: readonly Gr3xPictureSpec[];
+  /** Their menu: 'submenu' (round 6, as GR IV: End Screen opens Type / Picture, endscreen.ts; the
+   * pictures need their `id`) or 'list' (round 5; the default, so older recipes rebuild). */
+  pictureMenu?: 'list' | 'submenu';
 }
 
 export async function buildGr3xAdjResearch(raw: Uint8Array, ratioMenu: readonly Gr3xMenuRatio[] = GR3X_T4_MENU, features: Gr3xAdjFeatures = {}) {
@@ -75,6 +80,9 @@ export async function buildGr3xAdjResearch(raw: Uint8Array, ratioMenu: readonly 
   const pictures = features.pictures ?? [];
   if (pictures.length) checkGr3xPictures(pictures);
   const pictureCount = pictures.length;
+  const pictureSub = pictureCount > 0 && features.pictureMenu === 'submenu';
+  if (pictureSub && (new Set(pictures.map(x => x.id)).size !== pictureCount || pictures.some(x => !(Number.isInteger(x.id) && x.id! >= 1 && x.id! <= 0xffffffff))))
+    fail('IIIx power-off picture identities');
   const geometry = await buildGr3xExperiment(raw, ratioMenu);
   const menu = geometry.menu, count = menu.length, spelled = count === 9 ? 'nine' : String(count);
   const { decoded, profile } = await openGr3xOfficial(raw);
@@ -137,7 +145,9 @@ export async function buildGr3xAdjResearch(raw: Uint8Array, ratioMenu: readonly 
   const additions = gr3xCustoms(menu);
   const textIds = new Map([[0, 241], [3, 243]]);
   const iconIds = new Map([[0, 257], [3, 256]]);
-  const columns = m.textCount + additions.length + (softFocus ? 1 : 0) + dateTexts + (pictureCount ? 2 + pictureCount : 0);
+  // Pictures: round 5 line name, Original, names; round 6 Type, Picture, Original, names.
+  const pictureTexts = pictureCount ? (pictureSub ? 3 : 2) + pictureCount : 0;
+  const columns = m.textCount + additions.length + (softFocus ? 1 : 0) + dateTexts + pictureTexts;
   const softText = m.textCount + additions.length, softIcon = m.iconCount + additions.length;
   // Date imprint: name, the two style names; two style icons (after the soft-focus ones).
   const dateText = softText + (softFocus ? 1 : 0), dateIcon = softIcon + (softFocus ? 1 : 0);
@@ -146,6 +156,9 @@ export async function buildGr3xAdjResearch(raw: Uint8Array, ratioMenu: readonly 
   // Power-off pictures: the line name, the original's name, the pictures' names; a thumbnail each.
   const pictureText = dateText + dateTexts, pictureIcon = dateIcon + (dateImprint ? 2 : 0);
   const pictureIds = { title: pictureText, original: pictureText + 1, names: pictures.map((_, k) => pictureText + 2 + k), icons: pictures.map((_, k) => pictureIcon + k) };
+  // Round 6: thumbnails 520 x 200, the five factory pictures (by camera variant) first.
+  const endIds = { typeText: pictureText, pictureText: pictureText + 1, factoryText: pictureText + 2,
+    factoryIcons: GR3X_FACTORY_PICTURES.map((_, k) => pictureIcon + k), icons: pictures.map((_, k) => pictureIcon + GR3X_FACTORY_PICTURES.length + k) };
   const rows = Array.from({ length: m.languages }, (_, l) => {
     const row = new Uint8Array(columns * 4);
     row.set(read(word(m.textRoots + l * 4), m.textCount * 4));
@@ -174,20 +187,21 @@ export async function buildGr3xAdjResearch(raw: Uint8Array, ratioMenu: readonly 
   });
   if (pictureCount) {
     const names = pictures.map(pic => { const text = append(utf16z(pic.name)); return append(Uint8Array.from([pic.name.length + 1, 1, 0, 0, ...words([text])])); });
+    const head = pictureSub ? 3 : 2;
     rows.forEach((row, r) => {
-      [GR3X_PICTURE_LINE_NAMES[r], GR3X_PICTURE_ORIGINAL[r]].forEach((name, k) => {
+      (pictureSub ? [GR3X_TYPE_NAMES[r], GR3X_PICTURE_NAMES[r], GR3X_PICTURE_ORIGINAL[r]] : [GR3X_PICTURE_LINE_NAMES[r], GR3X_PICTURE_ORIGINAL[r]]).forEach((name, k) => {
         const text = append(utf16z(name));
         const record = append(Uint8Array.from([name.length + 1, 1, 0, 0, ...words([text])]));
         new DataView(row.buffer).setUint32((pictureText + k) * 4, record, true);
       });
-      names.forEach((record, k) => new DataView(row.buffer).setUint32((pictureText + 2 + k) * 4, record, true));
+      names.forEach((record, k) => new DataView(row.buffer).setUint32((pictureText + head + k) * 4, record, true));
     });
   }
   const textRoots = append(words(rows.map(row => append(row))));
   for (const [low, high] of m.textRootSites) pair(low, high, 3, m.textRoots, textRoots, 'extended IIIx language directory');
   for (const at of m.textBounds) patch(at, movWord(3, m.textCount - 1), movWord(3, columns - 1), 'extended IIIx text bound');
 
-  const iconCount = m.iconCount + additions.length + (softFocus ? 1 : 0) + (dateImprint ? 2 : 0) + pictureCount;
+  const iconCount = m.iconCount + additions.length + (softFocus ? 1 : 0) + (dateImprint ? 2 : 0) + pictureCount + (pictureSub ? GR3X_FACTORY_PICTURES.length : 0);
   const iconCatalog = new Uint8Array(iconCount * 4);
   iconCatalog.set(read(m.iconRoot, m.iconCount * 4));
   const pixels = additions.map(r => drawRatioIcon(r.ratio));
@@ -213,7 +227,17 @@ export async function buildGr3xAdjResearch(raw: Uint8Array, ratioMenu: readonly 
     new DataView(iconCatalog.buffer).setUint32((dateIcon + k) * 4, descriptor, true);
     pixels.push(icon); iconOffset += icon.length;
   });
-  pictures.forEach((pic, k) => {
+  if (pictureSub) {
+    const dir = readRes(decoded);
+    const factory = GR3X_FACTORY_PICTURES.map(path => { const jpeg = resFile(decoded, path, dir); if (!jpeg) fail(`IIIx RES has no ${path}`); return jpeg!; });
+    [...factory, ...pictures.map(pic => pic.jpeg)].forEach((jpeg, k) => {
+      const icon = gr3xPreview(jpeg);
+      if (iconOffset % 4) fail('IIIx ICONBIN alignment');
+      const descriptor = append(Uint8Array.from([GR3X_PREVIEW_W & 255, GR3X_PREVIEW_W >> 8, GR3X_PREVIEW_H, 0, ...words([iconOffset / 4])]));
+      new DataView(iconCatalog.buffer).setUint32((pictureIcon + k) * 4, descriptor, true);
+      pixels.push(icon); iconOffset += icon.length;
+    });
+  } else pictures.forEach((pic, k) => {
     const icon = gr3xPictureIcon(pic.jpeg);
     if (iconOffset % 4) fail('IIIx ICONBIN alignment');
     const descriptor = append(Uint8Array.from([40, 0, 40, 0, ...words([iconOffset / 4])]));
@@ -243,10 +267,15 @@ export async function buildGr3xAdjResearch(raw: Uint8Array, ratioMenu: readonly 
   const shadingEntries = installGr3xShading(program);
   const softEntries = softFocus ? installGr3xAdjSoftFocus({ code, append, patch, word }, softText, softIcon) : {};
   const fullRawEntries = installGr3xFullFrameRaw(program);
+  const endScreen = pictureSub ? installGr3xEndScreen({ code, append, patch, word }, { ...endIds,
+    choices: pictures.map(x => x.id!), resources: pictures.map((_, k) => GR3X_JPEG_TABLE_COUNT + k) }) : undefined;
   const dateEntries = dateImprint || pictureCount ? {
-    ...installGr3xMenuAdditions({ code, append, patch, word, read }, { ...(dateImprint ? { date: dateIds, dateForm } : {}), ...(pictureCount ? { picture: pictureIds } : {}) }),
+    ...(endScreen ?? {}),
+    ...installGr3xMenuAdditions({ code, append, patch, word, read }, { ...(dateImprint ? { date: dateIds, dateForm } : {}),
+      ...(pictureCount && !pictureSub ? { picture: pictureIds } : {}),
+      ...(endScreen ? { endScreen: { typeText: endIds.typeText, pictureText: endIds.pictureText, lineType: endScreen.endScreenLineType, linePicture: endScreen.endScreenLinePicture } } : {}) }),
     ...(dateImprint ? installGr3xDateImprintStage({ code, append, patch, word, read }) : {}),
-    ...(pictureCount ? installGr3xPictureStage({ code, append, patch, word, read }, pictureCount) : {}) } : {};
+    ...(pictureCount ? installGr3xPictureStage({ code, append, patch, word, read }, pictureCount, { pick: !pictureSub }) : {}) } : {};
   const payload = new Uint8Array((length + 3) & ~3);
   let at = 0; for (const part of parts) { payload.set(part, at); at += part.length; }
   const iconAddition = new Uint8Array(iconOffset - originalIcons.length);
@@ -259,7 +288,9 @@ export async function buildGr3xAdjResearch(raw: Uint8Array, ratioMenu: readonly 
     catalogs: { order, textRoots, textColumns: columns, iconRoot, iconCount },
     adjSoftFocus: softFocus,
     dateImprint: dateImprint ? { ...dateIds, form: dateForm } : undefined,
-    pictures: pictureCount ? { ...pictureIds, count: pictureCount, names: [...pictureIds.names], icons: [...pictureIds.icons] } : undefined,
+    pictures: pictureCount ? (pictureSub ? { form: 'submenu' as const, count: pictureCount, ...endIds, names: pictures.map((_, k) => endIds.factoryText + 1 + k),
+      factoryIcons: [...endIds.factoryIcons], icons: [...endIds.icons], choices: pictures.map(x => x.id!) }
+      : { ...pictureIds, count: pictureCount, names: [...pictureIds.names], icons: [...pictureIds.icons] }) : undefined,
     iconAddition: { originalLength: originalIcons.length, originalSha256: await sha256Hex(originalIcons), bytes: hex(iconAddition) },
     ratios: geometry.ratios.map(r => ({ ...r, textId: textIds.get(r.id)!, iconId: iconIds.get(r.id)! })),
     menu: menu.map(r => ({ ...r })),

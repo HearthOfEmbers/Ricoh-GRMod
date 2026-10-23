@@ -50,6 +50,10 @@ const pictures = process.env.GR3X_PICTURES ? await Promise.all(JSON.parse(proces
 const dateMenu = process.env.GR3X_DATE_MENU ?? 'submenu';
 if (!['list', 'submenu'].includes(dateMenu)) throw new Error('GR3X_DATE_MENU is list or submenu');
 const features = { adjSoftFocus: round >= 3, ...(dateImprint ? { dateImprint, dateMenu } : {}), ...(pictures.length ? { pictures } : {}) };
+// GR3X_FILMS=n (round 6): n films (1..20; the nine T6 films first, then plain ones), each with the
+// Halation line in the camera (no level in the build). Not with GR3X_DIAG.
+const filmCount = process.env.GR3X_FILMS ? Number(process.env.GR3X_FILMS) : undefined;
+if (filmCount !== undefined && (!Number.isInteger(filmCount) || filmCount < 1 || filmCount > 20 || diagnostics)) throw new Error('GR3X_FILMS is 1..20, not with GR3X_DIAG');
 const provenance = JSON.parse(await readFile(join(root, 'examples/gr3x/T6/SOURCES.json'), 'utf8'));
 for (const [index, name] of T6_FILM_NAMES.entries()) {
   const source = provenance[index];
@@ -60,10 +64,14 @@ for (const [index, name] of T6_FILM_NAMES.entries()) {
   const result = engine.convertPreset('cube', text, undefined, { post: round >= 3 });
   const icon = gr3xFilmIcon(resources.tiles.film, index);
   films.push({ name, icon, preset: { matrixQ13: result.matrixQ13, curves: result.curves, ...(result.postQ9 ? { postQ9: result.postQ9 } : {}) },
-    ...(round >= 3 && name === 'CineStill 800T' ? { halation: 2 } : {}) });
+    ...(round >= 3 && name === 'CineStill 800T' && filmCount === undefined ? { halation: 2 } : {}) });
   conversions.push({ name, filename, source: source.source, sourceSha256: source.cube_sha256,
     meanDE: result.meanDE, p95DE: result.p95DE, warnings: result.warnings, hardwareTested: false });
   sources.push({ filename, text });
+}
+if (filmCount !== undefined) {
+  films.length = Math.min(films.length, filmCount);
+  for (let k = films.length; k < filmCount; k++) films.push({ name: `Film ${k + 1}` });
 }
 if (diagnostics) {
   films[0] = { ...films[0], name: 'RB Swap Test', preset: { ...films[0].preset, postQ9: [0, 0, 512, 0, 512, 0, 512, 0, 0] } };
@@ -73,7 +81,7 @@ const adjSoftFocus = round >= 3;
 const soft = adjSoftFocus ? [] : [{ level: -1, strength: 'weak' }, { level: -2, strength: 'medium' }, { level: -3, strength: 'strong' }];
 // Films keep their own parameters (T6d) unless GR3X_SHARED=1 rebuilds T6c (shared with Standard).
 const ownParameters = process.env.GR3X_SHARED !== '1';
-const result = await buildGr3xTestFirmware(raw, soft, { films, monoReplicas: false, displayRevision: 3, ...(ownParameters ? { ownParameters } : {}), ...(diagnostics ? { jpegDiagnostics: true } : {}) }, menu, features);
+const result = await buildGr3xTestFirmware(raw, soft, { films, monoReplicas: false, displayRevision: 3, ...(ownParameters ? { ownParameters } : {}), ...(filmCount !== undefined ? { filmCount } : {}), ...(diagnostics ? { jpegDiagnostics: true } : {}) }, menu, features);
 const target = resolve(directory);
 await mkdir(target);
 const json = async (name, value) => writeFile(join(target, name), JSON.stringify(value, null, 2) + '\n', { flag: 'wx' });
@@ -85,7 +93,7 @@ await json('SOURCES.json', provenance);
 await copyFile(join(root, 'examples/gr3x/T6/ICON-SOURCES.json'), join(target, 'ICON-SOURCES.json'));
 await mkdir(join(target, 'CUBE'));
 await mkdir(join(target, 'icons'));
-for (const film of films) await writeFile(join(target, 'icons', film.name.replaceAll(' ', '-') + '.rgba'), film.icon, { flag: 'wx' });
+for (const film of films) if (film.icon) await writeFile(join(target, 'icons', film.name.replaceAll(' ', '-') + '.rgba'), film.icon, { flag: 'wx' });
 await copyFile(join(root, 'examples/gr3x/T6/LICENSE-t3mujinpack.txt'), join(target, 'LICENSE-t3mujinpack.txt'));
 for (const source of sources) await writeFile(join(target, 'CUBE', source.filename), source.text, { flag: 'wx' });
 // The halation module's expected result on the synthetic picture of picture_stage_probe.py,
@@ -93,15 +101,17 @@ for (const source of sources) await writeFile(join(target, 'CUBE', source.filena
 const { halateYcc, halationLight } = await import('../../core/src/fw/aspect/halation.ts');
 const W = 320, H = 240, parts = [];
 for (const [k, film] of films.entries()) {
-  if (!film.halation) continue;
+  // Round 6: the level comes from the camera; the reference is made at 2 for odd films, 1 for even.
+  const level = filmCount !== undefined ? (film.preset ? 1 + (k % 2) : 0) : film.halation;
+  if (!level) continue;
   const Y = new Uint8Array(W * H), C = new Uint8Array(W * H);
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
     Y[y * W + x] = 140 < x && x < 180 && 100 < y && y < 140 ? 252 : 16 + ((x * 3 + y * 5) % 220);
     C[y * W + x] = 128 + ((Math.floor(x / 2) + y) % 40) - 20;
   }
   const post = film.preset.postQ9 && !Array.from(film.preset.postQ9).every((v, i) => v === [512,0,0,0,512,0,0,0,512][i]) ? film.preset.postQ9 : undefined;
-  halateYcc(Y, C, W, H, film.halation, halationLight(film.preset.curves, post));
-  const head = new Uint8Array(4); new DataView(head.buffer).setUint32(0, 64 + k, true);
+  halateYcc(Y, C, W, H, level, halationLight(film.preset.curves, post));
+  const head = new Uint8Array(4); new DataView(head.buffer).setUint32(0, (64 + k) | (filmCount !== undefined ? level << 8 : 0), true);
   parts.push(head, Y, C);
 }
 const halationReference = join(target, 'halation-reference.bin');
@@ -119,13 +129,13 @@ try {
     '--build-report', join(target, 'build-report.json'), '--rtos', join(temporary, 'rtos.bin'),
     '--boot', join(temporary, 'boot.bin'), '--reference', resolve(reference),
     '--base-look-manifest', join(temporary, 'base.json'), '--halation-reference', halationReference, '--output', join(target, 'validation')],
-    { stdio: 'inherit', timeout: 600000 });
+    { stdio: 'inherit', timeout: 3600000 });
   if (run.error || run.status !== 0) throw new Error('T6 validation failed; UNVALIDATED.bin is not a released update');
   const summary = JSON.parse(await readFile(join(target, 'validation/summary.json'), 'utf8'));
   if (!summary.all_checks_passed || summary.candidate_sha256 !== result.report.outputSha256) throw new Error('T6 validation/hash mismatch');
   // Fresh Engine inspection must rebuild identical bytes from the embedded recipe.
   const inspected = await (await Engine.open(raw)).inspect(result.bytes);
-  if (!inspected.verified || inspected.monoUnlock || inspected.dateStamp !== dateImprint || (inspected.shutdownPictures?.length ?? 0) !== pictures.length || inspected.slots.length !== 9 || inspected.slots.some((s, i) => s.names.en !== films[i].name)) throw new Error('T6 fresh-engine reconstruction failed');
+  if (!inspected.verified || inspected.monoUnlock || inspected.dateStamp !== dateImprint || (inspected.shutdownPictures?.length ?? 0) !== pictures.length || inspected.slots.length !== (filmCount ?? 9) || inspected.slots.some((s, i) => s.names.en !== films[i].name)) throw new Error('T6 fresh-engine reconstruction failed');
   await json('reconstruction-check.json', { verified: true, sha256: inspected.sha256, monoReplicas: inspected.monoUnlock,
     slotNames: inspected.slots.map(s => s.names.en), dateImprint: inspected.dateStamp, pictures: (inspected.shutdownPictures ?? []).map(p => p.name), hardwareTested: false });
   await copyFile(join(root, 'docs/' + (result.report.filename === 'fwdc239b.bin' ? 'GR3_HDF_210_TEST.txt' : 'GR3X_T6_TEST.txt')), join(target, '请先阅读.txt'));

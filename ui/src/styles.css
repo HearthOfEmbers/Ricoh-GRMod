@@ -410,6 +410,8 @@ button.fw-rel:disabled { cursor: default; }
 .extra-problem { margin-top: 6px; }
 .extras-row .soft-ico { width: 32px; height: 32px; flex: none; }
 .extras-count { margin: 8px 0 2px 44px; }
+.film-stepper { display: flex; align-items: center; gap: 6px; flex: none; }
+.film-stepper select { min-width: 92px; }
 .extras-count .seg { display: flex; width: 100%; }
 .extras-count .seg button { flex: 1; padding: 0 6px; }
 .pane-head > .seg { flex: none; }

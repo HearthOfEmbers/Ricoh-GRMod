@@ -13,7 +13,8 @@
  * Halation needs to know the picture's look: the development step that reads the frame's look
  * (0x536db7d8, read at 0x536db7f8, already an adapter of image-control.ts) also stores
  * `look | level << 8 | 0x10000` in the stash word; the level of each film is fixed in the build
- * (GR III has no spare parameter for a per-film slider).
+ * (T6, nine films) or, from round 6, the film's Halation line on the camera's parameter screen
+ * (halation-screen.ts, kept per film and photo set by native/slots2.c).
  *
  * The date-imprint module is installed here only in its diagnostic form for now (test builds:
  * its setting points at a constant "on", so it prints the encoder's picture descriptors on every
@@ -101,14 +102,16 @@ export function installGr3xJpegStage(p: Gr3xJpegProgram, o: Gr3xJpegOptions) {
   }
   if (o.halation) {
     const { levels, light } = o.halation;
-    if (levels.length !== 9 || light.length !== 9 || levels.some(l => ![0, 1, 2].includes(l)))
-      throw new FirmwareError('bad-edit', 'IIIx halation: nine film levels');
+    // Nine films (T6, levels fixed in the build) or round 6's 1..20 (all on: the level comes from
+    // the camera, through the stash).
+    if (levels.length < 1 || levels.length > 20 || light.length !== levels.length || levels.some(l => ![0, 1, 2].includes(l)))
+      throw new FirmwareError('bad-edit', 'IIIx halation: film levels');
     if (light.some(l => !(l.threshold >= 0 && l.threshold <= 254 && l.escale >= 1 && l.escale <= 16384)))
       throw new FirmwareError('internal', 'IIIx halation: light of the films');
     const mask = levels.reduce((m, l, k) => (l > 0 ? m | (1 << k) : m), 0);
     const lut = p.append(halationLut());
     const ctx = p.append(new Uint8Array([
-      ...u32le([CACHE, CACHE_FLUSH_FOR_READ, CACHE_CLEAN, HEAP_ALLOC, HEAP_FREE, GR3X_HALATION_STASH, GR3X_FIRST_FILM, 9, mask, lut]),
+      ...u32le([CACHE, CACHE_FLUSH_FOR_READ, CACHE_CLEAN, HEAP_ALLOC, HEAP_FREE, GR3X_HALATION_STASH, GR3X_FIRST_FILM, levels.length, mask, lut]),
       ...paramBytes(),
       // Diagnostic builds: the status word's address after the magic (halation.c, STATUS).
       ...u32le([HALATION_MAGIC, ...(o.diagnostics ? [GR3X_HALATION_STATUS] : []), ...light.map(l => (l.threshold | (l.escale << 16)) >>> 0)]),

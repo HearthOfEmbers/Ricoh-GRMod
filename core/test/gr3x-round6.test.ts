@@ -30,4 +30,20 @@ describe.skipIf(!input)('GR III round 6: date imprint menu as GR IV', () => {
     expect(await (await Engine.open(raw)).inspect(old.bytes)).toMatchObject({ verified: true, dateStamp: true });
     expect(old.report.outputSha256).not.toBe(built.sha256);
   }, 300000);
+  it('builds 1..20 films with Halation in the camera and recognises them', async () => {
+    expect(engine.info.features.maxFilms).toBe(20);
+    expect(engine.info.slots.length).toBe(20);
+    const preset = { matrixQ13: [8192, 0, 0, 0, 8192, 0, 0, 0, 8192], curves: Array.from({ length: 3 }, () => Array.from({ length: 256 }, (_, i) => Math.round(i * 16383 / 255))) as [number[], number[], number[]] };
+    for (const n of [1, 20]) {
+      const built = await engine.buildFirmware([{ slot: n === 20 ? 'F20' : 'CY', preset, halation: 2 }], ratios, [], { filmCount: n, adjSoftFocus: true });
+      const summary = await (await Engine.open(raw)).inspect(built.file);
+      expect(summary).toMatchObject({ verified: true, adjSoftFocus: true });
+      expect(summary.slots.length).toBe(n);
+    }
+    // No films: as a build without film changes.
+    const none = await engine.buildFirmware([], ratios, [], { filmCount: 0, dateStamp: true });
+    expect((await (await Engine.open(raw)).inspect(none.file)).slots.length).toBe(0);
+    await expect(engine.buildFirmware([{ slot: 'F12', preset }], ratios, [], { filmCount: 11 })).rejects.toMatchObject({ code: 'bad-edit' });
+    await expect(engine.buildFirmware([], ratios, [], { filmCount: 21 })).rejects.toMatchObject({ code: 'bad-edit' });
+  }, 600000);
 });

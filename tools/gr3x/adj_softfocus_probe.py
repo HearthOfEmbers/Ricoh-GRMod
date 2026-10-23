@@ -86,15 +86,17 @@ def verify(data,manifest):
         # except Image Control (slot 1), which lists the added films in a film build.
         p.state(slot=slot,movie=1);n.state(slot=slot,movie=1);calls+=3
         if slot or not manifest.get('addedLooks'):assert p.call(0x531a31ac,VIEW)==n.call(0x531a31ac,VIEW),slot
-    assert max_count(p)==max_count(n)==32;calls+=2
+    # The ADJ list is as long as the longest function list: 32 (official); round 6 with more than
+    # eighteen films, Image Control's 12 + n + 2 (the list is allocated for it, 0x531a1ebc).
+    M=max_count(p);assert max_count(n)==32 and M==max(32,14+(manifest.get('filmCount') or 0));calls+=2
     # Exactly one current value for every stored byte, a damaged byte reads (and is reset) as off.
     for b in list(range(4))+[4,0x13,0xaa,0xff]:
-        p.state(byte=b);hits=[i for i in range(32) if p.call(0x531a3d94,VIEW,i)];calls+=32
+        p.state(byte=b);hits=[i for i in range(M) if p.call(0x531a3d94,VIEW,i)];calls+=M
         assert hits==[b if b<4 else 0] and c.mem_read(BYTE,1)[0]==(b if b<4 else 0),(b,hits)
-    p.state(ptr=False);assert [i for i in range(32) if p.call(0x531a3d94,VIEW,i)]==[0];calls+=32
+    p.state(ptr=False);assert [i for i in range(M) if p.call(0x531a3d94,VIEW,i)]==[0];calls+=M
     # The native draw loop asks for every index up to the largest count: Off, Low, Medium, High, then none.
-    p.state(byte=2);c.mem_write(VIEW+0x271,bytes([32]));p.call(0x531a405c,VIEW);calls+=1
-    assert [x[1] for x in p.ui if x[0]=='text']==[2,9,10,11]+[0]*28
+    p.state(byte=2);c.mem_write(VIEW+0x271,bytes([M]));p.call(0x531a405c,VIEW);calls+=1
+    assert [x[1] for x in p.ui if x[0]=='text']==[2,9,10,11]+[0]*(M-4)
     for k in range(6):
         p.state(byte=1);p.cursor=k;p.call(0x531a3100,VIEW);calls+=1
         assert c.mem_read(BYTE,1)[0]==(k if k<4 else 1)

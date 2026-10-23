@@ -114,9 +114,10 @@ def verify(data,manifest):
     added=len(manifest.get('addedLooks',[]))
     soft=1 if manifest.get('adjSoftFocus') else 0  # one text and one icon of soft focus on the ADJ lever
     date=1 if manifest.get('dateImprint') else 0  # date imprint: three texts (five as a submenu), two icons
+    hal=1 if manifest.get('halationInCamera') else 0  # round 6: Halation's name, its list icon and slider scale
     dtexts=5 if date and manifest['dateImprint'].get('form')=='submenu' else 3*date
     pics=manifest['pictures']['count'] if manifest.get('pictures') else 0  # power-off pictures: 2 + n texts, n icons
-    assert (catalog['textColumns'],catalog['iconCount'])==(786+customs+soft+dtexts+(2+pics if pics else 0)+added,671+customs+soft+2*date+pics+added)
+    assert (catalog['textColumns'],catalog['iconCount'])==(786+customs+soft+dtexts+(2+pics if pics else 0)+added+hal,671+customs+soft+2*date+pics+added+2*hal)
     for lang in range(21):
         old_root=u32(cpu,0x55002bac+lang*4);new_root=u32(cpu,catalog['textRoots']+lang*4)
         assert bytes(cpu.mem_read(old_root,786*4))==bytes(cpu.mem_read(new_root,786*4))
@@ -127,7 +128,7 @@ def verify(data,manifest):
             assert (units,lines,unused)==(len(name)+1,1,0)
             assert bytes(cpu.mem_read(text,units*2)).decode('utf-16le')==name+'\0'
     assert bytes(cpu.mem_read(0x550020fc,671*4))==bytes(cpu.mem_read(catalog['iconRoot'],671*4))
-    pixels=bytes.fromhex(manifest['iconAddition']['bytes']);assert len(pixels)==customs*9600+soft*6400+date*2*6400+pics*6400+added*6400
+    pixels=bytes.fromhex(manifest['iconAddition']['bytes']);assert len(pixels)==customs*9600+soft*6400+date*2*6400+pics*6400+added*6400+hal*(6400+400*60*4)
     for index,row in enumerate(r for r in rows if r['id']>=4):
         desc=u32(cpu,catalog['iconRoot']+row['iconId']*4)
         w,h,offset=struct.unpack('<HHI',cpu.mem_read(desc,8))

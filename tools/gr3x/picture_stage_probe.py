@@ -85,8 +85,30 @@ def run_execute(n,film,w,h,y,c,img=IMG):
 def verify(data,manifest,reference=None):
     films=manifest['addedLooks'];entries=manifest['lookEntries'];calls=0;report={}
     n=StageProbe(data,manifest)
+    round6=manifest.get('filmCount')
     # 1. Stash: every look the builder sees leaves its id, its level and the valid bit.
-    if 'jpeg' in entries and 'halation' in entries['jpeg']:
+    if round6:
+        # Round 6: the level is the film's Halation in the active photo set (slots2.c's table,
+        # planted here: State 'TLS2', loaded, films, levels at +587); none in movie mode, none for
+        # looks this build does not have, none without the table.
+        state=0x55880000;n.uc.mem_write(state,bytes(0x400))
+        n.uc.mem_write(state,struct.pack('<5I',0x32534c54,1,0,0,round6))
+        lv=lambda k,s:(k+2*s)%3
+        n.uc.mem_write(state+587,bytes(lv(k,s) for k in range(20) for s in range(3)))
+        rec=0x55890000;n.uc.mem_write(rec,bytes(0xb28));n.uc.mem_write(0x55063f34,struct.pack('<I',rec))
+        cases=0
+        for table in (True,False):
+            n.uc.mem_write(0x55804374,struct.pack('<I',state if table else 0))
+            for movie in (0,1):
+                for s in range(3):
+                    n.uc.mem_write(rec+0x44,bytes([movie]));n.uc.mem_write(rec+0x1c0,bytes([s]))
+                    for tone in NATIVE+list(range(64,84))+[0,255]:
+                        n.uc.mem_write(STASH,b'\xa5'*4);n.descriptor(tone);calls+=1;cases+=1
+                        level=lv(tone-64,s) if table and not movie and 64<=tone<64+round6 else 0
+                        assert u32(n.uc,STASH)==tone|level<<8|0x10000,(tone,s,movie,hex(u32(n.uc,STASH)))
+        n.uc.mem_write(0x55804374,b'\0'*4)
+        report['stash_states']=cases
+    elif 'jpeg' in entries and 'halation' in entries['jpeg']:
         for tone in NATIVE+[f['id'] for f in films]:
             n.uc.mem_write(STASH,b'\xa5'*4);n.descriptor(tone);calls+=1
             level=next((f['halation'] for f in films if f['id']==tone),0)
@@ -120,25 +142,29 @@ def verify(data,manifest,reference=None):
             raw=Path(reference).read_bytes();k=0
             while k<len(raw):
                 look,=struct.unpack_from('<I',raw,k);k+=4
-                expected[look]=(raw[k:k+w*h],raw[k+w*h:k+2*w*h]);k+=2*w*h
+                # Round 6: the header also says at which level the reference was made.
+                expected[look&0xff]=(raw[k:k+w*h],raw[k+w*h:k+2*w*h],look>>8);k+=2*w*h
         results={}
-        for tone in [11]+[f['id'] for f in films]:
+        runs=[(11,0)]+[(f['id'],f['halation']) for f in films]
+        if round6:runs=[(11,0),(11,2)]+[(f['id'],l) for f in films for l in ((0,expected[f['id']][2]) if f['id'] in expected else (0,1,2))]+[(64+round6,2)]
+        for tone,level in runs:
             film=next((f for f in films if f['id']==tone),None)
-            level=film['halation'] if film else 0
-            Y,C=run_execute(n,tone|level<<8|0x10000,w,h,y,c);calls+=1
+            if not film:level_in=level;level=0
+            else:level_in=level
+            Y,C=run_execute(n,tone|level_in<<8|0x10000,w,h,y,c);calls+=1
             diag='dateDiagnostics' in entries['jpeg']
             if level and 'halation' in entries['jpeg']:
-                if tone in expected and not diag:assert (Y,C)==expected[tone],tone
+                if tone in expected and not diag and expected[tone][2] in (0,level):assert (Y,C)==expected[tone][:2],tone
                 assert Y!=y and len(n.log['alloc'])>0
             elif not diag:assert (Y,C)==(y,c),tone
-            results[tone]=dict(level=level,changed_luma=sum(a!=b for a,b in zip(Y,y)),allocs=len(n.log['alloc']),frees=n.log['free'],
+            results[f'{tone}@{level_in}']=dict(level=level,changed_luma=sum(a!=b for a,b in zip(Y,y)),allocs=len(n.log['alloc']),frees=n.log['free'],
                                invalidate=n.log['invalidate'],clean=n.log['clean'],clock_reads=n.log['time'])
             assert len(n.log['alloc'])==n.log['free']
             if diag and 'halation' in entries['jpeg']:
                 # Status: format 1 accepted; film with halation: done (8), one picture (the second
                 # descriptor shares its planes); film without: 4; native look: 3.
                 st=u32(n.uc,STATUS);want=0x10000|(0x108 if level else (4 if film else 3))
-                assert st==want,(tone,hex(st),hex(want));results[tone]['status']=hex(st)
+                assert st==want,(tone,hex(st),hex(want));results[f'{tone}@{level_in}']['status']=hex(st)
             if diag:
                 # Row 0 of the diagnostics on this 320-wide picture: no stash/status (wide pictures only).
                 assert any(Y[r*w+x]!=y[r*w+x] for r in range(4,20) for x in range(4,60)),tone

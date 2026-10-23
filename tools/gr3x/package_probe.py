@@ -120,13 +120,16 @@ def verify(original,new,manifest,build,reference):
         magic=b'GR3X-T5-RECIPE\0'
         assert dec[padding:padding+len(magic)]==magic
         length=struct.unpack_from('<I',dec,padding+len(magic))[0]
-        assert length<=(512000 if revision=='T6' else 256000)
+        films=manifest.get('filmCount')   # round 6: 1..20 films (recipe up to 1.5 MB)
+        assert length<=((1500000 if films else 512000) if revision=='T6' else 256000)
         start=padding+len(magic)+4
         recipe=json.loads(dec[start:start+length])
         if revision=='T6':
-            assert recipe['schema']==3 and len(recipe['films'])<=9 and recipe['monoReplicas'] is False
-            assert len(manifest['addedLooks'])==9
-            assert [s['id'] for s in manifest['addedLooks']]==list(range(64,73))
+            assert recipe['schema']==3 and len(recipe['films'])<=(films or 9) and recipe['monoReplicas'] is False
+            assert recipe.get('filmCount')==films and (films is None or 1<=films<=20 and recipe.get('ownParameters') is True)
+            assert len(manifest['addedLooks'])==(films or 9)
+            assert [s['id'] for s in manifest['addedLooks']]==list(range(64,64+(films or 9)))
+            if films:assert all('halation' not in f for f in recipe['films'])
             assert all(s['source']=='cube' and s['nativeBase']==11 for s in manifest['addedLooks'])
         else:
             assert recipe['schema']==(1 if revision=='T5' else 2) and len(recipe['films'])<=2

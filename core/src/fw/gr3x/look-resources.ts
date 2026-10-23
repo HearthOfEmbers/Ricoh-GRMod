@@ -4,9 +4,10 @@ import { FirmwareError } from '../types';
 import { CONTENT_AREA, TILE_BG } from '../icons';
 import { gr3xOffset } from './profile';
 
-export const GR3X_FILM_NAMES = ['Film 1', 'Film 2', 'Film 3', 'Film 4', 'Film 5', 'Film 6', 'Film 7', 'Film 8', 'Film 9'] as const;
+/** Twenty film slots (round 6); the camera-tested T6 builds have the first nine. */
+export const GR3X_FILM_NAMES = Array.from({ length: 20 }, (_, i) => `Film ${i + 1}`) as readonly string[];
 // CY/CG retain their old application identities for archived projects.
-export const GR3X_FILM_IDS = ['CY', 'CG', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9'] as const;
+export const GR3X_FILM_IDS = ['CY', 'CG', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12', 'F13', 'F14', 'F15', 'F16', 'F17', 'F18', 'F19', 'F20'] as const;
 export const GR3X_LOOK_CHARS = Array.from({ length: 95 }, (_, i) => String.fromCharCode(i + 32)).join('');
 /** The camera's text rows (21) in LangCode terms: row n of the text directory is GR3X_TEXT_ROWS[n]. */
 export const GR3X_TEXT_ROWS = ['ja', 'en', 'fr', 'de', 'es', 'pt', 'it', 'nl', 'da', 'sv', 'fi', 'pl', 'cs', 'hu', 'tr', 'el', 'ru', 'ko', 'zh-TW', 'zh-CN', 'th'] as const;

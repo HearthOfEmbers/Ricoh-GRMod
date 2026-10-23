@@ -64,6 +64,8 @@ export interface State {
   wall: WallItem[];
   ratios: RatioItem[]; activeRatio?: string; ratioBackdrop: RatioBackdrop;
   soft: boolean; dateStamp: boolean; monoUnlock: boolean;
+  /** GR III (experimental): how many films the build has (1..info.features.maxFilms). */
+  filmCount: number;
   previewMode: PreviewMode; photoRev: number; activeSlot: SlotKey;
   /** Added Image Control slots, in the camera's order (none by default). */
   extras: ExtraSlot[];
@@ -80,12 +82,16 @@ export interface State {
 const SLOT_IDS: readonly SlotId[] = GR3X_FILM_IDS;
 /** GR IIIx 1.60 and GR III 2.10 (experimental): one program, one code path in GR Mod. */
 export const isGr3 = (m?: CameraModel): boolean => m === 'GR3X_HDF' || m === 'GR3_HDF';
-const availableSlots = (s: State = state): SlotId[] => s.info?.slots.map(slot => slot.id) ?? (isGr3(s.model) ? [...GR3X_FILM_IDS] : ['CY', 'CG']);
+/** The film count can be chosen (the experimental GR III build: 1..20, each film with Halation in the camera). */
+export const filmCountChoosable = (s: State = state): boolean => s.info?.family === 'gr3x' && (s.info.features.maxFilms ?? 9) > 9;
+/** The slots of the open firmware the page shows: on the experimental GR III build the first `filmCount`. */
+export const shownSlots = (s: State = state): FirmwareInfo['slots'] => (s.info ? (filmCountChoosable(s) ? s.info.slots.slice(0, s.filmCount) : s.info.slots) : []);
+const availableSlots = (s: State = state): SlotId[] => s.info ? shownSlots(s).map(slot => slot.id) : (isGr3(s.model) ? [...GR3X_FILM_IDS] : ['CY', 'CG']);
 const emptySlot = (): SlotState => ({ names: {}, icon: { mode: 'keep', text: '', style: 'film' } });
 const emptySlots = (): Record<SlotId, SlotState> => Object.fromEntries(SLOT_IDS.map(id => [id, emptySlot()])) as Record<SlotId, SlotState>;
 let state: State = {
   ready: false, page: 'ic', fwBusy: false, model: 'HDF', lang: 'zh-CN',
-  slots: emptySlots(), extras: [], wall: [], ratios: [], ratioBackdrop: 'photo', soft: false, dateStamp: false, monoUnlock: false, previewMode: 'photo', photoRev: 0, activeSlot: 'CY', volumes: [], bridgeOpen: false,
+  slots: emptySlots(), extras: [], wall: [], ratios: [], ratioBackdrop: 'photo', soft: false, dateStamp: false, monoUnlock: false, filmCount: 9, previewMode: 'photo', photoRev: 0, activeSlot: 'CY', volumes: [], bridgeOpen: false,
   copySource: 'card', parked: [], backups: [], copySel: [], copyInfo: {}, builds: [], showAll: false, toasts: [], onlineOpen: false, toursSeen: [],
 };
 const listeners = new Set<() => void>();
@@ -161,7 +167,7 @@ async function saveProject(): Promise<void> {
     extras: s.extras.map((x) => ({ key: x.key, name: x.name, preset: x.preset ? { fileName: x.preset.fileName, kind: x.preset.kind } : null, icon: { mode: x.icon.mode, text: x.icon.text, style: x.icon.style, image: x.icon.image }, ...(x.halation ? { halation: x.halation } : {}) })),
     wall: s.wall.map((w) => ({ id: w.id, name: w.name, kind: 'image', width: w.width, height: w.height, crop: w.crop, ...(w.menuName !== undefined ? { menuName: w.menuName } : {}), ...(w.menuId ? { menuId: w.menuId } : {}) })),
     ratios: s.ratios.map((r) => ({ id: r.id, ratio: r.ratio, name: r.name })),
-    soft: s.soft, dateStamp: s.dateStamp, monoUnlock: s.monoUnlock,
+    soft: s.soft, dateStamp: s.dateStamp, monoUnlock: s.monoUnlock, filmCount: s.filmCount,
     tours: s.toursSeen, toursV: 2,
   };
   try { await host.storeSet('project.json', JSON.stringify(doc)); } catch (e) { console.warn('save failed', e); }
@@ -194,6 +200,7 @@ export async function init(): Promise<void> {
       set({ ratios, activeRatio: ratios[0]?.id, page: doc.page === 'wall' || doc.page === 'copies' || doc.page === 'ratio' || doc.page === 'ic' ? doc.page : doc.page === 'script' ? 'wall' : 'ic', model: ['GR3_HDF', 'GR3X_HDF', 'HDF', 'STANDARD', 'MONO'].includes(doc.model) ? doc.model : 'HDF', lang: (LANGS as readonly string[]).includes(doc.lang) ? doc.lang : 'zh-CN', fwName: doc.fwName, showAll: !!doc.showAll, slots, extras, previewMode: doc.previewMode === 'swatch' ? 'swatch' : 'photo', ratioBackdrop: doc.ratioBackdrop === 'gray' ? 'gray' : 'photo',
         soft: doc.soft === true || (!!doc.softFocus && typeof doc.softFocus === 'object' && Object.keys(doc.softFocus).length > 0),
         dateStamp: doc.dateStamp === true, monoUnlock: doc.monoUnlock === true,
+        filmCount: Number.isInteger(doc.filmCount) && doc.filmCount >= 0 && doc.filmCount <= GR3X_FILM_IDS.length ? doc.filmCount : 9,
         // GR Mod 0.8 changed the power-off page: its tour (which now says where the pictures are chosen) shows once more
         toursSeen: TOUR_IDS.filter((id) => Array.isArray(doc.tours) && doc.tours.includes(id) && (id !== 'wall' || doc.toursV >= 2)) });
       const fwRaw = await host.storeGet('firmware.bin');
@@ -714,6 +721,16 @@ export function removeRatio(id: string): void {
   ratiosChanged(true);
 }
 /** GR III / IIIx: a film's halation level (built in; the camera has no slider for it). */
+/** The experimental GR III build: how many films (1..maxFilms); the active slot stays among them. */
+export function setFilmCount(n: number): void {
+  const max = state.info?.features.maxFilms ?? 9;
+  const want = Math.max(0, Math.min(max, Math.round(n)));
+  set((s) => {
+    const ids = (s.info?.slots ?? []).slice(0, want).map((x) => x.id);
+    return { filmCount: want, activeSlot: ids.includes(s.activeSlot as SlotId) ? s.activeSlot : (ids[Math.max(0, want - 1)] ?? 'CY') };
+  });
+  scheduleSave();
+}
 export function setFilmHalation(id: SlotId, level: 0 | 1 | 2): void {
   set((s) => ({ slots: { ...s.slots, [id]: { ...s.slots[id], halation: level || undefined } } }));
   scheduleSave();
@@ -795,7 +812,8 @@ export function pendingChanges(s: State = state): SlotChange[] {
       if (v && v !== off.names[lang].text && !nameProblem(s.info, id, lang, v)) names[lang] = v;
     }
     if (Object.keys(names).length) { req.names = names; parts.push(`${t('name')} ${Object.values(names).join(' / ')}`); labels.push(`${t('name')} “${Object.values(names)[0]}”`); }
-    if (s.info.family === 'gr3x' && sl.halation) { req.halation = sl.halation; parts.push(`${t('halation')} ${t(sl.halation === 2 ? 'haloStrong' : 'haloWeak')}`); labels.push(t('halation')); }
+    // The experimental GR III build: Halation is set in the camera (the level here is the preview's).
+    if (s.info.family === 'gr3x' && sl.halation && !filmCountChoosable(s)) { req.halation = sl.halation; parts.push(`${t('halation')} ${t(sl.halation === 2 ? 'haloStrong' : 'haloWeak')}`); labels.push(t('halation')); }
     if (parts.length) out.push({ id, parts, labels, request: req });
   }
   return out;
@@ -877,12 +895,14 @@ export async function outputFirmware(dest: Dest, stock = false): Promise<void> {
   const noPictures = stock || state.info?.family === 'gr3x';
   if (!noPictures && state.wall.length > 0 && !menuReady()) { toast(t('wallMenuIncomplete'), 'error'); return; }
   const pictures = noPictures ? [] : menuPictures();
-  if (!stock && changes.length === 0 && ratios.length === 0 && !soft && !dateStamp && !monoUnlock && extras.length === 0 && pictures.length === 0) { toast(t('nothingToDo'), 'info'); return; }
+  const films = filmCountChoosable() ? state.filmCount : 0;
+  if (!stock && changes.length === 0 && ratios.length === 0 && !soft && !dateStamp && !monoUnlock && extras.length === 0 && pictures.length === 0 && films === 0) { toast(t('nothingToDo'), 'info'); return; }
   if (stock && !(await askOfficial([t('copyOfficial')]))) return;
   if (dest.kind === 'card' && !stock) {
     const lines = changes.map((c) => `${state.info?.family === 'gr3x' ? (state.slots[c.id].names[state.lang] || state.info.slots.find(s => s.id === c.id)?.defaultName || c.id) : t(('slot' + c.id) as Key)}  ·  ${c.labels.join(' / ')}`);
     if (ratios.length) lines.push(t('ratioLine', { n: ratios.length, l: ratios.map((r) => r.name).join(' / ') }));
     if (soft) lines.push(sourceInfo.features.softFocus === 'clarity' ? t('softLine', { l: softText(GR3X_SOFT_FOCUS) }) : t('softAdjLine'));
+    if (films) lines.push(t('filmCountLine', { n: films }));
     if (dateStamp) lines.push(t('dateLine'));
     if (monoUnlock) lines.push(t(state.info?.family === 'gr3x' ? 'gr3xReplicaLine' : 'monoLine'));
     if (extras.length) lines.push(t('extraLine', { n: extras.length, l: extras.map((x) => (x.halation ? `${x.name} (${t('halation')})` : x.name)).join(' / ') }));
@@ -898,7 +918,8 @@ export async function outputFirmware(dest: Dest, stock = false): Promise<void> {
       set({ busy: t('building') });
       const clarity = soft && sourceInfo.features.softFocus === 'clarity' ? [...GR3X_SOFT_FOCUS] : [];
       const built = await engine.build(changes.map((c) => c.request), ratios, clarity,
-        { adjSoftFocus: soft && sourceInfo.features.softFocus === 'adj', dateStamp, monoUnlock, ...(extras.length ? { extraSlots: extras } : {}), ...(pictures.length ? { shutdownPictures: pictures } : {}) });
+        { adjSoftFocus: soft && sourceInfo.features.softFocus === 'adj', dateStamp, monoUnlock, ...(extras.length ? { extraSlots: extras } : {}), ...(pictures.length ? { shutdownPictures: pictures } : {}),
+          ...(films ? { filmCount: films } : {}) });
       if (!Object.values(built.checks).every((v) => v === true)) throw new EngineError('selfcheck-failed', 'self-check');
       file = built.file;
       void recordBuild(file, changes);

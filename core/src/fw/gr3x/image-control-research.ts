@@ -14,8 +14,9 @@ import { GR3X_160, openGr3xOfficial } from './profile';
 import { GR3X_TEXT_ROWS, gr3xAllowedChars, validateGr3xLookNameFor } from './look-resources';
 
 export const GR3X_LOOK_RESEARCH = {
-  // The native list has 24 widgets: twelve originals, nine films and Custom 1/2.
-  firstId: 64, maxAdditions: 9,
+  // The native list has 12 + n + 2 widgets: twelve originals, n films and Custom 1/2 (nine films
+  // in the camera-tested T6 builds; round 6 up to twenty, looks 64..83).
+  firstId: 64, maxAdditions: 20,
   count: 0x532c2a9c, countHook: 0x532c2acc,
   item: 0x532c2c80, index: 0x532c2f08, maximumCount: 0x532c2b7c,
   name: 0x532a985c, icon: 0x532a9988, shortName: 0x532922b4,
@@ -43,9 +44,18 @@ const unhex = (s: string) => Uint8Array.from(s.match(/../g) ?? [], x => parseInt
 const hex = (b: Uint8Array) => Array.from(b, x => x.toString(16).padStart(2, '0')).join('');
 const addr = (r: number, a: number) => `movw r${r},#${a & 65535};movt r${r},#${a >>> 16};`;
 
-export async function buildGr3xLookMenuResearch(raw: Uint8Array, looks: readonly Gr3xResearchLook[], displayIcons = false, ratioMenu?: readonly Gr3xMenuRatio[], features: Gr3xAdjFeatures = {}) {
+/** More texts (one per camera text row, GR3X_TEXT_ROWS order) and icons after the looks' own. */
+export interface Gr3xLookExtras {
+  texts: readonly (readonly string[])[];
+  icons: readonly { w: number; h: number; pixels: Uint8Array }[];
+}
+
+export async function buildGr3xLookMenuResearch(raw: Uint8Array, looks: readonly Gr3xResearchLook[], displayIcons = false, ratioMenu?: readonly Gr3xMenuRatio[], features: Gr3xAdjFeatures = {}, extras?: Gr3xLookExtras) {
   if (!looks.length || looks.length > GR3X_LOOK_RESEARCH.maxAdditions)
-    throw new FirmwareError('bad-edit', 'research menu requires 1..9 extra looks');
+    throw new FirmwareError('bad-edit', 'research menu requires 1..20 extra looks');
+  const extraTexts = extras?.texts ?? [], extraIcons = extras?.icons ?? [];
+  if (extraTexts.some(t => t.length !== 21) || extraIcons.some(i => i.pixels.length !== i.w * i.h * 4 || i.w > 0xffff || i.h > 0xffff))
+    throw new FirmwareError('internal', 'IIIx extra texts / icons');
   const names = new Set<string>();
   for (const look of looks) {
     // Names use one native text line. Do not silently truncate a user-supplied name.
@@ -112,7 +122,7 @@ export async function buildGr3xLookMenuResearch(raw: Uint8Array, looks: readonly
     patch(hi, movWord(r, old >>> 16, true), movWord(r, next >>> 16, true), what);
   };
 
-  const columns = base.catalogs.textColumns + looks.length;
+  const columns = base.catalogs.textColumns + looks.length + extraTexts.length;
   const rows = Array.from({ length: m.languages }, (_, language) => {
     const row = new Uint8Array(columns * 4);
     row.set(read(u32(base.catalogs.textRoots + language * 4), base.catalogs.textColumns * 4));
@@ -141,6 +151,17 @@ export async function buildGr3xLookMenuResearch(raw: Uint8Array, looks: readonly
       new DataView(row.buffer).setUint32(slot.textId * 4, recordFor(text), true);
     });
   }
+  const extraTextIds = extraTexts.map((names, k) => {
+    const id = base.catalogs.textColumns + looks.length + k;
+    rows.forEach((row, language) => {
+      const text = names[language];
+      if (language > 0) validateGr3xLookNameFor(text, gr3xAllowedChars(decoded, GR3X_TEXT_ROWS[language]));
+      const string = new Uint8Array((text.length + 1) * 2), view = new DataView(string.buffer);
+      for (let i = 0; i < text.length; i++) view.setUint16(i * 2, text.charCodeAt(i), true);
+      new DataView(row.buffer).setUint32(id * 4, append(Uint8Array.of(text.length + 1, 1, 0, 0, ...wordsToBytes([append(string)]))), true);
+    });
+    return id;
+  });
   const textRoots = append(wordsToBytes(rows.map(row => append(row))));
   for (const [lo, hi] of m.textRootSites) pair(lo, hi, 3, m.textRoots, textRoots, 'research: extended look language directory');
   for (const at of m.textBounds) patch(at, movWord(3, m.textCount - 1), movWord(3, columns - 1), 'research: extended look text bound');
@@ -153,7 +174,8 @@ export async function buildGr3xLookMenuResearch(raw: Uint8Array, looks: readonly
   const nativeOffset = film.getUint32(4, true) * 4;
   if (nativeOffset + 6400 > icons.size) throw new FirmwareError('unexpected-layout', 'native film icon out of bounds');
   const nativeIcon = decoded.slice(icons.offset + nativeOffset, icons.offset + nativeOffset + 6400);
-  const iconCatalog = new Uint8Array((base.catalogs.iconCount + looks.length) * 4);
+  const iconTotal = base.catalogs.iconCount + looks.length + extraIcons.length;
+  const iconCatalog = new Uint8Array(iconTotal * 4);
   iconCatalog.set(read(base.catalogs.iconRoot, base.catalogs.iconCount * 4));
   const pixelParts: Uint8Array[] = [unhex(base.iconAddition.bytes)];
   let pixelLength = pixelParts[0].length;
@@ -164,9 +186,16 @@ export async function buildGr3xLookMenuResearch(raw: Uint8Array, looks: readonly
     new DataView(iconCatalog.buffer).setUint32(slot.iconId * 4, pointer, true);
     pixelParts.push(px); pixelLength += px.length;
   });
+  const extraIconIds = extraIcons.map((icon, k) => {
+    const id = base.catalogs.iconCount + looks.length + k;
+    const pointer = append(Uint8Array.of(icon.w & 255, icon.w >> 8, icon.h & 255, icon.h >> 8, ...wordsToBytes([(icons.size + pixelLength) / 4])));
+    new DataView(iconCatalog.buffer).setUint32(id * 4, pointer, true);
+    pixelParts.push(icon.pixels); pixelLength += icon.pixels.length;
+    return id;
+  });
   const iconRoot = append(iconCatalog);
   for (const [lo, r] of m.iconRootSites) pair(lo, lo + 4, r, m.iconRoot, iconRoot, 'research: extended look icon directory');
-  for (const [at, r] of m.iconBounds) patch(at, movWord(r, m.iconCount - 1), movWord(r, base.catalogs.iconCount + looks.length - 1), 'research: extended look icon bound');
+  for (const [at, r] of m.iconBounds) patch(at, movWord(r, m.iconCount - 1), movWord(r, iconTotal - 1), 'research: extended look icon bound');
 
   const hookLookup = (entry: number, nativeWord: number, key: 'textId' | 'iconId') => {
     const target = code(slots.map(s => `cmp r1,#${s.id};movweq r0,#${s[key]};bxeq lr;`).join('') +
@@ -202,7 +231,8 @@ export async function buildGr3xLookMenuResearch(raw: Uint8Array, looks: readonly
   return {
     ...base, kind: 'gr3x-image-control-menu-research' as const,
     sites, append: { address: base.append.address, bytes: hex(payload) },
-    catalogs: { ...base.catalogs, textRoots, textColumns: columns, iconRoot, iconCount: base.catalogs.iconCount + slots.length },
+    catalogs: { ...base.catalogs, textRoots, textColumns: columns, iconRoot, iconCount: iconTotal },
+    extraTextIds, extraIconIds,
     iconAddition: { ...base.iconAddition, bytes: hex(pixels) },
     entries: { ...base.entries, lookName, lookIcon, lookShortName, ...(lookTileIcon ? { lookTileIcon } : {}), lookCount: count, lookItem: item, lookIndex: index, lookMaximum: maximum },
     addedLooks: slots, flashable: false as const, cameraUpdateCandidate: false as const,

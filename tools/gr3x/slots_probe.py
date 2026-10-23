@@ -120,6 +120,7 @@ def fresh_record(rng):
     return rec
 
 def verify(data,manifest,seed=1105,steps=4000):
+    if manifest.get('filmCount'):return verify_v2(data,manifest)
     n=SlotsProbe(data,manifest);rng=random.Random(seed);cpu=n.uc;calls=0
     for s,at in enumerate(STYLE_SETTERS):assert any(x['address']==at for x in manifest['sites'])
     # 1. First start without a table: every look starts with the values the fields hold.
@@ -195,6 +196,129 @@ def verify(data,manifest,seed=1105,steps=4000):
         damaged_tables_rejected=len(damaged),no_memory_and_no_store_fall_back=True,
         module_bytes=len(bytes.fromhex(manifest['append']['bytes'])),hardware_tested=False,
         scope='Patched native look setters, native start-up fill; load/save, record store and allocator substituted. Movie sets and user modes not covered.')
+
+# ------------------------------------------------------------------ round 6 (native/slots2.c)
+SETTINGS=0x55063f34
+V2_WORDS=3+157+1
+
+def record_v2(values,levels):
+    """values[owner][set][j] (21 owners), levels[film][set] (20 films) -> a correct version-2 record."""
+    t=bytes(values[o][s][j] for o in range(21) for s in range(3) for j in range(9))+bytes(levels[f][s] for f in range(20) for s in range(3))+bytes(1)
+    words=[0x33505247,2,627]+list(struct.unpack('<157I',t))
+    return struct.pack('<%dI'%V2_WORDS,*words,checksum(words))
+
+def record_v1(values):
+    t=bytes(values[o][s][j] for o in range(10) for s in range(3) for j in range(9))+bytes(2)
+    words=[0x33505247,1,270]+list(struct.unpack('<68I',t))
+    return struct.pack('<72I',*words,checksum(words))
+
+def verify_v2(data,manifest,seed=1106,steps=5000):
+    """Round 6: up to twenty films, their Halation levels per photo set, version-1 take-over and the
+    start-up check of looks a build does not have."""
+    films=manifest['filmCount'];n=SlotsProbe(data,manifest);rng=random.Random(seed+films);cpu=n.uc;calls=0
+    own=manifest['lookEntries']['ownParameters'];fn=lambda name:own['module']+own['exports'][name]
+    assert set(own['exports'])=={'sp_style','sp_after_load','sp_after_save','sp_hal','sp_hal_put','sp_hal_text','sp_hal_level'}
+    looks=list(range(11,23))+list(range(64,64+films))
+    def owner(look):return 0 if look==11 else look-63 if 64<=look<64+films else None
+    cpu.mem_write(SETTINGS,struct.pack('<I',REC))
+    # 1. First start without a table.
+    rec=fresh_record(rng)
+    for s in range(3):
+        for j in range(9):rec[field(j,s)]=rng.randrange(9)
+    rec[0x1c2+2]=64+films-1;rec[0x44]=0;rec[0x1c0]=0
+    cpu.mem_write(REC,bytes(rec));assert n.boot();calls+=1
+    model=[[[rec[field(j,s)] for j in range(9)] for s in range(3)] for _ in range(21)]
+    levels=[[0]*3 for _ in range(20)]
+    selected=[rec[0x1c2+2*s] for s in range(3)]
+    flags=bytes(n.rec()[field(j,s)+1] for s in range(3) for j in range(9))
+    owners=lambda:[owner(l) if owner(l) is not None else 0 for l in selected]
+    counts=dict(selects=0,edits=0,levels_set=0,level_reads=0,power_cycles=0,writes=0)
+    for step in range(steps):
+        op=rng.random()
+        if op<0.35:
+            s=rng.randrange(3);look=rng.choice(looks);n.select(s,look);calls+=1;selected[s]=look;counts['selects']+=1
+        elif op<0.6:
+            s=rng.randrange(3);j=rng.randrange(9);v=rng.randrange(9)
+            cpu.mem_write(REC+field(j,s),bytes([v]));model[owners()[s]][s][j]=v;counts['edits']+=1
+        elif op<0.78:
+            # The parameter screen moves a film's Halation slider (or asks with a stray value / look / set).
+            look=rng.choice(looks+[63,64+films,83,84,255]);s=rng.choice([0,1,2,2,3,255]);v=rng.choice([0,1,2,2,3,255])
+            n.call(fn('sp_hal_put'),look,s,v);calls+=1
+            if 64<=look<64+films and s<3 and v<3:levels[look-64][s]=v;counts['levels_set']+=1
+        elif op<0.95:
+            look=rng.choice(looks+[64+films,83,0]);s=rng.randrange(4)
+            want=levels[look-64][s] if 64<=look<64+films and s<3 else 0
+            assert n.call(fn('sp_hal'),look,s)==want,(look,s)
+            buf=REGION+0x8000;cpu.mem_write(buf,b'\xa5'*4);n.call(fn('sp_hal_text'),look,s,buf)
+            assert bytes(cpu.mem_read(buf,4))==[b'--\0',b'W\0\0',b'S\0\0'][want]+b'\xa5'
+            # The development step: the active photo set, nothing in movie mode.
+            act=rng.randrange(3);movie=rng.random()<0.2
+            cpu.mem_write(REC+0x1c0,bytes([act]));cpu.mem_write(REC+0x44,bytes([movie]))
+            lw=levels[look-64][act] if 64<=look<64+films and not movie else 0
+            assert n.call(fn('sp_hal_level'),look)==lw;calls+=3;counts['level_reads']+=1
+            cpu.mem_write(REC+0x44,b'\0')
+        else:
+            before=len(n.writes);n.power_off();calls+=1
+            if len(n.writes)>before:
+                counts['writes']+=1;table=n.writes[-1];words=struct.unpack('<%dI'%V2_WORDS,table)
+                assert words[:3]==(0x33505247,2,627) and words[-1]==checksum(list(words[:-1]))
+                stored=table[12:12+627]
+                for s in range(3):
+                    for o in range(21):
+                        if o!=owners()[s]:assert list(stored[(o*3+s)*9:(o*3+s)*9+9])==model[o][s],(o,s)
+                assert [list(stored[567+f*3:570+f*3]) for f in range(20)]==levels
+            kept=bytes(n.rec());cpu.mem_write(GAP,b'\xa5'*4)
+            assert n.boot();calls+=1;assert bytes(n.rec())==kept;counts['power_cycles']+=1
+        for s in range(3):assert n.fields(s)==model[owners()[s]][s],(step,s)
+        assert bytes(n.rec()[field(j,s)+1] for s in range(3) for j in range(9))==flags
+        assert [n.rec()[0x1c2+2*s] for s in range(3)]==selected
+    # 2. A version-1 record (nine films) is taken over: owners 0..9 its values, the others the
+    # fields' values, Halation off.
+    v1=[[[rng.randrange(9) for j in range(9)] for s in range(3)] for o in range(10)]
+    n.store={12:record_v1(v1)};rec=fresh_record(rng)
+    for s in range(3):
+        for j in range(9):rec[field(j,s)]=v1[0][s][j]
+    cpu.mem_write(REC,bytes(rec));cpu.mem_write(GAP,b'\xa5'*4);n.writes=[];assert n.boot();calls+=1
+    for look in [64,72]+([64+films-1] if films>9 else []):
+        if look>=64+films:continue
+        n.select(0,look);calls+=1
+        want=v1[look-63][0] if look<=72 else v1[0][0]
+        assert n.fields(0)==want,(look,n.fields(0),want)
+        assert n.call(fn('sp_hal'),look,0)==0
+    n.select(0,11);n.power_off();assert n.writes and len(n.writes[-1])==V2_WORDS*4;calls+=2
+    # 3. A set left on a film this build does not have gets Standard and Standard's values back.
+    stale=[]
+    if films<20:
+        vals=[[[rng.randrange(9) for j in range(9)] for s in range(3)] for o in range(21)]
+        lv=[[rng.randrange(3) for s in range(3)] for f in range(20)]
+        n.store={12:record_v2(vals,lv)};rec=fresh_record(rng);missing=64+films+rng.randrange(20-films)
+        rec[0x1c2+2]=missing
+        for j in range(9):rec[field(j,1)]=(j*2)%9
+        cpu.mem_write(REC,bytes(rec));cpu.mem_write(GAP,b'\xa5'*4);assert n.boot();calls+=1
+        assert n.rec()[0x1c2+2]==11 and n.fields(1)==vals[0][1]
+        assert n.rec()[0x1c2]==11 and n.rec()[0x1c2+4]==11
+        assert n.call(fn('sp_hal'),64,2)==lv[0][2]
+        n.writes=[];n.power_off();t=n.writes[-1][12:12+627];o=missing-63
+        assert list(t[(o*3+1)*9:(o*3+1)*9+9])==[(j*2)%9 for j in range(9)]   # the missing film keeps the values it had
+        stale.append(missing);calls+=2
+    # 4. Damaged tables (checksum, length, version, a level of 3, a value above 0x20) are not used.
+    vals=[[[rng.randrange(9) for j in range(9)] for s in range(3)] for o in range(21)]
+    good=record_v2(vals,[[1]*3 for _ in range(20)])
+    def resign(b):w=list(struct.unpack('<%dI'%V2_WORDS,b));w[-1]=checksum(w[:-1]);return struct.pack('<%dI'%V2_WORDS,*w)
+    bad=[good[:-4]+bytes([good[-4]^1])+good[-3:],good[:-4],resign(good[:4]+b'\3'+good[5:]),
+         resign(good[:12+567]+b'\3'+good[12+568:]),resign(good[:12]+b'\x21'+good[13:])]
+    for b in bad:
+        n.store={12:b};rec=fresh_record(rng)
+        for j in range(9):rec[field(j,0)]=j%9
+        cpu.mem_write(REC,bytes(rec));cpu.mem_write(GAP,b'\xa5'*4);assert n.boot();calls+=1
+        n.select(0,64);calls+=1;assert n.fields(0)==[j%9 for j in range(9)] and n.call(fn('sp_hal'),64,0)==0
+    # 5. No memory: everything stays out of the way (levels 0, nothing stored).
+    n.alloc_ok=False;n.store={};cpu.mem_write(GAP,b'\xa5'*4);assert n.boot()==0
+    n.call(fn('sp_hal_put'),64,0,2);assert n.call(fn('sp_hal'),64,0)==0 and n.call(fn('sp_hal_level'),64)==0
+    n.alloc_ok=True;calls+=4
+    return dict(schema=2,rtos_sha256=hashlib.sha256(data).hexdigest(),films=films,calls=calls,seed=seed,steps=steps,**counts,
+        version1_taken_over=True,missing_film_sets_reset=stale,damaged_tables_rejected=len(bad),no_memory_falls_back=True,
+        hardware_tested=False,scope='Patched native look setters, native start-up fill; module entry points called directly; load/save, store and allocator substituted.')
 
 if __name__=='__main__':
     p=argparse.ArgumentParser(description=__doc__)
