@@ -590,6 +590,8 @@ const validMenuId = (v: unknown): v is number => typeof v === 'number' && Number
 function newMenuId(wall: readonly WallItem[]): number {
   for (;;) {
     const id = 1 + Math.floor(Math.random() * 0xfffffffe);
+    // Never one of GR III round 5's picture numbers (k << 24, k <= 8), which share the stored bytes.
+    if ((id & 0xffffff) === 0 && id >>> 24 <= 8) continue;
     if (!wall.some((w) => w.menuId === id)) return id;
   }
 }

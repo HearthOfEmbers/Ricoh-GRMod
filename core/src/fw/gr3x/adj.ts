@@ -10,7 +10,7 @@ import { installGr3xAdjSoftFocus } from './adj-softfocus';
 import { DATESTAMP_LONG_TEXT, DATESTAMP_NAMES, DATESTAMP_ON_OFF_NAMES, DATESTAMP_SHORT_TEXT, DATESTAMP_STYLE_NAMES, drawStyleIcon } from '../aspect/datestamp-menu';
 import type { Gr3xDateForm } from './datestamp';
 import { installGr3xDateImprintStage, installGr3xMenuAdditions } from './datestamp';
-import { checkGr3xPictures, gr3xPictureIcon, GR3X_PICTURE_LINE_NAMES, GR3X_PICTURE_ORIGINAL, installGr3xPictureStage, GR3X_JPEG_TABLE_COUNT } from './shutdown';
+import { GR3X_MAX_PICTURES, checkGr3xPictures, gr3xPictureIcon, GR3X_PICTURE_LINE_NAMES, GR3X_PICTURE_ORIGINAL, installGr3xPictureStage, GR3X_JPEG_TABLE_COUNT } from './shutdown';
 import { GR3X_FACTORY_PICTURES, GR3X_PICTURE_NAMES, GR3X_PREVIEW_H, GR3X_PREVIEW_W, GR3X_TYPE_NAMES, gr3xPreview, installGr3xEndScreen } from './endscreen';
 import { readRes, resFile } from '../aspect/res';
 import type { Gr3xPictureSpec } from './shutdown';
@@ -81,7 +81,9 @@ export async function buildGr3xAdjResearch(raw: Uint8Array, ratioMenu: readonly 
   if (pictures.length) checkGr3xPictures(pictures);
   const pictureCount = pictures.length;
   const pictureSub = pictureCount > 0 && features.pictureMenu === 'submenu';
-  if (pictureSub && (new Set(pictures.map(x => x.id)).size !== pictureCount || pictures.some(x => !(Number.isInteger(x.id) && x.id! >= 1 && x.id! <= 0xffffffff))))
+  if (pictureSub && (new Set(pictures.map(x => x.id)).size !== pictureCount || pictures.some(x => !(Number.isInteger(x.id) && x.id! >= 1 && x.id! <= 0xffffffff) ||
+    // Round 5 kept a picture number k (1..8) in the top byte the identity shares: never an identity.
+    ((x.id! & 0xffffff) === 0 && x.id! >>> 24 <= GR3X_MAX_PICTURES))))
     fail('IIIx power-off picture identities');
   const geometry = await buildGr3xExperiment(raw, ratioMenu);
   const menu = geometry.menu, count = menu.length, spelled = count === 9 ? 'nine' : String(count);

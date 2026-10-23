@@ -136,6 +136,9 @@ export async function buildGr3xImageControls(raw: Uint8Array, options: Gr3xLookO
   if (round6 && (!extended || options.ownParameters !== true || options.jpegDiagnostics || !Number.isInteger(options.filmCount) ||
       options.filmCount! < 1 || options.filmCount! > GR3X_MAX_FILMS || options.films?.some(f => f.halation !== undefined)))
     throw new FirmwareError('bad-edit', 'IIIx film count: 1..20 films with their own parameters (Halation is set in the camera)');
+  // The diagnostic halation status word is the End Screen list's mode word (0x5580437c).
+  if (options.jpegDiagnostics && features.pictures?.length && features.pictureMenu === 'submenu')
+    throw new FirmwareError('bad-edit', 'IIIx JPEG diagnostics and the End Screen submenu are not combined');
   const capacity = round6 ? options.filmCount! : extended ? 9 : 2;
   if ((options.films?.length ?? 0) > capacity || (extended && options.monoReplicas))
     throw new FirmwareError('bad-edit', round6 ? 'more films than the film count' : 'T6 supports nine film slots without legacy monochrome replicas');
