@@ -186,7 +186,7 @@ function padJpeg(jpeg: Uint8Array, length: number): Uint8Array {
   return out;
 }
 
-/** The list icon of a picture: 40 x 40 RGBA, the picture scaled to 38 x 25 (area average) on the
+/** The list icon of a picture: 40 x 40 RGBA, the picture scaled to 36 x 24 (area average) on the
  * dark tile of the camera's menu icons, a grey frame, fully opaque inside. */
 export function gr3xPictureIcon(jpeg: Uint8Array): Uint8Array {
   const { width, height, rgb } = decodeBaselineJpeg(jpeg);

@@ -55,7 +55,7 @@ async function buildContainer(raw: Uint8Array, purpose: 'research' | 'hardware-t
   const rtosGrowth = roundFrame(addition.length + recipe.length + record.length + 4);
   const iconGrowth = roundFrame(pixels.length);
   const rtosEnd = rtos.offset + rtos.size, iconEnd = icon.offset + icon.size;
-  // Power-off pictures: RES records (two frames each) before the last RES file (shutdown.ts).
+  // Power-off pictures: RES records (two frames each) after the A: files, before the first B: file (shutdown.ts).
   const pictures = features.pictures ?? [];
   let resAt = 0, resCountOffset = 0, resCount = 0, resBlock: Uint8Array = new Uint8Array();
   if (pictures.length) {
