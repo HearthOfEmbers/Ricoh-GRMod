@@ -175,7 +175,7 @@ def verify_list(p,data,manifest,official,report):
     rec=bytes(c.mem_read(table+118*REC_SIZE,REC_SIZE));f=struct.unpack('<16I',rec)
     assert f[0]==0x10000 and f[1]==ids['name'] and f[2:10]==(e['dateCount'],0,e['dateDraw'],0,e['dateSet'],0,e['dateIsCurrent'],0) and not any(f[10:])
     assert p.call(e['dateCount'],0)==3
-    for v,(icon,text) in enumerate(((344,2),(ids['iconShort'],ids['short']),(ids['iconLong'],ids['long']))):
+    for v,(icon,text) in enumerate(((296,2),(ids['iconShort'],ids['short']),(ids['iconLong'],ids['long']))):
         p.ui=[];p.call(e['dateDraw'],0x62056000,0x6205a000,v);calls+=1
         assert p.ui==[(LIST_ITEM,0x6205a000,icon,text)],(v,p.ui)
     states={}
@@ -184,7 +184,7 @@ def verify_list(p,data,manifest,official,report):
         norm=stored if stored in (1,3) else 0
         assert cur==[int(norm==0),int(norm==1),int(norm==3)] and p.byte()==norm,(stored,cur,p.byte())
         p.ui=[];p.setting(stored);p.call(e['dateLine'],0x62056000,0x6205b000);calls+=1
-        icon={0:344,1:ids['iconShort'],3:ids['iconLong']}[norm]
+        icon={0:296,1:ids['iconShort'],3:ids['iconLong']}[norm]
         assert p.ui==[(LINE_ICON,0x6205b000,icon,p.ui[0][3]),(TITLE,0x6205b000,ids['name'],ids['name'])],(stored,p.ui)
         states[stored]=norm
     for v,byte in ((0,0),(1,1),(2,3)):
@@ -238,7 +238,7 @@ def verify_submenu(p,data,manifest,official,report):
         assert f[0]==0x10000 and f[1]==title and f[2:10]==(cnt,0,draw,0,st,0,cur,0) and not any(f[10:])
         h=struct.unpack('<16I',horizon);assert h[0]==f[0] and h[3]==f[3]
     assert p.call(e['dateCount'],0)==2;calls+=1
-    for draw,values in ((e['dateDrawOnOff'],((344,2),(345,1))),(e['dateDrawStyle'],((ids['iconShort'],ids['short']),(ids['iconLong'],ids['long'])))):
+    for draw,values in ((e['dateDrawOnOff'],((296,2),(297,1))),(e['dateDrawStyle'],((ids['iconShort'],ids['short']),(ids['iconLong'],ids['long'])))):
         for v,(icon,text) in enumerate(values):
             p.ui=[];p.call(draw,0x62056000,0x6205a000,v);calls+=1
             assert p.ui==[(LIST_ITEM,0x6205a000,icon,text)],(v,p.ui)
@@ -262,7 +262,7 @@ def verify_submenu(p,data,manifest,official,report):
         assert sw==[int(norm&1==0),int(norm&1==1)] and p.byte()==norm,(stored,sw)
         p.setting(stored);sy=[p.call(e['dateIsStyle'],0,v) for v in range(2)];calls+=2
         assert sy==[int(norm&2==0),int(norm&2==2)] and p.byte()==norm,(stored,sy)
-        on=345 if norm&1 else 344;style=ids['iconLong'] if norm&2 else ids['iconShort']
+        on=297 if norm&1 else 296;style=ids['iconLong'] if norm&2 else ids['iconShort']
         p.ui=[];p.setting(stored);p.call(e['dateLine'],0x62056000,0x6205b000);calls+=1
         assert p.ui==[(TWO_ICONS,0x6205b000,on,style),(TITLE,0x6205b000,ids['name'],ids['name'])],(stored,p.ui)
         p.ui=[];p.setting(stored);p.call(e['dateLineOnOff'],0x62056000,0x6205b000);calls+=1
@@ -281,7 +281,7 @@ def verify_submenu(p,data,manifest,official,report):
     p.setting(3,pointer=False)
     assert [p.call(e['dateIsOnOff'],0,v) for v in range(2)]==[1,0] and [p.call(e['dateIsStyle'],0,v) for v in range(2)]==[1,0];calls+=4
     p.call(e['dateSetOnOff'],0,1);p.call(e['dateSetStyle'],0,1);assert p.byte()==3;calls+=2
-    p.ui=[];p.call(e['dateLine'],0x62056000,0x6205b000);assert p.ui[0]==(TWO_ICONS,0x6205b000,344,ids['iconShort']);calls+=1
+    p.ui=[];p.call(e['dateLine'],0x62056000,0x6205b000);assert p.ui[0]==(TWO_ICONS,0x6205b000,296,ids['iconShort']);calls+=1
     report['submenu']={'record':18,'lists':[118,119],'values':4,'stored_normalised':{hex(k):v for k,v in states.items()}}
     return calls
 

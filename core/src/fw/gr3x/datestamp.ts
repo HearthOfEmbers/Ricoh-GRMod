@@ -53,7 +53,8 @@
  *    list ends 117 records after the table start (an immediate), so it still covers exactly the
  *    official records.
  *  - Texts: the name (21 languages, GR IV's) and the two value names; Off is the camera's text 2.
- *  - Icons: the camera's OFF (344) and two new 40 x 40 style icons (GR IV's).
+ *  - Icons: the camera's boxed OFF / ON text icons (296, 297; GR IV uses its own 310, 311) and two
+ *    new 40 x 40 style icons (GR IV's).
  */
 import { assembleWords, branchWord, movWord } from '../aspect/arm';
 import { FirmwareError } from '../types';
@@ -92,7 +93,7 @@ const SELECT_SITES: readonly (readonly [number, number, number])[] = [
 ];
 export const GR3X_DATE_RECORD = SELECT_RECORDS + 1;
 const LINE_VALUE_ICON = 0x5339de20, TOP_SET_TITLE = 0x5339dc70, LIST_SET_ITEM = 0x5339e8b0;
-const ICON_OFF = 344, TEXT_OFF = 2;
+const ICON_OFF = 296, TEXT_OFF = 2;
 const HORIZON_HANDLERS = { title: 362, count: 0x531b3b04, draw: 0x531b5310, set: 0x531b6de4, isCurrent: 0x531b8544 };
 
 const CACHE = 0x536bbc30, CACHE_FLUSH_FOR_READ = 0x536bbcc0, CACHE_CLEAN = 0x536bbcac, PLATFORM = 0x536bd838, GET_TIME = 0x536b6510;
@@ -120,7 +121,7 @@ const SUB_SITES: readonly (readonly [number, number, number])[] = [
   [0x531c5d18, 0x531c5d20, 3], [0x531c5d80, 0x531c5d88, 2], [0x531c60e8, 0x531c60f4, 8], [0x531c6318, 0x531c631c, 5], [0x531c63e4, 0x531c63f0, 3],
 ];
 const TOP_SET_TWO_ICONS = 0x5339df08, SUB_SET_ICON = 0x533a6a70;
-const ICON_ON = 345, TEXT_ON = 1;
+const ICON_ON = 297, TEXT_ON = 1;
 const END_SCREEN_TITLE = 665;
 
 const lo = (v: number) => v & 0xffff, hi = (v: number) => v >>> 16;
