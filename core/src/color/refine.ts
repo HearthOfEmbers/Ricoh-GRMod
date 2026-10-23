@@ -1,16 +1,24 @@
-// Perceptual (CIEDE2000) refinement of a fitted camera slot.
+// Perceptual (CIEDE2000) refinement of a fitted camera slot. Optional, OFF by default (see
+// `ConvertOptions.refine` in convert.ts).
 //
-// The RGB fit in `fit.ts` minimises CIELAB (CIE76) differences. That leaves saturated colours and
-// some skin tones slightly weak. This stage starts from that result and refines the same camera
-// model parameters (look matrix 6, post matrix 6, and a correction of each 17-knot curve) against
-// weighted CIEDE2000 differences on a sample set that gives neutral greys a high weight.
+// The RGB fit in `fit.ts` minimises CIELAB (CIE76) differences. This stage starts from that result
+// and refines the same camera model parameters (look matrix 6, post matrix 6 when the start has
+// one, and a correction of each 17-knot curve) against weighted CIEDE2000 differences.
+//
+// Why it is off by default: on a benchmark of eleven synthetic film looks (whole 33^3 LUT grid,
+// a 256-step grey ramp, skin tones at several exposures, saturated colours, all measured after the
+// firmware quantisation) it lowered the whole-grid p95 and the saturated-colour error, but it made
+// the neutral axis and skin tones worse on several looks (worst grey up to 2.1 -> 4.7 dE00, skin on
+// a strong teal/orange look 1.4 -> 4.6 dE00), because the hue-wheel samples carried most of the
+// weight. With greys weighted up and the guard in convert.ts the grey regressions go away, but the
+// skin trade-off remains on strong looks, so the plain fit stays the default.
 //
 // It is the same idea as the `lab_fit` stage in DARKSLIDE GR's `gr3_lut_fit.py` (itself a port of
 // gr3-film-mods' lab_fit.py, MIT); this implementation is GR Mod's own, works on the GR IV model and
 // uses the model's 17-knot curves directly.
 import { KNOTS, slotApply } from './camera';
 import type { SlotParams } from './camera';
-import { lab, deltaE2000Lab } from './math';
+import { ColorError, lab, deltaE2000Lab } from './math';
 import { mat6 } from './fit';
 
 export interface RefineOptions {
@@ -18,7 +26,7 @@ export interface RefineOptions {
   weights?: ArrayLike<number>;
   /** Solver iterations (default 8). */
   iterations?: number;
-  /** Called with 0..1 after each accepted step. */
+  /** Called with 0..1 after each iteration. */
   onProgress?: (fraction: number) => void;
 }
 
@@ -84,14 +92,15 @@ function solve(A: Float64Array, b: Float64Array, n: number): Float64Array | null
 }
 
 /**
- * Refine `params` against `target` on the sRGB-encoded samples `P`.
- * Returns a new parameter set; `params` itself is not modified.
+ * Refine `params` against `target` on the sRGB-encoded samples `P`. The post matrix is refined
+ * only when `params` has one (none is added). Returns a new parameter set; `params` is not modified.
  */
 export function refineSlot(params: SlotParams, P: Float64Array, target: Float64Array, opts: RefineOptions = {}): RefineResult {
+  if (P.length === 0 || P.length % 3 !== 0 || target.length !== P.length)
+    throw new ColorError('bad-input', 'refineSlot needs two equally long buffers of RGB triples');
   const nSamples = P.length / 3;
-  if (target.length !== P.length) throw new Error('refineSlot: P and target differ in length');
   const weights = opts.weights ?? new Float64Array(nSamples).fill(1);
-  if (weights.length !== nSamples) throw new Error('refineSlot: wrong weight count');
+  if (weights.length !== nSamples) throw new ColorError('bad-input', 'refineSlot: wrong weight count');
   const iterations = opts.iterations ?? 8;
   const labT = lab(target);
   const hasPost = !!params.P2;
@@ -99,37 +108,28 @@ export function refineSlot(params: SlotParams, P: Float64Array, target: Float64A
   const M0 = offdiag(params.M1);
   const P0 = hasPost ? offdiag(params.P2!) : [];
   const baseCurves = params.ck;
-  const nParam = 6 + 6 + CURVE_PARAMS; // 6 look matrix + 6 post matrix + 3 x 17 curve corrections
-  // If the start has no post matrix, use the identity matrix for the extra six parameters.
-  const postStart = hasPost ? P0 : [0, 0, 0, 0, 0, 0];
+  // parameters: 6 look matrix, then (with a post matrix) 6 post matrix, then 3 x 17 curve corrections
+  const curveAt = hasPost ? 12 : 6;
+  const nParam = curveAt + CURVE_PARAMS;
   const steps = new Float64Array(nParam);
-  for (let i = 0; i < 6; i++) steps[i] = 1e-4;
-  for (let i = 6; i < 12; i++) steps[i] = 1e-4;
-  for (let i = 12; i < nParam; i++) steps[i] = 0.01;
+  for (let i = 0; i < curveAt; i++) steps[i] = 1e-4;
+  for (let i = curveAt; i < nParam; i++) steps[i] = 0.01;
 
   const x = new Float64Array(nParam);
   const unpack = (v: Float64Array): SlotParams => {
-    const m = M0.map((b, i) => b + v[i]);
-    const p = postStart.map((b, i) => b + v[6 + i]);
-    const corr = v.subarray(12);
-    return {
-      M1: mat6(m),
-      ck: correctedCurves(baseCurves, corr),
-      ...((hasPost || p.some((q) => q !== 0)) ? { P2: mat6(p) } : {}),
-    } as SlotParams;
+    const M1 = mat6(M0.map((b, i) => b + v[i]));
+    const ck = correctedCurves(baseCurves, v.subarray(curveAt));
+    return hasPost ? { M1, ck, P2: mat6(P0.map((b, i) => b + v[6 + i])) } : { M1, ck };
   };
 
   const residuals = (v: Float64Array, out?: Float64Array): Float64Array => {
-    const q = unpack(v);
-    const rgb = slotApply(q, P);
-    const labOut = lab(rgb);
-    const de = deltaE2000Lab(labOut, labT);
+    const de = deltaE2000Lab(lab(slotApply(unpack(v), P)), labT);
     const r = out ?? new Float64Array(nSamples);
     for (let i = 0; i < nSamples; i++) r[i] = Math.sqrt(weights[i]) * de[i];
     return r;
   };
 
-  let r = residuals(x);
+  const r = residuals(x);
   let cost = 0;
   for (let i = 0; i < nSamples; i++) cost += r[i] * r[i];
   let lambda = 1e-3;
@@ -138,8 +138,10 @@ export function refineSlot(params: SlotParams, P: Float64Array, target: Float64A
   const JTr = new Float64Array(nParam);
   const trial = new Float64Array(nParam);
   const rTrial = new Float64Array(nSamples);
+  let done = 0;
 
   for (let it = 0; it < iterations; it++) {
+    done = it + 1;
     // Numerical Jacobian, forward differences.
     for (let k = 0; k < nParam; k++) {
       trial.set(x);
@@ -165,10 +167,8 @@ export function refineSlot(params: SlotParams, P: Float64Array, target: Float64A
         const d = JTJ[a * nParam + a];
         A[a * nParam + a] += lambda * (d > 1e-30 ? d : 1);
       }
-      const neg = Float64Array.from(JTr, (v) => -v);
-      const dx = solve(A, neg, nParam);
+      const dx = solve(A, Float64Array.from(JTr, (v) => -v), nParam);
       if (!dx) { lambda *= 10; continue; }
-      trial.set(x);
       for (let a = 0; a < nParam; a++) trial[a] = x[a] + dx[a];
       const rt = residuals(trial, rTrial);
       let c = 0;
@@ -188,14 +188,13 @@ export function refineSlot(params: SlotParams, P: Float64Array, target: Float64A
   }
 
   const out = unpack(x);
-  const rgb = slotApply(out, P);
-  const de = deltaE2000Lab(lab(rgb), labT);
+  const de = deltaE2000Lab(lab(slotApply(out, P)), labT);
   const sorted = Array.from(de).sort((a, b) => a - b);
-  const mean = sorted.reduce((a, b) => a + b, 0) / Math.max(1, sorted.length);
+  const mean = sorted.reduce((a, b) => a + b, 0) / sorted.length;
   return {
     ...out,
     meanDE2000: mean,
-    p95DE2000: sorted[Math.max(0, Math.ceil(0.95 * sorted.length) - 1)] ?? mean,
-    iterations,
+    p95DE2000: sorted[Math.max(0, Math.ceil(0.95 * sorted.length) - 1)],
+    iterations: done,
   };
 }

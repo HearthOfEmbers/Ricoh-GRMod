@@ -303,6 +303,7 @@ export function pchipEval(p: Pchip, v: number): number {
  * The Lab values are the ones `lab` produces (D65, sRGB white).
  */
 export function deltaE2000Lab(labA: Float64Array, labB: Float64Array): Float64Array {
+  if (labA.length !== labB.length || labA.length % 3 !== 0) throw new ColorError('bad-input', 'deltaE2000: buffers differ in length');
   const n = labA.length / 3;
   const out = new Float64Array(n);
   const rad = Math.PI / 180;
@@ -330,11 +331,9 @@ export function deltaE2000Lab(labA: Float64Array, labB: Float64Array): Float64Ar
     const Lbar = (L1 + L2) / 2, Cbarp = (C1p + C2p) / 2;
     let hbarp: number;
     if (C1p * C2p === 0) hbarp = h1p + h2p;
-    else {
-      const d = Math.abs(h1p - h2p);
-      if (d <= 180) hbarp = (h1p + h2p) / 2;
-      else hbarp = (h1p + h2p + 360) / 2;
-    }
+    else if (Math.abs(h1p - h2p) <= 180) hbarp = (h1p + h2p) / 2;
+    else if (h1p + h2p < 360) hbarp = (h1p + h2p + 360) / 2;
+    else hbarp = (h1p + h2p - 360) / 2; // Sharma et al. eq. (14): the mean hue stays within 0..360
     const T = 1 - 0.17 * Math.cos((hbarp - 30) * rad) + 0.24 * Math.cos(2 * hbarp * rad)
       + 0.32 * Math.cos((3 * hbarp + 6) * rad) - 0.20 * Math.cos((4 * hbarp - 63) * rad);
     const dtheta = 30 * Math.exp(-Math.pow((hbarp - 275) / 25, 2));

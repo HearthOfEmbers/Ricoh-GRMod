@@ -102,8 +102,12 @@ export interface FirmwareInfo {
 export interface PresetResult {
   kind: 'xmp' | 'cube';
   title: string;
+  /** CIE76 mean / p95 on the fixed reporting colours (see `Conversion`). */
   meanDE: number;
   p95DE: number;
+  /** The same as CIEDE2000. */
+  meanDE2000?: number;
+  p95DE2000?: number;
   warnings: string[];
   unsupported: string[];
   params: SlotParams;
@@ -595,13 +599,14 @@ export class Engine {
 
   /**
    * Fit a preset to a slot: matrix, curves and (unless `post` is false) the post-curve matrix.
-   * Without it the result is what GR Mod 0.6.1 and earlier made.
+   * Without it the result is what GR Mod 0.6.1 and earlier made. `refine` (.cube only, default
+   * off) adds the guarded CIEDE2000 refinement.
    */
-  convertPreset(kind: 'xmp' | 'cube', text: string, onProgress?: (f: number) => void, options: { post?: boolean } = {}): PresetResult {
+  convertPreset(kind: 'xmp' | 'cube', text: string, onProgress?: (f: number) => void, options: { post?: boolean; refine?: boolean } = {}): PresetResult {
     const post = options.post !== false;
-    const c = kind === 'xmp' ? convertXmp(text, { onProgress, post }) : convertCube(text, { onProgress, post });
+    const c = kind === 'xmp' ? convertXmp(text, { onProgress, post }) : convertCube(text, { onProgress, post, refine: options.refine === true });
     const q = quantizeSlot(c.params, this.mStdQ13);
-    return { kind: c.kind, title: c.title, meanDE: c.meanDE, p95DE: c.p95DE, warnings: c.warnings, unsupported: c.unsupported, params: c.params, matrixQ13: q.matrixQ13, curves: q.curves, ...(q.postQ9 ? { postQ9: q.postQ9 } : {}) };
+    return { kind: c.kind, title: c.title, meanDE: c.meanDE, p95DE: c.p95DE, meanDE2000: c.meanDE2000, p95DE2000: c.p95DE2000, warnings: c.warnings, unsupported: c.unsupported, params: c.params, matrixQ13: q.matrixQ13, curves: q.curves, ...(q.postQ9 ? { postQ9: q.postQ9 } : {}) };
   }
 
   validateName(slot: SlotId, lang: LangCode, text: string): NameValidation {
