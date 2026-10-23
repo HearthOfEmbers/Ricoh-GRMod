@@ -409,7 +409,8 @@ export function installExtraSlots(p: Patch, iconbin: Uint8Array, slots: readonly
   }
   hook(p, 0x53373bc0, 0xe241100b, `sub ip,r1,#${EXTRA_FIRST_STYLE};cmp ip,#${count - 1};bhi native;add r0,ip,#21;bx lr;native:sub r1,r1,#11;b #0x53373bc4`, 'added slots: RAW development look');
 
-  const module = installOwnParameters(p, count, prints);
+  const hiddenMask = hiddenExtras.reduce((m, id) => (m | (1 << (id - EXTRA_FIRST_STYLE))) >>> 0, 0);
+  const module = installOwnParameters(p, count, prints, hiddenMask);
   installPreviewMapping(p, count);
   installChangeFunctors(p, count);
   installLookChecks(p, count);
@@ -457,7 +458,7 @@ function fingerprint(parts: readonly Uint8Array[]): number {
   return h || 1;
 }
 
-function installOwnParameters(p: Patch, count: number, prints: readonly number[]): Record<string, number> {
+function installOwnParameters(p: Patch, count: number, prints: readonly number[], hiddenMask = 0): Record<string, number> {
   if (prints.length !== count) fail('internal', 'a fingerprint per added slot');
   const normalize = (at: number, reg: string, original: number, tail: string): void => {
     // The flags are set again by every native entry before use; no callee-saved register, LR or SP changes.
@@ -483,7 +484,8 @@ function installOwnParameters(p: Patch, count: number, prints: readonly number[]
   const priorLoad = branchTarget(SETTINGS_LOAD, p.word(SETTINGS_LOAD));
   if (priorSave < BASE + OFFICIAL_RTOS_LENGTH || priorLoad < BASE + OFFICIAL_RTOS_LENGTH) fail('internal', 'the settings save/load scaffold is not installed');
   for (const at of [...SLOT_PARAMETERS.map((i) => GETTERS[i]), ...SLOT_PARAMETERS.map((i) => SETTERS[i]), ...STYLE_SETTERS]) expectWord(p, at, 0xe1a0c00d);
-  const printTable = p.append(u32le(prints), 4);
+  // The fingerprints, then the hidden slots (bit k: slot k; see slot_params.c).
+  const printTable = p.append(u32le([...prints, hiddenMask]), 4);
   const origin = p.next(16);
   const mod = linkModule(SLOT_PARAMS_MODULE, 'slot parameters', count, origin, {
     prior_native_save: priorSave, prior_native_load: priorLoad, storage_singleton: 0x53a81480, store_write: 0x53a7e518,
