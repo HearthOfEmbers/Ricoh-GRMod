@@ -118,8 +118,8 @@ export function installGr3xEndScreen(p: Gr3xEndScreenProgram, o: Gr3xEndScreenOp
     [REFRESH, 0xe1a0c00d], [CONFIRM, 0xe5900168], [UP, 0xe1a0c00d], [DOWN, 0xe1a0c00d], [FOOTER, 0xe1a0c00d],
     [ROWS_AT, 0xe3a02002], [TYPES_AT, 0xe54b3034], [TYPES_AT - 4, 0xe3a03015], [TYPES_AT + 8, 0xe54b3033], [TYPES_AT + 0x10, bl(TYPES_AT + 0x10, 0x53394610)],
     [0x532047bc, movWord(1, TITLE)], [0x5316ff88, 0xe5940180], [0x5316ffa0, bl(0x5316ffa0, 0x532047d4)],
-    [LIST_SHOWN, 0xe1a0c00d], [TITLE_SET, 0xe1a0c00d], [GRAPHIC_VISIBLE, 0xe1a0c00d], [SUB_LINE_TEXT, 0xe1a0c00d],
-    [APP, 0xe1a0c00d], [UI_MODEL, 0xe1a0c00d], [USERDATA, 0xe1a0c00d], [END_SCREEN_GET, 0xe5903004], [END_SCREEN_TEXT, 0xe1a0c00d],
+    [LIST_SHOWN, 0xe1a0c00d], [TITLE_SET, 0xe1a0c00d], [GRAPHIC_VISIBLE, 0xe5d0209e], [SUB_LINE_TEXT, 0xe1a0c00d],
+    [APP, 0xe1a0c00d], [UI_MODEL, 0xe1a0c00d], [USERDATA, 0xe1a0c00d], [END_SCREEN_GET, 0xe5903004], [END_SCREEN_TEXT, 0xe3510000],
     // The native line (0x531987c8) as the Type line draws it.
     [0x531987ec, bl(0x531987ec, END_SCREEN_GET)], [0x531987f8, bl(0x531987f8, END_SCREEN_TEXT)],
     [JOIN, JOIN_WORD], [JOIN - 4, 0xe3a07002], [JOIN + 0x24, 0xe1a01007],

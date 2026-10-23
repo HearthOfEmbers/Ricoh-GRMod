@@ -199,9 +199,12 @@ def verify_submenu(p,data,manifest,official,report):
     c=p.uc;e=manifest['entries'];ids=manifest['dateImprint'];calls=0
     orig=lambda a,n:data[a-0x53000000:a-0x53000000+n]
     pics=manifest.get('pictures')
+    endscreen=bool(pics) and pics.get('form')=='submenu'   # round 6: the pictures' submenu (endscreen_probe.py)
+    if endscreen:pics=None
     # 3. Factory and key map: the submenu id gets D-Range's, the two list ids Horizon's (and the
     # pictures' list id, when built), every other id itself.
     mapped={NEW:D_RANGE,SWITCH:HORIZON,STYLE:HORIZON,**({NEW+3:HORIZON} if pics else {})}
+    if endscreen:mapped.update({NEW+3:D_RANGE,NEW+4:0x020000ad})
     seen=sorted({x[1] for x in official}|{HORIZON,D_RANGE,0x0200013a,0x0200013b,NEW,SWITCH,STYLE,NEW+3,NEW+4,0x08000000})
     for cid in seen:
         want=mapped.get(cid,cid)

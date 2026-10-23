@@ -17,6 +17,7 @@ from clarity_probe import verify as clarity
 from adj_softfocus_probe import verify as adj_soft_focus
 from datestamp_probe import verify as date_imprint
 from shutdown_probe import verify as power_off_pictures
+from endscreen_probe import verify as end_screen
 
 if not __debug__:raise RuntimeError('Validation requires Python assertions')
 
@@ -53,7 +54,8 @@ def main():
         ('clarity-table',lambda:clarity(data,build.get('softFocus',[]))),
         *((('adj-soft-focus',lambda:adj_soft_focus(data,manifest)),) if manifest.get('adjSoftFocus') else ()),
         *((('date-imprint',lambda:date_imprint(data,manifest)),) if manifest.get('dateImprint') else ()),
-        *((('power-off-pictures',lambda:power_off_pictures(data,manifest)),) if manifest.get('pictures') else ()),
+        *((('power-off-pictures',lambda:power_off_pictures(data,manifest)),) if manifest.get('pictures') and manifest['pictures'].get('form')!='submenu' else ()),
+        *((('end-screen-pictures',lambda:end_screen(data,manifest)),) if manifest.get('pictures') and manifest['pictures'].get('form')=='submenu' else ()),
         ('updater-loader',lambda:loader(data,a.boot.read_bytes(),original,candidate,build)),
         ('independent-codec',lambda:package(original,candidate,manifest,build,a.reference)),
     ):
