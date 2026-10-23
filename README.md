@@ -62,9 +62,13 @@ Clarity is a Laplacian pyramid on the developed picture (RetouchService, 0x538a1
 
 ## Date imprint
 
-`core/src/fw/aspect/datestamp.ts` hooks JpegEncodeMacroProcess::Execute (0x537034b4) and runs the position-independent C module `tools/datestamp/datestamp.c` (compiled by `tools/datestamp/gen.py`; `GRMOD_ZIG=1` uses `python3 -m ziglang cc`, the compiler of the committed bytes) on every picture the JPEG encoder is given: main picture, 720x480 screennail, 160x120 thumbnail. It draws the date bottom right (pictures anywhere in 0x40000000..0xBFFFFFFF: with RAW+JPEG the scaled main picture of the smaller JPEG sizes is above 0xA0000000) in orange seven-segment digits, `'26 10 08` or `2026.10.08 17:34`, light only on black-and-white photos. The setting is byte 0x94B of the user settings (padding the factory-defaults initialiser never writes, like 0x90F for soft focus): bit 0 on, bit 1 the long style, anything above 3 is off.
+`core/src/fw/aspect/datestamp.ts` hooks JpegEncodeMacroProcess::Execute (0x537034b4) and runs the position-independent C module `tools/datestamp/datestamp.c` (compiled by `tools/datestamp/gen.py`; `GRMOD_ZIG=1` uses `python3 -m ziglang cc`, the compiler of the committed bytes) on every picture the JPEG encoder is given: main picture, 720x480 screennail, 160x120 thumbnail. It draws the date bottom right (pictures anywhere in 0x40000000..0xBFFFFFFF: with RAW+JPEG the scaled main picture of the smaller JPEG sizes is above 0xA0000000) in orange seven-segment digits, `'26 10 08` or `2026.10.08 17:34`, light only on black-and-white photos. The setting is byte 0x94B of the user settings (padding the factory-defaults initialiser never writes, like 0x90F for soft focus): bit 0 on, bit 1 the long style, bit 2 Follow Orientation off (0.8.3), bit 3 the look's name (0.8.4), anything above 15 is off.
 
-`core/src/fw/aspect/datestamp-menu.ts` puts it in the camera menu: a line after Horizon Correction on the Shooting Assist page of the still menu, opening a submenu (On/Off, Style) built like D-Range Correction's, each line a list built like Horizon Correction's. The still menu already has the maximum of 38 lines, so two descriptors are appended, one without Red Filter (GR IV Monochrome only) and one without HDF (GR IV HDF only), and the menu builder picks the one for the camera's model; every model sees the official menu plus the new line. The submenu and list record tables are relocated with the new records (including the end pointer the list constructor scans to, 0x531d6dac). Texts 841..845, icons 721/722. `tools/datestamp/menu_check.py BUILT-RTOS OFFICIAL-RTOS` runs the patched firmware functions in an emulator (menu builder for all three models, controller factory, SetCurrentMenu, the handlers for every value of the byte, the controllers drawing the new records, the list constructor's table scan, texts and icons); `tools/datestamp/render_check.py` runs the module on synthetic pictures.
+Look name (0.8.4; the idea of PR #9 by jaylee / sjclijie): Style has four values, `'26 10 08`, `2026.10.08 17:34` and each followed by the name of the picture's look (setting bit 3; texts 880 / 881, icons 731 / 732). The name is the one the camera's English menu shows (an added slot's own name; Cinema Yellow / Green as GR Mod renamed them: the English name, else one given in Chinese, Japanese, Korean, Russian, Greek or Thai if it is plain ASCII), drawn after two spaces in fourteen-segment capitals with the digits' bars, colour, height and spacing (letters 13/16 of the height wide; digits in a name stay seven-segment; characters without a segment shape become a space; at most 24). The build turns the names into glyphs, a table per look (`lookNames`, `lookNameGlyphs`). The look is the one at the start of the exposure: the exposure hook copies the development step's look word into FRAME_LOOK (0x558372F8), and in RAW development the step writes it from the developed record, so a look chosen while a picture is being processed does not change its name. The line is drawn only where it fits with a margin on either side: at the date's height, else smaller (down to 3/4), else with the name cut short; failing that, the date alone. The thumbnail gets the date alone. Drawing (0.8.4) only looks at the pixels of each row inside a bar's box: the date costs about a third of the instructions it did (L 3:2, all three pictures: short 12 M, long 23 M instead of 41 M / 81 M), with the name 39..64 M; the date's pixels are unchanged. A 0.8.3 firmware that finds bit 3 set draws nothing and its menu shows (and stores) Off. `tools/datestamp/name_check.py` checks it in the emulator.
+
+Orientation (0.8.3): with Follow Orientation on, the imprint sits in the bottom-right corner of the picture as it is viewed upright (EXIF Orientation 6, 8, 3), its digits turned to read normally, on all three pictures. The direction is the camera's at the start of the exposure (`SetShootingInfoResultBeforeExpose`, 0x53628CD8: the live shooting record's byte 0xD8, the value the EXIF writer later maps to 8 / 3 / 6), kept in a word for the module; the development step at 0x539113F8 runs for live view as well and does not see it. In-camera RAW development takes it from the record the EXIF writer reads.
+
+`core/src/fw/aspect/datestamp-menu.ts` puts it in the camera menu: a line after Horizon Correction on the Shooting Assist page of the still menu, opening a submenu (On/Off, Style, Follow Orientation; laid out like Instant Review's 3-line submenu), each line a list built like Horizon Correction's. The three items are bits 0..3 of one settings byte (+0x94B; Style is bits 1 and 3; bit 2 set means Follow Orientation off, so older bytes read as on). The still menu already has the maximum of 38 lines, so two descriptors are appended, one without Red Filter (GR IV Monochrome only) and one without HDF (GR IV HDF only), and the menu builder picks the one for the camera's model; every model sees the official menu plus the new line. The submenu and list record tables are relocated with the new records (including the end pointer the list constructor scans to, 0x531d6dac). Texts 841..845, 879..881, icons 721/722, 731/732. The list rows (SelectMenuController's class 0x5357AB24) give a value's text a 400 px label (x 100..500), too narrow for the longest Style values; after drawing a Style value the label is made as wide as the row allows (to 20 px before its right edge, never beyond x 680, through the label's own SetRect), only for that list and only for rows and labels of the expected classes (`tools/datestamp/list_width_check.py` runs the list's own code on rows built by their constructor and compares with a build without it; other lists stay byte for byte the same). `tools/datestamp/menu_check.py BUILT-RTOS OFFICIAL-RTOS` runs the patched firmware functions in an emulator (menu builder for all three models, controller factory, SetCurrentMenu, the handlers for every value of the byte, the controllers drawing the new records, the list constructor's table scan, texts and icons); `tools/datestamp/render_check.py` runs the module on synthetic pictures.
 
 ## Monochrome looks
 
@@ -85,6 +89,37 @@ Adjustable parameters: the firmware keeps them per factory style, and whatever r
 ## Settings guard
 
 `core/src/fw/aspect/guard.ts` (every build from 0.8.2): when the settings are loaded (start), saved (power off) and when U1–U3 are recalled, values this firmware does not know go back to factory ones: a look that is not an installed added slot becomes Standard, a ratio that is not in the menu 3:2, soft focus on an ADJ slot without the feature off. Such values stay in the camera after a firmware with more additions was written; the firmware then looked them up past its tables, and the camera could freeze.
+
+## Image Control menu order and hidden looks
+
+`core/src/fw/aspect/looks.ts` lets the user reorder the Image Control menu and hide looks they do
+not use. It does not add code: the menu order is a 20-byte table at `0x53DBE388` (one byte per
+style, 11..30), and hiding a look redirects its entry in the visibility jump table
+(`0x533CC6F8` for styles 11..24, `0x533CC648` for the monochrome looks 25..30) to the
+firmware's existing `mov r0, #0 ; bx lr` stub at `0x533CC748` / `0x533CC670`. The menu builder
+`0x533CC78C` walks the table in order and skips hidden looks, so the list capacity and every
+count constant stay unchanged.
+
+The UI puts the order/hide card on the Image Control page: rows can be dragged or moved with the
+arrows, the eye toggles a look, Standard (style 11, and 25 for the monochrome looks) cannot be hidden, and "reset" restores the
+factory order. The order is saved in `project.json` (`lookOrder`, `lookHidden`). Added slots
+(styles 34..53) participate in the order; hiding an added slot uses the slot visibility hook that
+`slots.ts` already installs.
+
+- Without added slots or other additions the file keeps the official layout: only the order table
+  and the visibility words change (in place, like the monochrome looks).
+- With added slots, ratios, date imprint, etc. the grown layout is used; the order table points to
+  a new array holding the factory looks and the added slots in the chosen order.
+- `validateLookLayout` refuses an incomplete order, duplicates, hiding every look and hiding
+  Standard. The order table itself was verified on a camera: order `[12,11,...]` shows Vivid then
+  Standard, and `[17,18,11,...]` shows Positive Film, Cinema Yellow, Standard.
+- A look that is hidden is also absent from the ADJ list and RAW development's list (both lists are
+  built through the same visibility check). If the camera's settings select a look that is now
+  hidden (the standard photo or movie set, also in U1–U3), the settings guard turns it into Standard
+  when the settings are loaded, saved or recalled (11, or 25, the monochrome looks' Standard, for
+  25..30; neither can be hidden). Custom sets keep their look. The layout is recorded in the file,
+  so the program recognises and verifies it (`tools/looks/looks_check.py` runs both lists and the
+  guard in an emulator).
 
 ## Power-off pictures chosen in the camera
 

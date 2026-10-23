@@ -127,7 +127,7 @@ const zh = {
   gr3xWallHint: 'IIIx HDF 关机画面已支持制作、轮换及恢复原厂图。需要先启用 Script；每张图片仅 7,264 字节，复杂照片会降低质量。此新增功能仍待实机验证。',
   gr3xScriptHint: '已适配 IIIx 1.60 的两份入口文件。启用 Script 后，回到 GR Mod 的“关机画面”页面制作图片卡；这里只用于开启 Script。入口与脚本仍待实机验证。',
   softAdjSub: '直出模拟柔光滤镜效果', softAdjLine: '柔焦  ·  ADJ 拨杆（关 / 弱 / 中 / 强）',
-  navDate: '时间戳', dateSub: '启用日期打印功能', dateLine: '时间戳  ·  拍摄辅助 › 拍摄时间戳（\'26 10 08 / 2026.10.08 17:34）',
+  navDate: '时间戳', dateSub: '把日期（可加上影像控制的名称）印在照片上', dateLine: '时间戳  ·  拍摄辅助 › 拍摄时间戳（\'26 10 08 / 2026.10.08 17:34，各可加名称）',
   navMono: '黑白预设', monoSub: '解锁 GR IV Monochrome 的照片风格', monoLine: '黑白预设  ·  解锁 GR IV Monochrome 的照片风格',
   extraTitle: '新增槽位', extraSub: '在 Cinema 之后再加影像控制槽位，最多 {n} 个', extraAdd: '新增槽位', extraCountLabel: '新增 {n} 个', extraNone: '不新增',
   prevSlot: '上一个槽位', nextSlot: '下一个槽位',
@@ -135,7 +135,10 @@ const zh = {
   haloOn: '开', halationCinemaSub: '开启后，这个槽位在相机里的“色调”会变成“光晕”（关 / 开，按 Fn 调强度和颜色），载入的预设不受色调影响。不开启则保持原样',
   extraSlot: '新增槽位 {n}', extraNameLong: '最多 12 个字符', extraNameBad: '仅限英文、数字、符号', extraNeedsPreset: '需要导入预设', extraNeedsIcon: '需要图标',
   extraMax: '最多新增 {n} 个槽位', extraIncomplete: '有新增槽位还没准备好（预设、名称或图标）', extraLine: '新增影像控制槽位 {n}  ·  {l}', extraRemove: '删除这个槽位',
-  tIcSoftT: '附加功能', tIcSoftB: '柔焦：打开后，可将“柔焦”效果增添到 ADJ 快捷菜单，有关、弱、中、强四档，效果无法实时预览，可与 HDF 滤镜同时启用。\n时间戳：在照片右下角打印日期。刷入后默认关闭，在“拍摄辅助 › 拍摄时间戳”里打开，可选两种样式。\n黑白风格：解锁 GR IV Monochrome 机型的 6 个黑白风格。',
+  lookOrderTitle: '菜单顺序与隐藏', lookOrderSub: '按相机菜单的顺序排列；眼睛图标可隐藏不常用的 look', lookOrderHint: '按住拖动或点击上下箭头即可调整顺序', lookOrderLine: '影像控制菜单：调整顺序 / 隐藏 {n} 个', lookOrderShow: '显示', lookOrderHide: '隐藏', lookOrderUp: '上移', lookOrderDown: '下移', lookOrderReset: '恢复默认顺序', lookOrderKeepStandard: '标准（以及单色的标准）不能隐藏', lookOrderHiddenTag: '已隐藏', lookOrderMono: '单色', lookOrderCount: '{n} 个隐藏',
+  icViews: '影像控制页面', icViewSlots: '影像控制', icViewOrder: '菜单顺序', lookOrderShown: '{n} 个显示', lookOrderMoved: '{name} 移到第 {n} 位', lookOrderDrag: '拖动调整顺序',
+  tIcViewsT: '槽位与菜单顺序', tIcViewsB: '“影像控制”设置各个槽位；“菜单顺序”调整相机影像控制菜单里 look 的顺序，也可以隐藏不用的 look。',
+  tIcSoftT: '附加功能', tIcSoftB: '柔焦：打开后，可将“柔焦”效果增添到 ADJ 快捷菜单，有关、弱、中、强四档，效果无法实时预览，可与 HDF 滤镜同时启用。\n时间戳：在照片右下角打印日期（竖拍时也是看照片时的右下角；菜单里的“跟随相机方向”关掉后，按横向位置打印）。刷入后默认关闭，在“拍摄辅助 › 拍摄时间戳”里打开，可选两种样式。\n黑白风格：解锁 GR IV Monochrome 机型的 6 个黑白风格。',
 };
 const en: typeof zh = {
   app: 'GR Mod',
@@ -266,7 +269,7 @@ const en: typeof zh = {
   gr3xWallHint: 'IIIx HDF power-off image creation, rotation and factory-image restoration are available. Enable Script first. Each image has only 7,264 bytes, so detailed photographs lose quality. This new port needs a camera test.',
   gr3xScriptHint: 'The two entry files are specific to IIIx 1.60. After enabling Script, return to Power-off images to prepare an image card. This page only enables Script. The entry and script still need a camera test.',
   softAdjSub: 'A soft-focus filter look, straight out of camera', softAdjLine: 'Soft focus  ·  ADJ lever (off / low / medium / high)',
-  navDate: 'Date imprint', dateSub: 'Print the date on photos', dateLine: 'Date imprint  ·  Shooting Assist › Date Imprint (\'26 10 08 / 2026.10.08 17:34)',
+  navDate: 'Date imprint', dateSub: 'Print the date (and the look\'s name) on photos', dateLine: 'Date imprint  ·  Shooting Assist › Date Imprint (\'26 10 08 / 2026.10.08 17:34, each with or without the look\'s name)',
   navMono: 'B&W presets', monoSub: 'Unlock the looks of the GR IV Monochrome', monoLine: 'B&W presets  ·  the looks of the GR IV Monochrome unlocked',
   extraTitle: 'Added slots', extraSub: 'More Image Control slots after the Cinema ones, at most {n}', extraAdd: 'Add slot', extraCountLabel: '{n} added', extraNone: 'None',
   prevSlot: 'Previous slot', nextSlot: 'Next slot',
@@ -274,7 +277,10 @@ const en: typeof zh = {
   haloOn: 'On', halationCinemaSub: 'When on, this slot\'s Toning becomes Halation in the camera (Off / On, Fn for strength and colour); the loaded preset does not use Toning. Off keeps it as it is',
   extraSlot: 'Added slot {n}', extraNameLong: 'At most 12 characters', extraNameBad: 'Letters, digits and symbols only', extraNeedsPreset: 'Needs a preset', extraNeedsIcon: 'Needs an icon',
   extraMax: 'At most {n} added slots', extraIncomplete: 'An added slot is not ready yet (preset, name or icon)', extraLine: 'Added Image Control slots {n}  ·  {l}', extraRemove: 'Remove this slot',
-  tIcSoftT: 'Additions', tIcSoftB: 'Soft focus: adds "Soft Focus" to the ADJ lever, with off, low, medium and high. The effect cannot be seen in live view; it can be used together with the HDF filter.\nDate imprint: prints the date in the bottom right corner of the photo. Off after flashing; turn it on under Shooting Assist › Date Imprint, two styles.\nB&W looks: unlocks the 6 black-and-white looks of the GR IV Monochrome.',
+  lookOrderTitle: 'Menu order and hidden looks', lookOrderSub: 'Order the Image Control menu; the eye hides looks you do not use', lookOrderHint: 'Hold and drag, or click the up and down arrows, to change the order', lookOrderLine: 'Image Control menu: reordered / {n} hidden', lookOrderShow: 'Show', lookOrderHide: 'Hide', lookOrderUp: 'Move up', lookOrderDown: 'Move down', lookOrderReset: 'Reset to factory order', lookOrderKeepStandard: 'Standard (and the monochrome Standard) cannot be hidden', lookOrderHiddenTag: 'hidden', lookOrderMono: 'mono', lookOrderCount: '{n} hidden',
+  icViews: 'Image Control views', icViewSlots: 'Image Control', icViewOrder: 'Menu order', lookOrderShown: '{n} shown', lookOrderMoved: '{name} moved to position {n}', lookOrderDrag: 'Drag to reorder',
+  tIcViewsT: 'Slots and menu order', tIcViewsB: '"Image Control" sets up the slots; "Menu order" arranges the looks of the camera\'s Image Control menu and hides the ones you do not use.',
+  tIcSoftT: 'Additions', tIcSoftB: 'Soft focus: adds "Soft Focus" to the ADJ lever, with off, low, medium and high. The effect cannot be seen in live view; it can be used together with the HDF filter.\nDate imprint: prints the date in the bottom right corner of the photo (as it is viewed, also when shot upright; with "Follow Orientation" off in its menu, as stored). Off after flashing; turn it on under Shooting Assist › Date Imprint, two styles.\nB&W looks: unlocks the 6 black-and-white looks of the GR IV Monochrome.',
 };
 export type Key = keyof typeof zh;
 const dict = (navigator.language || 'zh').toLowerCase().startsWith('zh') ? zh : en;

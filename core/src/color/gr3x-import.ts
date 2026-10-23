@@ -3,13 +3,14 @@
 import { applyCube, parseCube } from './cube';
 import { ColorError } from './math';
 import { sha256Hex } from '../fw/container';
-import { syntheticSamples } from './convert';
+import { extraFitSamples, guardedRefine, syntheticSamples } from './convert';
 import type { Conversion, ConvertOptions } from './convert';
 import { fitSlot } from './fit';
-import { deltaELab, lab, mean, percentile } from './math';
+import { deltaE2000Lab, deltaELab, lab, mean, percentile } from './math';
 import { GR3X_CAMERA } from './gr3x-camera';
 import { parseXmp } from './xmp';
 import { FullLook } from './look';
+import type { SlotParams } from './camera';
 
 export interface Gr3xCubeImport {
   schema: 1;
@@ -59,14 +60,27 @@ export async function previewGr3xCube(source: Gr3xCubeImport, rgb: Float64Array)
 export function convertGr3xCube(text: string, options: ConvertOptions = {}): Conversion {
   if (text.length > 32 * 1024 * 1024) throw new ColorError('bad-input', 'IIIx CUBE exceeds 32 MiB');
   const cube = parseCube(text);
-  const P = syntheticSamples(2200, 160, 4);
+  // As GR IV since 0.8.4 (PR #7): the synthetic colours plus a dense grey ramp, the LUT grid's
+  // corners and skin tones; with `refine`, the guarded CIEDE2000 refinement on the IIIx model.
+  const base = syntheticSamples(2200, 160, 4), extra = extraFitSamples();
+  const P = new Float64Array(base.length + extra.length);
+  P.set(base, 0); P.set(extra, base.length);
+  const refine = options.refine === true;
   options.onProgress?.(0.05);
   const fit = fitSlot(P, applyCube(cube, P), {
     camera: GR3X_CAMERA, maxIterations: 250, post: options.post === true,
-    onProgress: f => options.onProgress?.(0.05 + f * 0.9),
+    onProgress: f => options.onProgress?.(0.05 + f * (refine ? 0.5 : 0.9)),
   });
+  let params: SlotParams = fit.P2 ? { M1: fit.M1, ck: fit.ck, P2: fit.P2 } : { M1: fit.M1, ck: fit.ck };
+  let refined: boolean | undefined;
+  if (refine) {
+    const r = guardedRefine(cube, params, f => options.onProgress?.(0.55 + f * 0.4), GR3X_CAMERA);
+    refined = r !== null;
+    if (r) params = r;
+  }
   const validation = syntheticSamples(1100, 161, 1);
-  const errors = deltaELab(lab(GR3X_CAMERA.slotApply(fit, validation)), lab(applyCube(cube, validation)));
+  const got = lab(GR3X_CAMERA.slotApply(params, validation)), want = lab(applyCube(cube, validation));
+  const errors = deltaELab(got, want), errors00 = deltaE2000Lab(got, want);
   const meanDE = mean(errors), p95DE = percentile(errors, 95);
   const warnings = [
     'IIIx: sRGB display LUT only. Matrix/RGB-curve approximation; preview is a software reference, not measured camera color.',
@@ -74,8 +88,8 @@ export function convertGr3xCube(text: string, options: ConvertOptions = {}): Con
   ];
   if (p95DE > 6) warnings.push('Large color differences in parts of this LUT; compare the preview before exporting.');
   options.onProgress?.(1);
-  return { kind: 'cube', title: cube.title, params: { M1: fit.M1, ck: fit.ck, ...(fit.P2 ? { P2: fit.P2 } : {}) },
-    meanDE, p95DE, warnings, unsupported: [] };
+  return { kind: 'cube', title: cube.title, params, meanDE, p95DE, meanDE2000: mean(errors00), p95DE2000: percentile(errors00, 95),
+    ...(refined !== undefined ? { refined } : {}), warnings, unsupported: [] };
 }
 
 /** Lightroom .xmp look (Look profile / preset with its RGB table and curves) for GR III / IIIx.
@@ -93,7 +107,8 @@ export function convertGr3xXmp(text: string, options: ConvertOptions = {}): Conv
     onProgress: f => options.onProgress?.(0.05 + f * 0.9),
   });
   const validation = syntheticSamples(1100, 161, 1);
-  const errors = deltaELab(lab(GR3X_CAMERA.slotApply(fit, validation)), lab(full.apply(validation)));
+  const got = lab(GR3X_CAMERA.slotApply(fit, validation)), want = lab(full.apply(validation));
+  const errors = deltaELab(got, want), errors00 = deltaE2000Lab(got, want);
   const meanDE = mean(errors), p95DE = percentile(errors, 95);
   const warnings = [
     ...look.warnings,
@@ -103,5 +118,5 @@ export function convertGr3xXmp(text: string, options: ConvertOptions = {}): Conv
   if (p95DE > 6) warnings.push('Large color differences in parts of this look; compare the preview before exporting.');
   options.onProgress?.(1);
   return { kind: 'xmp', title: look.title, params: { M1: fit.M1, ck: fit.ck, ...(fit.P2 ? { P2: fit.P2 } : {}) },
-    meanDE, p95DE, warnings, unsupported: look.unsupported.slice() };
+    meanDE, p95DE, meanDE2000: mean(errors00), p95DE2000: percentile(errors00, 95), warnings, unsupported: look.unsupported.slice() };
 }

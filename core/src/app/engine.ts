@@ -52,7 +52,7 @@ import {
   SOFT_FOCUS_STRENGTHS,
   clarityChanges,
 } from '../fw';
-import type { BuildResult, BuiltRatio, ClarityChange, ClarityEdit, ExtraSlotSpec, ShutdownPictureSpec, SoftFocusLevel, SoftFocusStrength, FactoryEntry, LangCode, Layout, NameValidation, Range, RatioSpec, SlotEdit, SlotId as NativeSlotId } from '../fw';
+import type { BuildResult, BuiltRatio, ClarityChange, ClarityEdit, ExtraSlotSpec, LookLayout, ShutdownPictureSpec, SoftFocusLevel, SoftFocusStrength, FactoryEntry, LangCode, Layout, NameValidation, Range, RatioSpec, SlotEdit, SlotId as NativeSlotId } from '../fw';
 import { grownRanges, growPayload } from '../fw/aspect/package';
 import { BRIDGE_SHA256, BRIDGE_SIZE, isBridgeFirmware, makeBridgeFirmware, officialFromBridge } from '../fw/bridge';
 import { convertCube, convertXmp, quantizeSlot } from '../color';
@@ -133,8 +133,12 @@ export interface FirmwareInfo {
 export interface PresetResult {
   kind: 'xmp' | 'cube';
   title: string;
+  /** CIE76 mean / p95 on the fixed reporting colours (see `Conversion`). */
   meanDE: number;
   p95DE: number;
+  /** The same as CIEDE2000. */
+  meanDE2000?: number;
+  p95DE2000?: number;
   warnings: string[];
   unsupported: string[];
   params: SlotParams;
@@ -220,6 +224,8 @@ export interface FirmwareSummary {
   extraSlots: { name: string; icon: Uint8Array }[];
   /** Power-off pictures chosen in the camera's End Screen menu (absent when none, or when they cannot be read). */
   shutdownPictures?: ShutdownPictureSpec[];
+  /** Image Control menu order and hidden looks (0.8.4), as recorded in the file. */
+  lookLayout?: LookLayout;
 }
 
 /** Additions besides the slots and the ratios. */
@@ -232,6 +238,8 @@ export interface BuildOptions {
   monoUnlock?: boolean;
   /** Added Image Control slots (1 to 20), after the factory ones. */
   extraSlots?: ExtraSlotSpec[];
+  /** Image Control menu order and hidden looks (factory ids 11..30 plus added styles 34..). */
+  lookLayout?: LookLayout;
   /** Power-off pictures (1 to 8) chosen in the camera's End Screen menu; see `encodeShutdownPicture`. */
   shutdownPictures?: ShutdownPictureSpec[];
   /**
@@ -622,6 +630,7 @@ export class Engine {
       monoUnlock: !!features.monoUnlock,
       extraSlots: (features.extraSlots ?? []).map((x) => ({ name: x.name, icon: x.icon })),
       ...(features.shutdown ? { shutdownPictures: [...features.shutdown.pictures] } : {}),
+      ...(features.lookLayout ? { lookLayout: features.lookLayout } : {}),
     });
     if (!specs) return modified(false, [], aligned);
     let ratios: BuiltRatio[] = [];
@@ -766,20 +775,21 @@ export class Engine {
 
   /**
    * Fit a preset to a slot: matrix, curves and (unless `post` is false) the post-curve matrix.
-   * Without it the result is what GR Mod 0.6.1 and earlier made. GR III / IIIx take .xmp and .cube too.
+   * Without it the result is what GR Mod 0.6.1 and earlier made. `refine` (.cube only, default
+   * off) adds the guarded CIEDE2000 refinement. GR III / IIIx take .xmp and .cube too.
    */
-  convertPreset(kind: 'xmp' | 'cube', text: string, onProgress?: (f: number) => void, options: { post?: boolean } = {}): PresetResult {
+  convertPreset(kind: 'xmp' | 'cube', text: string, onProgress?: (f: number) => void, options: { post?: boolean; refine?: boolean } = {}): PresetResult {
     if (this.info.family === 'gr3x') {
       // The second (post-curve) matrix, as on GR IV: GR III's matrix module has the stage (films only).
       const post = options.post !== false;
-      const c = kind === 'xmp' ? convertGr3xXmp(text, { onProgress, post }) : convertGr3xCube(text, { onProgress, post });
+      const c = kind === 'xmp' ? convertGr3xXmp(text, { onProgress, post }) : convertGr3xCube(text, { onProgress, post, refine: options.refine === true });
       return { ...c, ...quantizeSlot(c.params, this.mStdQ13) };
     }
     if (this.layout === null || !this.info.capabilities.presets) requireGr3xPort('preset conversion');
     const post = options.post !== false;
-    const c = kind === 'xmp' ? convertXmp(text, { onProgress, post }) : convertCube(text, { onProgress, post });
+    const c = kind === 'xmp' ? convertXmp(text, { onProgress, post }) : convertCube(text, { onProgress, post, refine: options.refine === true });
     const q = quantizeSlot(c.params, this.mStdQ13);
-    return { kind: c.kind, title: c.title, meanDE: c.meanDE, p95DE: c.p95DE, warnings: c.warnings, unsupported: c.unsupported, params: c.params, matrixQ13: q.matrixQ13, curves: q.curves, ...(q.postQ9 ? { postQ9: q.postQ9 } : {}) };
+    return { kind: c.kind, title: c.title, meanDE: c.meanDE, p95DE: c.p95DE, meanDE2000: c.meanDE2000, p95DE2000: c.p95DE2000, warnings: c.warnings, unsupported: c.unsupported, params: c.params, matrixQ13: q.matrixQ13, curves: q.curves, ...(q.postQ9 ? { postQ9: q.postQ9 } : {}) };
   }
 
   validateName(slot: SlotId, lang: LangCode, text: string): NameValidation {
@@ -873,13 +883,14 @@ export class Engine {
     const monoUnlock = !!(options && options.monoUnlock);
     const extraSlots = options && options.extraSlots ? options.extraSlots : [];
     const pictures = options && options.shutdownPictures ? options.shutdownPictures : [];
+    const lookLayout = options && options.lookLayout ? options.lookLayout : undefined;
     if (pictures.length > 0 && clarity.length > 0) throw new FirmwareError('bad-clarity', 'power-off pictures cannot be combined with the clarity-table soft focus of 0.4.x');
     if (adjSoftFocus && clarity.length > 0) throw new FirmwareError('bad-clarity', 'soft focus on the ADJ lever and on the clarity table cannot be combined');
     if (dateStamp && clarity.length > 0) throw new FirmwareError('bad-clarity', 'the date imprint cannot be combined with the clarity-table soft focus of 0.4.x');
     if (extraSlots.length > 0 && clarity.length > 0) throw new FirmwareError('bad-clarity', 'added slots cannot be combined with the clarity-table soft focus of 0.4.x');
-    if (edits.length === 0 && ratios.length === 0 && clarity.length === 0 && !adjSoftFocus && !dateStamp && !monoUnlock && extraSlots.length === 0 && pictures.length === 0) throw new FirmwareError('bad-edit', 'nothing to change');
+    if (edits.length === 0 && ratios.length === 0 && clarity.length === 0 && !adjSoftFocus && !dateStamp && !monoUnlock && extraSlots.length === 0 && pictures.length === 0 && !lookLayout) throw new FirmwareError('bad-edit', 'nothing to change');
     if (Object.keys(cinemaHalation).length > 0 && clarity.length > 0) throw new FirmwareError('bad-clarity', 'halation cannot be combined with the clarity-table soft focus of 0.4.x');
-    const features = { adjSoftFocus, guard: clarity.length === 0 && options.guard !== false, ...(Object.keys(cinemaHalation).length > 0 ? { cinemaHalation } : {}), ...(dateStamp ? { dateStamp } : {}), ...(monoUnlock ? { monoUnlock } : {}), ...(extraSlots.length > 0 ? { extraSlots } : {}), ...(pictures.length > 0 ? { shutdown: { pictures, factory: aspect.factoryShutdownJpegs(this.decoded) } } : {}) };
+    const features = { adjSoftFocus, guard: clarity.length === 0 && options.guard !== false, ...(Object.keys(cinemaHalation).length > 0 ? { cinemaHalation } : {}), ...(dateStamp ? { dateStamp } : {}), ...(monoUnlock ? { monoUnlock } : {}), ...(extraSlots.length > 0 ? { extraSlots } : {}), ...(pictures.length > 0 ? { shutdown: { pictures, factory: aspect.factoryShutdownJpegs(this.decoded) } } : {}), ...(lookLayout ? { lookLayout } : {}) };
     const test = {
       ...(options && options.dateStampFixed ? { dateStampFixed: options.dateStampFixed, dateStampDiag: !!options.dateStampDiag } : {}),
     };
