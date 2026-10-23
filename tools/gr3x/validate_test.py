@@ -19,6 +19,8 @@ from datestamp_probe import verify as date_imprint
 from shutdown_probe import verify as power_off_pictures
 from endscreen_probe import verify as end_screen
 from guard_probe import verify as settings_guard
+from look_layout_probe import verify as look_layout
+from list_width_probe import verify as list_width
 
 if not __debug__:raise RuntimeError('Validation requires Python assertions')
 
@@ -61,6 +63,8 @@ def main():
         *((('power-off-pictures',lambda:power_off_pictures(data,manifest)),) if manifest.get('pictures') and manifest['pictures'].get('form')!='submenu' else ()),
         *((('end-screen-pictures',lambda:end_screen(data,manifest)),) if manifest.get('pictures') and manifest['pictures'].get('form')=='submenu' else ()),
         *((('settings-guard',lambda:settings_guard(data,manifest)),) if manifest.get('round7') else ()),
+        *((('look-layout',lambda:look_layout(data,manifest)),) if manifest.get('round8') else ()),
+        *((('date-style-labels',lambda:list_width(data,manifest)),) if manifest.get('round8') and manifest.get('dateImprint') else ()),
         ('updater-loader',lambda:loader(data,a.boot.read_bytes(),original,candidate,build)),
         ('independent-codec',lambda:package(original,candidate,manifest,build,a.reference)),
     ):

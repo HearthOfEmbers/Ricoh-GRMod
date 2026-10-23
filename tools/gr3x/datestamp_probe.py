@@ -61,6 +61,8 @@ NAMES=['Vkopírování data','Datostempel','Date Imprint','Päiväysleima','Impr
   'Впечатывание даты','拍摄时间戳','Impresión de fecha','Datumstämpel','ประทับวันที่','拍攝時間戳','Tarih baskısı']
 ROWS=[9,2,4,5,16,13,8,11,1,17,3,12,0,7,20,6,14,10,19,15,18]
 SHORT,LONG="'26 10 08",'2026.10.08 17:34'
+# GR IV's date imprint module of GR Mod 0.8.2 (the reference of rounds 4..7).
+GR4_082_SHA256='b7be24583ad0aa8de3446b1477b6123a522b41ee627e34a8e3ab1414abed9b72'
 def ts_names(name):
     src=(ROOT/'core/src/fw/aspect/datestamp-menu.ts').read_text()
     body=re.search(name+r": readonly string\[\] = \[(.*?)\];",src,re.S).group(1)
@@ -99,9 +101,12 @@ class DateProbe(AdjProbe):
     def byte(s):return s.uc.mem_read(REC+OFFSET,1)[0]
 
 def gr4_reference(setting,pictures,look=None):
-    """GR IV's camera-tested module (aspect/datestamp-code.ts, 0.8.2) on the same pictures and clock;
-    `look`: (the look word, the 64-byte table of black-and-white looks) for its look fields."""
-    code=base64.b64decode(re.search(r"DATESTAMP_CODE = '([^']+)'",(ROOT/'core/src/fw/aspect/datestamp-code.ts').read_text()).group(1))
+    """GR IV's camera-tested module of GR Mod 0.8.2 (aspect/datestamp-code.ts as released in 0.8.2,
+    kept in fixtures/gr4-datestamp-0.8.2.b64) on the same pictures and clock; `look`: (the look word,
+    the 64-byte table of black-and-white looks) for its look fields. (Round 8: datestamp8_probe.py
+    compares with GR IV's 0.8.4 module.)"""
+    code=base64.b64decode((Path(__file__).with_name('fixtures')/'gr4-datestamp-0.8.2.b64').read_text().strip())
+    assert hashlib.sha256(code).hexdigest()==GR4_082_SHA256
     mu=Uc(UC_ARCH_ARM,UC_MODE_ARM);ORG=0x10000;STUB=0x70000000
     mu.mem_map(ORG,0x10000);mu.mem_write(ORG,code);mu.mem_map(0x60000000,0x100000);mu.mem_map(STUB,0x100000)
     for base,size in ((0x63000000,0x1000000),(LOW,0x800000)):mu.mem_map(base,size)
@@ -296,6 +301,11 @@ def verify(data,manifest):
     e=manifest['entries'];ids=manifest['dateImprint'];assert ids
     p=DateProbe(data,manifest);c=p.uc;calls=0;report={}
     sub=ids.get('form')=='submenu';assert ids.get('form','list') in ('list','submenu')
+    # Round 8 (as GR Mod 0.8.4): datestamp8_probe.py checks what is new.
+    r8=bool(manifest.get('round8'))
+    if r8:
+        import datestamp8_probe as d8
+        assert sub and ids.get('iconOff')
     orig=lambda a,n:data[a-0x53000000:a-0x53000000+n]
     # 1. Texts and icons.
     roots=manifest['catalogs']['textRoots']
@@ -304,6 +314,7 @@ def verify(data,manifest):
         for tid,text in ((ids['name'],NAMES[lang]),(ids['short'],SHORT),(ids['long'],LONG))+extra:
             rec=u32(c,u32(c,roots+row*4)+tid*4);units,lines,_,at=struct.unpack('<BBHI',bytes(c.mem_read(rec,8)))
             assert (units,lines)==(len(text)+1,1) and bytes(c.mem_read(at,units*2)).decode('utf-16le')==text+'\0',(row,tid)
+    if r8:calls+=d8.texts(p,manifest,ROWS,SHORT,LONG)
     icons=bytes.fromhex(manifest['iconAddition']['bytes']);origin=manifest['iconAddition']['originalLength']
     for k in ('iconShort','iconLong'):
         w,h,o=struct.unpack('<HHI',bytes(c.mem_read(u32(c,manifest['catalogs']['iconRoot']+ids[k]*4),8)))
@@ -327,23 +338,30 @@ def verify(data,manifest):
         assert d[:0x80]==still[:0x80] and d[0x87:0x8b]==still[0x87:0x8b]   # page titles and the rest unchanged
         assert all(struct.unpack_from('<I',d,0x8c+i*8+4)[0]==0 for i in range(38))
     report['menus']={'nd':'official without HDF + date','hdf':'official without ND + date'}
-    if sub:
+    if r8:
+        n,report['submenu']=d8.submenu(p,data,manifest,official);calls+=n
+    elif sub:
         calls+=verify_submenu(p,data,manifest,official,report)
     else:
         calls+=verify_list(p,data,manifest,official,report)
     # 5. Pictures: the same as GR IV's module, for every setting value.
     pics=pictures();base=[b for _,b in pics['memory']];results={}
-    for stored,pointer in ((0,True),(1,True),(2,True),(3,True),(7,True),(1,False)):
+    if r8:
+        n,report['pictures8']=d8.pictures8(p,manifest,pics,CLOCK,LOW,REC,PTR,OFFSET,CFG,ARG,DESC,PLAT);calls+=n
+        n,report['exposure']=d8.exposure(p,manifest);calls+=n
+        n,report['raw_development']=d8.raw_words(p,manifest,manifest.get('filmCount') or 0);calls+=n
+        c.mem_write(0x55804378,bytes(8))
+    for stored,pointer in (((1,False),) if r8 else ((0,True),(1,True),(2,True),(3,True),(7,True),(1,False))):
         p.setting(stored,pointer);got=execute(p,pics);calls+=1
         ref=gr4_reference(stored if pointer else 0,pics)
         assert got==ref,(stored,pointer)
         changed=sum(sum(a!=b for a,b in zip(x,y)) for x,y in zip(got,base))
         assert (changed>0)==(pointer and stored in (1,3)),(stored,pointer,changed)
         results[f'{stored}{"" if pointer else " (no record)"}']=changed
-    assert results['3']>results['1']
+    if not r8:assert results['3']>results['1']
     low=pictures(LOW);p.setting(1);got=execute(p,low)
     assert got[:2]==[b for _,b in low['memory']][:2]   # main picture below 0x5d000000: untouched
-    if ids.get('iconOff'):
+    if ids.get('iconOff') and not r8:
         # Round 7 (as GR IV 0.8.2): the imprint is light only exactly for black-and-white looks, by the
         # look word the development step leaves (the stash); without a valid word, by the colours.
         ctx=e['dateContext'];words=struct.unpack('<10I',bytes(c.mem_read(ctx,40)))
@@ -357,7 +375,7 @@ def verify(data,manifest):
             looks[hex(word)]=sum(sum(a!=b for a,b in zip(x,y)) for x,y in zip(got,base))
         c.mem_write(0x55804378,b'\0'*4)
         report['by_look']=dict(equal_to_gr4_module=True,changed_bytes=looks)
-    if 'lookStash' in e:
+    if 'lookStash' in e and not r8:
         # Round 7 without films: the development step's look read also leaves look | 0x10000.
         rec=0x62059800;regs=[0x6000+i for i in range(13)];regs[3]=rec;cases=0
         for look in list(range(0,24))+[64,83,255]:

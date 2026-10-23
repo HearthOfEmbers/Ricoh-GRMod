@@ -126,7 +126,7 @@ export const GR3X_DATE_ORIENT_ID = 0x020001a5;
 export const GR3X_DATE_AS_STORED = 4, GR3X_DATE_NAME = 8;
 const INSTANT_REVIEW_RECORD = 10;
 /**
- * Round 8 (GR IV test 052): the rows of SelectMenuController lists are widgets of class 0x5339e520
+ * Round 8 (GR IV test 052): the rows of SelectMenuController lists are widgets of class 0x5339e51c
  * (vtable 0x53c0ada8; as GR IV's 0x5357AB24): the value's text label (+0xfc, vtable 0x53c0a378) at
  * x 100, 400 wide, whatever the row's width; the widest own widget (+0x100) spans x 40..680. The
  * longest Style values ("2026.10.08 17:34 + ...") do not fit in 400 (GR IV test 051), so for the

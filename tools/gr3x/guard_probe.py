@@ -1,7 +1,8 @@
 """Round 7: the settings guard (core/src/fw/gr3x/guard.ts), executed in the built image.
 
 `fix(record)` and `fixAll(settings object)` are called on records of random bytes: every photo and
-movie look that is not one of the camera's own (11..22) or a film of the build becomes Standard,
+movie look that is not one of the camera's own (11..22) or a film of the build becomes Standard
+(round 8: also a look hidden from the lists, in the standard photo and movie sets),
 a ratio above the build's largest identity becomes 3:2, and no other byte changes. The mode
 recall runs natively from the copy of the stored record to just before the record goes to the live
 values; the settings load and save hooks run natively with the firmware's load and save
@@ -20,11 +21,13 @@ LOAD_DATA,LOAD_CALL,SAVE_DATA,SAVE_CALL,MEMCPY=0x5324b284,0x5324b754,0x5323f274,
 RECALL_FROM,RECALL_TO=0x53279fec,0x5327a008
 REGION=0x63000000;UD=REGION;RECS=REGION+0x1000
 
-def guarded(rec,films,max_ratio):
+def guarded(rec,films,max_ratio,hidden=()):
     out=bytearray(rec)
     for off in LOOKS:
         v=out[off]
         if not (11<=v<=22 or 64<=v<64+films):out[off]=11
+        # Round 8: a hidden look of the standard photo / movie set becomes Standard (the custom sets keep theirs).
+        if off in (0x1c2,0x57e) and out[off] in hidden:out[off]=11
     if out[RATIO]>max_ratio:out[RATIO]=0
     return bytes(out)
 
@@ -65,18 +68,22 @@ def entries_of(manifest):
 
 def verify(data,manifest,seed=1107,rounds=400):
     g=entries_of(manifest);films=g['films'];max_ratio=max(r['id'] for r in manifest['menu'])
+    hidden=tuple((manifest.get('lookLayout') or {}).get('hidden',()))
+    assert not hidden or manifest.get('round8')
+    want=lambda rec,f,m:guarded(rec,f,m,hidden)
     assert max_ratio==3+sum(1 for r in manifest['menu'] if r['id']>=4)
     p=GuardProbe(data,manifest);cpu=p.uc;rng=random.Random(seed+films*31+max_ratio);calls=0;fixed=0
     # The hook sites point at the guard.
     sites={s['address']:s for s in manifest['sites']}
     for at in (LOAD_CALL,SAVE_CALL,0x5327a004):assert at in sites and 'guard' in sites[at]['reason'],hex(at)
-    # 1. fix(record): every value of every look and of the ratio, then random records.
+    # 1. fix(record): every value of every look and of the ratio (with a layout every hidden look
+    # among them), then random records.
     for v in range(256):
         rec=bytearray(rng.randrange(256) for _ in range(SIZE))
         for off in LOOKS:rec[off]=v
         rec[RATIO]=v;cpu.mem_write(RECS,bytes(rec))
         assert p.call(g['fix'],RECS) is not None;calls+=1
-        got=bytes(cpu.mem_read(RECS,SIZE));assert got==guarded(rec,films,max_ratio),v
+        got=bytes(cpu.mem_read(RECS,SIZE));assert got==want(rec,films,max_ratio),v
         fixed+=got!=bytes(rec)
     assert p.call(g['fix'],0)==0;calls+=1
     for _ in range(rounds):
@@ -84,7 +91,7 @@ def verify(data,manifest,seed=1107,rounds=400):
         p.call(g['fixAll'],UD);calls+=1
         for i,rec in enumerate(recs):
             ptr=struct.unpack_from('<I',ud,4+4*i)[0]
-            assert bytes(cpu.mem_read(RECS+i*0x1000,SIZE))==(guarded(rec,films,max_ratio) if ptr else rec),i
+            assert bytes(cpu.mem_read(RECS+i*0x1000,SIZE))==(want(rec,films,max_ratio) if ptr else rec),i
         assert bytes(cpu.mem_read(UD,0x40))==bytes(ud)
     p.call(g['fixAll'],0);calls+=1
     # 2. The mode recall: the stored record copied into use, then guarded (the stored one unchanged).
@@ -92,19 +99,19 @@ def verify(data,manifest,seed=1107,rounds=400):
         recs,ud=p.records(rng);mode=rng.randrange(7)
         p.run(RECALL_FROM,RECALL_TO,{5:UD,6:mode});calls+=1
         src=recs[1+mode]
-        assert bytes(cpu.mem_read(RECS,0xb26))==guarded(src,films,max_ratio)[:0xb26]
+        assert bytes(cpu.mem_read(RECS,0xb26))==want(src,films,max_ratio)[:0xb26]
         assert bytes(cpu.mem_read(RECS+(1+mode)*0x1000,SIZE))==src
     # 3. Load and save (without films; with films slots_probe runs them with the films' table).
     load_save=False
     if not g['own']:
         recs,ud=p.records(rng);p.run(LOAD_CALL,LOAD_CALL+4,{0:UD,4:UD});calls+=1
         assert p.loads==1 and cpu.reg_read(reg.UC_ARM_REG_R4)==UD
-        for i,rec in enumerate(recs):assert bytes(cpu.mem_read(RECS+i*0x1000,SIZE))==guarded(rec,films,max_ratio)
+        for i,rec in enumerate(recs):assert bytes(cpu.mem_read(RECS+i*0x1000,SIZE))==want(rec,films,max_ratio)
         recs,ud=p.records(rng);p.run(SAVE_CALL,STOP,{0:UD});calls+=1
         assert cpu.reg_read(reg.UC_ARM_REG_R0)==0x5a and len(p.saves)==1
-        assert p.saves[0]==[guarded(rec,films,max_ratio) for rec in recs]
+        assert p.saves[0]==[want(rec,films,max_ratio) for rec in recs]
         load_save=True
-    return dict(schema=1,rtos_sha256=hashlib.sha256(data).hexdigest(),films=films,max_ratio=max_ratio,calls=calls,
+    return dict(schema=1,rtos_sha256=hashlib.sha256(data).hexdigest(),films=films,max_ratio=max_ratio,hidden=list(hidden),calls=calls,
         values_changed=fixed,load_and_save_run=load_save,seed=seed,hardware_tested=False,
         scope='Guard functions called directly; the mode recall, load and save hooks run natively with the firmware load/save substituted.')
 

@@ -117,12 +117,15 @@ def verify(data,manifest):
     hal=1 if manifest.get('halationInCamera') else 0  # round 6: Halation's name, its list icon and slider scale
     r7=1 if hal and manifest.get('round7') else 0  # round 7: also the Colour row's name; the colour scale and red / white icons
     htexts,hicons,hpixels=(2,4,3*6400+400*60*4) if r7 else (hal,2*hal,hal*(6400+400*60*4))
-    dtexts=5 if date and manifest['dateImprint'].get('form')=='submenu' else 3*date
+    # Round 8: also Follow Orientation and the two styles with the look's name; two more icons.
+    d8=1 if date and manifest.get('round8') else 0
+    dtexts=(8 if d8 else 5) if date and manifest['dateImprint'].get('form')=='submenu' else 3*date
+    dicons=(4 if d8 else 2)*date
     pics=manifest['pictures']['count'] if manifest.get('pictures') else 0  # power-off pictures: 2 + n texts, n icons
     # Round 6 (End Screen submenu): 3 + n texts, 5 + n thumbnails of 520 x 200.
     esub=1 if manifest.get('pictures') and manifest['pictures'].get('form')=='submenu' else 0
     ptexts=(3 if esub else 2)+pics if pics else 0;picons=pics+5*esub;ppixels=(5+pics)*520*200*4 if esub else pics*6400
-    assert (catalog['textColumns'],catalog['iconCount'])==(786+customs+soft+dtexts+ptexts+added+htexts,671+customs+soft+2*date+picons+added+hicons)
+    assert (catalog['textColumns'],catalog['iconCount'])==(786+customs+soft+dtexts+ptexts+added+htexts,671+customs+soft+dicons+picons+added+hicons)
     for lang in range(21):
         old_root=u32(cpu,0x55002bac+lang*4);new_root=u32(cpu,catalog['textRoots']+lang*4)
         assert bytes(cpu.mem_read(old_root,786*4))==bytes(cpu.mem_read(new_root,786*4))
@@ -133,7 +136,7 @@ def verify(data,manifest):
             assert (units,lines,unused)==(len(name)+1,1,0)
             assert bytes(cpu.mem_read(text,units*2)).decode('utf-16le')==name+'\0'
     assert bytes(cpu.mem_read(0x550020fc,671*4))==bytes(cpu.mem_read(catalog['iconRoot'],671*4))
-    pixels=bytes.fromhex(manifest['iconAddition']['bytes']);assert len(pixels)==customs*9600+soft*6400+date*2*6400+ppixels+added*6400+hpixels
+    pixels=bytes.fromhex(manifest['iconAddition']['bytes']);assert len(pixels)==customs*9600+soft*6400+dicons*6400+ppixels+added*6400+hpixels
     for index,row in enumerate(r for r in rows if r['id']>=4):
         desc=u32(cpu,catalog['iconRoot']+row['iconId']*4)
         w,h,offset=struct.unpack('<HHI',cpu.mem_read(desc,8))

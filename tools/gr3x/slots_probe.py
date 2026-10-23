@@ -357,6 +357,15 @@ def verify_v3(data,manifest,seed=1107,steps=6000):
     assert all(prints) and len(set(prints))>=1
     looks=list(range(11,23))+list(range(64,64+films))
     def owner(look):return 0 if look==11 else look-63 if 64<=look<64+films else None
+    # Round 8 (slots3.c -DHIDDEN_FILMS): the hidden films' word after the prints. The lists offer the
+    # standard photo set (0) no hidden look, and the stored records hold none there (step 8).
+    hidden=list((manifest.get('lookLayout') or {}).get('hidden',[]))
+    hidden_films=[h for h in hidden if 64<=h<64+films]
+    if manifest.get('round8'):
+        mask=struct.unpack('<I',cpu.mem_read(own['prints']+4*films,4))[0]
+        assert mask==sum(1<<(h-64) for h in hidden_films),hex(mask)
+    else:assert not hidden
+    looks0=[l for l in looks if l not in hidden]
     cpu.mem_write(SETTINGS,struct.pack('<I',REC))
     def put_ud(stored):
         n.stored=list(stored);cpu.mem_write(UD,struct.pack('<10I',0,REC,*(list(stored)+[0]*(8-len(stored)))))
@@ -377,7 +386,7 @@ def verify_v3(data,manifest,seed=1107,steps=6000):
     for step in range(steps):
         op=rng.random()
         if op<0.3:
-            s=rng.randrange(3);look=rng.choice(looks);n.select(s,look);calls+=1;selected[s]=look;counts['selects']+=1
+            s=rng.randrange(3);look=rng.choice(looks0 if s==0 else looks);n.select(s,look);calls+=1;selected[s]=look;counts['selects']+=1
         elif op<0.5:
             s=rng.randrange(3);j=rng.randrange(9);v=rng.randrange(9)
             cpu.mem_write(REC+field(j,s),bytes([v]));model[owners()[s]][s][j]=v;counts['edits']+=1
@@ -410,7 +419,7 @@ def verify_v3(data,manifest,seed=1107,steps=6000):
             n.call(fn('sp_before_recall'),UD);calls+=1;counts['recalls']=counts.get('recalls',0)+1
             new=bytearray(n.rec())
             for s in range(3):
-                look=rng.choice(looks);new[0x1c2+2*s]=look;selected[s]=look
+                look=rng.choice(looks0 if s==0 else looks);new[0x1c2+2*s]=look;selected[s]=look
                 vals=[rng.randrange(9) for j in range(9)]
                 for j in range(9):new[field(j,s)]=vals[j]
                 model[owners()[s]][s]=vals
@@ -447,8 +456,9 @@ def verify_v3(data,manifest,seed=1107,steps=6000):
     # starts again from neutral: table, Halation, the fields of its sets in the record in use and
     # in the stored records; film b keeps everything.
     fingerprints={}
-    if films>=2:
-        a,b=rng.sample(range(films),2)
+    shown=[f for f in range(films) if 64+f not in hidden]
+    if len(shown)>=2:
+        a,b=rng.sample(shown,2)
         vals=[[[rng.randrange(9) for j in range(9)] for s in range(3)] for o in range(21)]
         st=[[rng.randrange(8) for s in range(3)] for f in range(20)]
         fp=list(prints)+[rng.randrange(1,1<<32) for _ in range(20-films)];fp[a]^=0x5a5a
@@ -510,6 +520,29 @@ def verify_v3(data,manifest,seed=1107,steps=6000):
         g0=bytes(cpu.mem_read(STORED0,0xb28))
         assert g0[0x1c2]==11 and [g0[field(j,0)] for j in range(9)]==[(j*5)%9 for j in range(9)]   # set 0 of the record in use is Standard's
         put_ud([]);stale.append(missing)
+    # 5b. Round 8: a hidden film in the standard photo set (0) at start: Standard there, the film's
+    # values in its table row (selected again, it gets them back), Standard's values from the table;
+    # a stored record's set 0 likewise (Standard's values); a hidden film in a custom set (1, 2) is
+    # kept, as the look of any set this build shows.
+    hidden_reset=[]
+    for h in hidden_films[:3]:
+        vals=[[[rng.randrange(9) for j in range(9)] for s in range(3)] for o in range(21)]
+        st=[[rng.randrange(8) for s in range(3)] for f in range(20)]
+        fp=list(prints)+[rng.randrange(1,1<<32) for _ in range(20-films)]
+        n.store={12:record_v3(vals,st,fp)};rec=valid_record(rng)
+        rec[0x1c2]=h;rec[0x1c2+2]=h;rec[0x1c2+4]=11
+        film=[rng.randrange(9) for j in range(9)];c1=[rng.randrange(9) for j in range(9)]
+        for j in range(9):rec[field(j,0)]=film[j];rec[field(j,1)]=c1[j]
+        s0=valid_record(rng);s0[0x1c2]=h;s0[0x1c2+2]=h
+        s0c1=[s0[field(j,1)] for j in range(9)]
+        cpu.mem_write(REC,bytes(rec));cpu.mem_write(STORED0,bytes(s0));put_ud([STORED0])
+        cpu.mem_write(GAP,b'\xa5'*4);assert n.boot();calls+=1
+        r=n.rec();assert r[0x1c2]==11 and r[0x1c2+2]==h and n.fields(0)==vals[0][0] and n.fields(1)==c1
+        g0=bytes(cpu.mem_read(STORED0,0xb28))
+        assert g0[0x1c2]==11 and [g0[field(j,0)] for j in range(9)]==vals[0][0] and g0[0x1c2+2]==h and [g0[field(j,1)] for j in range(9)]==s0c1
+        n.select(0,h);calls+=1;assert n.fields(0)==film   # shown again: its own values
+        n.select(0,11);calls+=1;assert n.fields(0)==vals[0][0]
+        put_ud([]);hidden_reset.append(h)
     # 6. Damaged tables (checksum, length, version, a setting of 8, a value above 0x20) are not used.
     vals=[[[rng.randrange(9) for j in range(9)] for s in range(3)] for o in range(21)]
     good=record_v3(vals,[[5]*3 for _ in range(20)],list(prints)+[1]*(20-films))
@@ -528,7 +561,7 @@ def verify_v3(data,manifest,seed=1107,steps=6000):
     assert n.call(fn('sp_hal'),64,0)==0 and n.call(fn('sp_col'),64,0)==0 and n.call(fn('sp_hal_level'),64)==0
     n.alloc_ok=True;calls+=6
     return dict(schema=3,rtos_sha256=hashlib.sha256(data).hexdigest(),films=films,calls=calls,seed=seed,steps=steps,**counts,
-        fingerprints=fingerprints,version2_taken_over=True,version1_taken_over=True,missing_film_sets_reset=stale,damaged_tables_rejected=len(bad),
+        fingerprints=fingerprints,version2_taken_over=True,version1_taken_over=True,missing_film_sets_reset=stale,hidden_film_sets_reset=hidden_reset,damaged_tables_rejected=len(bad),
         no_memory_falls_back=True,hardware_tested=False,
         scope='Patched native look setters, native start-up fill, load and save stubs (with the settings guard); module entry points called directly; load/save, store and allocator substituted.')
 

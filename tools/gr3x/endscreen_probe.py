@@ -136,15 +136,22 @@ def verify(data,manifest):
     assert rec==bytes(tpl)
     others=[0x02000077,0x0200007d,D_RANGE,0x020001a0,0x020001a1,0x020001a2,0x020001a5,0x08000000,0x020000ac,0x020000ae]
     date=manifest.get('dateImprint')
-    mapped={MENU_ID:D_RANGE,LIST_ID:END_SCREEN,**({0x020001a0:D_RANGE,0x020001a1:0x0200007d,0x020001a2:0x0200007d} if date and date.get('form')=='submenu' else {0x020001a0:0x0200007d} if date else {})}
+    mapped={MENU_ID:D_RANGE,LIST_ID:END_SCREEN,**({0x020001a0:D_RANGE,0x020001a1:0x0200007d,0x020001a2:0x0200007d} if date and date.get('form')=='submenu' else {0x020001a0:0x0200007d} if date else {}),
+        # Round 8: the date imprint's Follow Orientation list.
+        **({0x020001a5:0x0200007d} if date and date.get('form')=='submenu' and manifest.get('round8') else {})}
+    # Round 8 (with the date imprint): the mode is the word's low byte; its upper bytes (the date
+    # imprint's orientation and frame look) are kept by the factory and ignored by the handlers.
+    byte_mode=bool(manifest.get('round8') and date)
+    upper=0xc7b6a500 if byte_mode else 0
     for cid in [MENU_ID,LIST_ID,END_SCREEN]+others:
-        for before in (0,1,0x5a):
+        for before in (0,1,0x5a)+((upper,upper|1) if byte_mode else ()):
             c.mem_write(MODE,struct.pack('<I',before))
             c.reg_write(reg.UC_ARM_REG_R0,0x62056000);c.reg_write(reg.UC_ARM_REG_R1,cid);c.reg_write(reg.UC_ARM_REG_SP,STACK)
             c.emu_start(FACTORY,FACTORY+4,count=200)
             want=mapped.get(cid,cid)
             assert c.reg_read(reg.UC_ARM_REG_R1)==want and c.reg_read(reg.UC_ARM_REG_R3)==0x13b and c.reg_read(reg.UC_ARM_REG_R0)==0x62056000,hex(cid)
-            mode=u32(c,MODE);assert mode=={LIST_ID:1,END_SCREEN:0}.get(cid,before),(hex(cid),before,mode)
+            mode=u32(c,MODE);set_={LIST_ID:1,END_SCREEN:0}.get(cid)
+            assert mode==(before if set_ is None else (before&~0xff)|set_ if byte_mode else set_),(hex(cid),before,mode)
             calls+=1
         c.mem_write(0x62057000,struct.pack('<I',cid))
         assert p.call(e['dateKeys'],0x62057000)==mapped.get(cid,cid),hex(cid);calls+=1
@@ -159,7 +166,7 @@ def verify(data,manifest):
             for stop in (0,1):
                 for probe in (p,o):
                     probe.controller();probe.records(choice=choices[0],aae=aae);probe.selected=row
-                    probe.uc.mem_write(MODE,bytes(4))
+                    probe.uc.mem_write(MODE,struct.pack('<I',upper if probe is p else 0))
                 logs={}
                 for name,at,args in (('refresh',REFRESH,(CTL,)),('up',UP,(CTL,stop)),('down',DOWN,(CTL,stop)),('footer',FOOTER,(CTL,)),('confirm',CONFIRM,(CTL,))):
                     rp=p.run(at,*args);ro=o.run(at,*args);calls+=2
@@ -167,9 +174,9 @@ def verify(data,manifest):
                     assert p.log==pre+o.log,(name,p.log,o.log)
                     assert rp==ro and p.snapshot()==o.snapshot(),name
                     own+=1
-    report['own_mode_cases']=own
+    report['own_mode_cases']=own;report['mode_byte']=byte_mode
     # 6. Picture mode.
-    p.uc.mem_write(MODE,struct.pack('<I',1))
+    p.uc.mem_write(MODE,struct.pack('<I',upper|1))
     pic=0
     for stored in [None,0]+choices+[0xdeadbeef,1<<24,8<<24]:
         chosen=1+choices.index(stored) if stored in choices else 0

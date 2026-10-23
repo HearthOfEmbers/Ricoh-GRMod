@@ -58,7 +58,17 @@ if (!['list', 'submenu'].includes(dateMenu)) throw new Error('GR3X_DATE_MENU is 
 // with GR3X_FILMS the films' Halation strength and colour and 0.8.2's halation.
 const round7 = process.env.GR3X_R7 === '1';
 if (round7 && (diagnostics || (dateImprint && dateMenu !== 'submenu'))) throw new Error('GR3X_R7 needs the date submenu and no GR3X_DIAG');
-const features = { adjSoftFocus: round >= 3, ...(dateImprint ? { dateImprint, dateMenu } : {}), ...(pictures.length ? { pictures, pictureMenu } : {}), ...(round7 ? { round7 } : {}) };
+// GR3X_R8=1 (round 8, as GR Mod 0.8.4; with GR3X_R7): the date imprint follows the camera and can add
+// the look's name; GR3X_LAYOUT='{"order":[...],"hidden":[...]}' the Image Control order and hidden
+// looks. The films are fitted as 0.8.4 does (#7's colours); without it as up to 0.8.2.
+const round8 = process.env.GR3X_R8 === '1';
+if (round8 && !round7) throw new Error('GR3X_R8 needs GR3X_R7');
+const lookLayout = process.env.GR3X_LAYOUT ? JSON.parse(process.env.GR3X_LAYOUT) : undefined;
+if (lookLayout && !round8) throw new Error('GR3X_LAYOUT needs GR3X_R8');
+const features = { adjSoftFocus: round >= 3, ...(dateImprint ? { dateImprint, dateMenu } : {}), ...(pictures.length ? { pictures, pictureMenu } : {}), ...(round7 ? { round7 } : {}),
+  ...(round8 ? { round8 } : {}), ...(lookLayout ? { lookLayout } : {}) };
+// GR3X_BUILD_ONLY=1: build and print the file's SHA-256, nothing written (regression checks).
+const buildOnly = process.env.GR3X_BUILD_ONLY === '1';
 // GR3X_FILMS=n (round 6): n films (1..20; the nine T6 films first, then plain ones), each with the
 // Halation line in the camera (no level in the build). Not with GR3X_DIAG.
 const filmCount = process.env.GR3X_FILMS ? Number(process.env.GR3X_FILMS) : undefined;
@@ -70,7 +80,7 @@ for (const [index, name] of T6_FILM_NAMES.entries()) {
   const filename = source.file;
   const text = await readFile(join(root, 'examples/gr3x/T6', filename), 'utf8');
   if (await sha256Hex(new TextEncoder().encode(text)) !== source.cube_sha256) throw new Error('T6 source hash changed');
-  const result = engine.convertPreset('cube', text, undefined, { post: round >= 3 });
+  const result = engine.convertPreset('cube', text, undefined, { post: round >= 3, legacyFit: !round8 });
   const icon = gr3xFilmIcon(resources.tiles.film, index);
   films.push({ name, icon, preset: { matrixQ13: result.matrixQ13, curves: result.curves, ...(result.postQ9 ? { postQ9: result.postQ9 } : {}) },
     ...(round >= 3 && name === 'CineStill 800T' && filmCount === undefined ? { halation: 2 } : {}) });
@@ -91,6 +101,7 @@ const soft = adjSoftFocus ? [] : [{ level: -1, strength: 'weak' }, { level: -2, 
 // Films keep their own parameters (T6d) unless GR3X_SHARED=1 rebuilds T6c (shared with Standard).
 const ownParameters = process.env.GR3X_SHARED !== '1';
 const result = await buildGr3xTestFirmware(raw, soft, { films, monoReplicas: false, displayRevision: 3, ...(ownParameters ? { ownParameters } : {}), ...(filmCount !== undefined ? { filmCount } : {}), ...(diagnostics ? { jpegDiagnostics: true } : {}) }, menu, features);
+if (buildOnly) { console.log(JSON.stringify({ sha256: result.report.outputSha256, bytes: result.bytes.length, revision: result.report.revision ?? null })); process.exit(0); }
 const target = resolve(directory);
 await mkdir(target);
 const json = async (name, value) => writeFile(join(target, name), JSON.stringify(value, null, 2) + '\n', { flag: 'wx' });
@@ -129,6 +140,8 @@ for (const [k, film] of (round7 ? films : []).entries()) {
 }
 const halationReference = join(target, 'halation-reference.bin');
 await writeFile(halationReference, Buffer.concat(parts.map(p => Buffer.from(p))), { flag: 'wx' });
+// GR3X_NO_VALIDATE=1: the files of the build (UNVALIDATED.bin, manifest, reports), no validation (development only).
+if (process.env.GR3X_NO_VALIDATE === '1') { console.log(JSON.stringify({ directory: target, sha256: result.report.outputSha256, validated: false })); process.exit(0); }
 const temporary = await mkdtemp(join(tmpdir(), 'gr3x-t6-'));
 try {
   for (const name of ['RTOS', 'BOOT']) {
@@ -136,7 +149,9 @@ try {
     if (!section) throw new Error('Missing original section: ' + name);
     await writeFile(join(temporary, name.toLowerCase() + '.bin'), decoded.subarray(section.offset, section.offset + section.size));
   }
-  await writeFile(join(temporary, 'base.json'), JSON.stringify(await buildGr3xAdjResearch(raw, menu, features)));
+  // The base layer as before (with films the order and hidden looks belong to the image-control layer).
+  const { lookLayout: _layout, ...baseFeatures } = features;
+  await writeFile(join(temporary, 'base.json'), JSON.stringify(await buildGr3xAdjResearch(raw, menu, baseFeatures)));
   const run = spawnSync(python, [join(here, 'validate_test.py'), '--official', resolve(input),
     '--container', join(target, 'UNVALIDATED.bin'), '--manifest', join(target, 'patch-manifest.json'),
     '--build-report', join(target, 'build-report.json'), '--rtos', join(temporary, 'rtos.bin'),

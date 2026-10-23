@@ -496,6 +496,7 @@ export async function buildGr3xImageControls(raw: Uint8Array, options: Gr3xLookO
       ...(halationScreen ? { halationScreen } : {}), ...(halationRows ? { halationRows } : {}) },
     ...(round6 ? { filmCount: capacity, halationInCamera: true } : {}),
     ...(round7 ? { round7: true, monoFilms } : {}),
+    ...(round8 ? { round8: true, ...(features.lookLayout && !isGr3xFactoryLayout(features.lookLayout, capacity) ? { lookLayout: { order: [...features.lookLayout.order], hidden: [...features.lookLayout.hidden] } } : {}) } : {}),
     // sharedParameters: films use Standard's storage (T6c). ownParameters: on top of it, each film's
     // values are swapped into that storage when it is selected (T6d).
     sharedParameters: adjustable, ownParameters: !!own,
