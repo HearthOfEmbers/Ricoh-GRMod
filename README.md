@@ -74,9 +74,9 @@ firmware's existing `mov r0, #0 ; bx lr` stub at `0x533CC748` / `0x533CC670`. Th
 count constant stay unchanged.
 
 The UI puts the order/hide card on the Image Control page: rows can be dragged or moved with the
-arrows, the eye toggles a look, Standard (style 11) cannot be hidden, and "reset" restores the
+arrows, the eye toggles a look, Standard (style 11, and 25 for the monochrome looks) cannot be hidden, and "reset" restores the
 factory order. The order is saved in `project.json` (`lookOrder`, `lookHidden`). Added slots
-(styles 34..39) participate in the order; hiding an added slot uses the slot visibility hook that
+(styles 34..53) participate in the order; hiding an added slot uses the slot visibility hook that
 `slots.ts` already installs.
 
 - Without added slots or other additions the file keeps the official layout: only the order table
@@ -86,8 +86,13 @@ factory order. The order is saved in `project.json` (`lookOrder`, `lookHidden`).
 - `validateLookLayout` refuses an incomplete order, duplicates, hiding every look and hiding
   Standard. The order table itself was verified on a camera: order `[12,11,...]` shows Vivid then
   Standard, and `[17,18,11,...]` shows Positive Film, Cinema Yellow, Standard.
-- If the camera's current Image Control (or a U1–U3 set) points at a look that is now hidden, that
-  setting may show blank or fall back; select a visible look before installing.
+- A look that is hidden is also absent from the ADJ list and RAW development's list (both lists are
+  built through the same visibility check). If the camera's settings select a look that is now
+  hidden (the standard photo or movie set, also in U1–U3), the settings guard turns it into Standard
+  when the settings are loaded, saved or recalled (11, or 25, the monochrome looks' Standard, for
+  25..30; neither can be hidden). Custom sets keep their look. The layout is recorded in the file,
+  so the program recognises and verifies it (`tools/looks/looks_check.py` runs both lists and the
+  guard in an emulator).
 
 ## Power-off pictures chosen in the camera
 
