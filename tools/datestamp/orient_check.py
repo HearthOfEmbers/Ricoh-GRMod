@@ -4,8 +4,8 @@
 NOT part of the program. Runs the compiled module (core/src/fw/aspect/datestamp-code.ts) in Unicorn
 on synthetic pictures laid out like the camera's: the main picture as a window of the sensor
 buffer, the 720x480 screennail and the 160x120 thumbnail with the photo inside black bars. The
-development step leaves the orientation in bits 24..25 of the look word (0 as stored, 1 / 2 / 3 =
-EXIF Orientation 8 / 3 / 6, see lookstash.ts).
+orientation is in its own word, value | 0x100 (0 as stored, 1 / 2 / 3 = EXIF Orientation 8 / 3 / 6,
+see lookstash.ts and datestamp.ts).
 
 Checks, for L / M / S / XS of 3:2, 4:3, 16:9, 1:1 and the added XPan (65:24) and 5:4, both styles:
 
@@ -76,11 +76,12 @@ class Picture:
 
 
 def run(code, setting, main_wh, src_wh, sn_wh=(720, 480), th_wh=(160, 120), look=None, mono=False,
-        clock=(2026, 10, 8, 17, 34, 53), sensor=(6208, 4128)):
+        clock=(2026, 10, 8, 17, 34, 53), sensor=(6208, 4128), orient=None):
     """main_wh: main picture; src_wh: the sensor window it was scaled from (its shape is the
     photo's); sn_wh / th_wh: screennail and thumbnail sizes (720x480 / 160x120, or turned for a
     reference); sensor: buffer stride and height of the main picture's buffer. look: None (no look
-    word) or the word the development step left. Returns the planes as bytes."""
+    word) or the word the development step left. orient: None (no orientation word) or its value
+    (orientation | 0x100). Returns the planes as bytes."""
     gc.collect()   # the previous emulator (its hook refers back to it) and its 50 MB of buffers
     mu = Uc(UC_ARCH_ARM, UC_MODE_ARM)
     mu.mem_map(ORG, 0x10000)
@@ -133,7 +134,7 @@ def run(code, setting, main_wh, src_wh, sn_wh=(720, 480), th_wh=(160, 120), look
     mu.mem_write(SET, bytes([setting]))
     CTX = 0x70004000
     if look is None:
-        mu.mem_write(CTX, struct.pack('<9I', *(STUB + i * 16 for i in range(5)), SET, 0, 0, 0))
+        mu.mem_write(CTX, struct.pack('<10I', *(STUB + i * 16 for i in range(5)), SET, 0, 0, 0, 0))
     else:
         LOOKW, TABLE = 0x70007000, 0x70007100
         mu.mem_write(LOOKW, struct.pack('<I', look))
@@ -141,7 +142,9 @@ def run(code, setting, main_wh, src_wh, sn_wh=(720, 480), th_wh=(160, 120), look
         for l in (13, 14, 15, 16, 25, 26, 27, 28, 29, 30):
             table[l] = 1
         mu.mem_write(TABLE, bytes(table))
-        mu.mem_write(CTX, struct.pack('<9I', *(STUB + i * 16 for i in range(5)), SET, LOOKW, TABLE, STUB + 5 * 16))
+        ORW = 0x70007200
+        mu.mem_write(ORW, struct.pack('<I', orient or 0))
+        mu.mem_write(CTX, struct.pack('<10I', *(STUB + i * 16 for i in range(5)), SET, LOOKW, TABLE, STUB + 5 * 16, ORW if orient is not None else 0))
 
     def desc(a, P, w, h):
         mu.mem_write(a, struct.pack('<B3xIII HHHH HH 4x', 1, P.y, P.c, 0, w, h, P.stride, P.buf_h, 0, 0))
@@ -253,19 +256,19 @@ def main():
                     for look in looks:
                         for mono in ((False, True) if look is None else (False,)):
                             a = run(old, setting, main_wh, sizes[0], look=look, mono=mono)
-                            b = run(CODE, setting, main_wh, sizes[0], look=look, mono=mono)
+                            b = run(CODE, setting, main_wh, sizes[0], look=look, mono=mono, orient=None if look is None else 0x100)
                             for k in ('main_buf', 'sn_buf', 'th_buf'):
                                 checks += 1
                                 if a[k] != b[k]:
                                     failures.append(f'orientation 0 differs from 0.8.2: {rname} {SIZES[si]} setting {setting} look {look} mono {mono} {k}')
                             n += 1
         print(f'orientation 0 vs 0.8.2: {n} runs x 3 pictures', 'identical' if not failures else 'DIFFERENT', flush=True)
-        # A look word without the valid bit, but with orientation bits: as stored (and as 0.8.2).
-        a = run(old, 1, (4944, 3296), (6192, 4128), look=11 | (3 << 24))
-        b = run(CODE, 1, (4944, 3296), (6192, 4128), look=11 | (3 << 24))
+        # An orientation word without the valid bit (nothing left since start-up): as stored.
+        a = run(old, 1, (4944, 3296), (6192, 4128), look=0x10000 | 11)
+        b = run(CODE, 1, (4944, 3296), (6192, 4128), look=0x10000 | 11, orient=3)
         checks += 1
         if a['main_buf'] != b['main_buf']:
-            failures.append('look word without the valid bit: orientation applied')
+            failures.append('orientation word without the valid bit: orientation applied')
 
     # 2. orientations 1..3
     for rname, sizes in RATIOS:
@@ -275,10 +278,10 @@ def main():
                 mw, mh = main_wh
                 # reference: an upright picture of the shown size
                 ref_turned = run(CODE, setting, (mh, mw), (sh, sw), sn_wh=(480, 720), th_wh=(120, 160),
-                                 look=0x10000 | 11, sensor=(((sh + 16 + 63) & ~63), sw))
-                ref_same = run(CODE, setting, main_wh, sizes[0], look=0x10000 | 11)
+                                 look=0x10000 | 11, sensor=(((sh + 16 + 63) & ~63), sw), orient=0x100)
+                ref_same = run(CODE, setting, main_wh, sizes[0], look=0x10000 | 11, orient=0x100)
                 for o in (1, 2, 3):
-                    got = run(CODE, setting, main_wh, sizes[0], look=0x10000 | 11 | (o << 24))
+                    got = run(CODE, setting, main_wh, sizes[0], look=0x10000 | 11, orient=0x100 | o)
                     ref = ref_same if o == 2 else ref_turned
                     for which in ('M', 'sn', 'th'):
                         checks += 1

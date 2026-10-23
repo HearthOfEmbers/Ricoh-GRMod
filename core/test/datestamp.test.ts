@@ -51,15 +51,19 @@ describe.skipIf(!have)('date imprint: firmware files', () => {
     const word = (va: number): number => new DataView(data.buffer, data.byteOffset).getUint32(va - 0x53000000, true);
     // The hooks: still-menu builder, controller factory, the two SetCurrentMenu.
     for (const at of [0x531b3ecc, 0x53185f7c, 0x531e1bd0, 0x531d5e8c, 0x537034b4]) expect(word(at) >>> 24).toBe(0xea);
-    // 0.8.3: the development step's hook also leaves the orientation the EXIF writer records
-    // (shooting record at r1 + 0x2D0: byte 0x71E84 if 0x71E83 is set, else 0xD8) in bits 24..25.
-    const hook = word(0x539113f8);
-    expect(hook >>> 24).toBe(0xea);
-    const stub = 0x539113f8 + 8 + (((hook & 0xffffff) << 8) >> 6);
-    const code = Array.from({ length: 32 }, (_, i) => word(stub + 4 * i));
-    expect(code.slice(0, 9)).toEqual([0xe59122d0, 0xe92d0003, 0xe2820a71, 0xe5d01e83, 0xe3510000, 0x15d02e84, 0x05d220d8, 0xe3520003, 0x83a02000]);
-    expect(code).toContain(0xe1800c02); // orr r0, r0, r2, lsl #24
-    expect(aspect.STASH_ORIENT_SHIFT).toBe(24);
+    // 0.8.3: the camera's direction at the start of each exposure (SetShootingInfoResultBeforeExpose)
+    // and, in RAW development, the developed record's orientation go to ORIENT_WORD.
+    const target = (at: number): number => at + 8 + (((word(at) & 0xffffff) << 8) >> 6);
+    expect(word(0x53628cd8) >>> 24).toBe(0xea);
+    const exposure = Array.from({ length: 40 }, (_, i) => word(target(0x53628cd8) + 4 * i));
+    expect(exposure).toContain(0xe5900518); // ldr r0, [r0, #0x518]
+    expect(exposure).toContain(0xe5d000d8); // ldrb r0, [r0, #0xd8]
+    expect(exposure).toContain(0xe1a0c00d); // mov ip, sp (after the registers are back)
+    expect(word(0x539113f8) >>> 24).toBe(0xea);
+    const dev = Array.from({ length: 40 }, (_, i) => word(target(0x539113f8) + 4 * i));
+    expect(dev.slice(0, 5)).toEqual([0xe59122d0, 0xe92d0003, 0xe5d102ac, 0xe3500000, 0x1a00000a]); // only when r1 + 0x2ac is 0
+    expect(dev).not.toContain(0xe1800c02); // the look word has no orientation bits any more
+    expect([aspect.ORIENT_WORD, aspect.ORIENT_VALID]).toEqual([0x558372f4, 0x100]);
   });
   it('a test build with a fixed setting has no menu entry', async () => {
     const eng = await Engine.open(new Uint8Array(readFileSync(P + 'official.bin')));

@@ -39,11 +39,12 @@ struct ctx {
   void (*get_time)(void *clock, u8 *time);           /* 0x538ea9b0 */
   const u8 *setting;                                 /* bit 0: on, bit 1: with year and time */
   /* Since GR Mod 0.8.2: the look of the picture, left by the development step (0x539113F8) as
-   * look | level << 8 | 0x10000 (see lookstash.ts); 0 when the build has no such word. Since 0.8.3
-   * also the orientation in bits 24..25 (see `orientation`). */
+   * look | level << 8 | 0x10000 (see lookstash.ts); 0 when the build has no such word. */
   const volatile u32 *look;
   const u8 *mono_looks;                              /* 64 bytes: 1 for a black-and-white look */
   u32 (*mono_model)(void);                           /* 0x533EF000: 1 on the GR IV Monochrome */
+  /* Since 0.8.3: the orientation of the picture, value | 0x100 (see `orientation`); 0 without. */
+  const volatile u32 *orient;
 };
 
 /* The setting byte (see `datestamp.ts`): anything above 3 counts as off. */
@@ -58,14 +59,14 @@ struct ctx {
 
 struct colour { u8 y, cb, cr; };
 
-/* How the picture is shown, from the shooting record's orientation (what the EXIF writer at
- * 0x537FEBC4 turns into the Orientation tag: 1 -> 8, 2 -> 3, 3 -> 6, anything else -> 1). */
+/* How the picture is shown, from the camera's direction as the shooting record keeps it (what the
+ * EXIF writer at 0x537FEBC4 turns into the Orientation tag: 1 -> 8, 2 -> 3, 3 -> 6, else -> 1). */
 #define O_NONE 0u   /* EXIF 1: as stored */
 #define O_LEFT 1u   /* EXIF 8: shown turned a quarter anticlockwise */
 #define O_HALF 2u   /* EXIF 3: shown upside down */
 #define O_RIGHT 3u  /* EXIF 6: shown turned a quarter clockwise */
 #define LOOK_VALID 0x10000u
-#define ORIENT_SHIFT 24
+#define ORIENT_VALID 0x100u
 
 /* The stored pixel of shown pixel (x, y), for a stored picture of W x H. */
 static void stored_at(u32 o, s32 W, s32 H, s32 x, s32 y, s32 *sx, s32 *sy) {
@@ -298,13 +299,14 @@ static void draw(const struct ctx *k, void *cache, struct picture *p, s32 rx, s3
   sync(k, cache, p, (u32)r0, (u32)r1, 1);
 }
 
-/* The orientation the development step left with the look; O_NONE without it. */
+/* The orientation of the picture: left at the start of the exposure (the camera's direction) or,
+ * in RAW development, by the development step (see lookstash.ts and datestamp.ts); O_NONE without. */
 static u32 orientation(const struct ctx *k) {
   u32 v;
-  if (!k->look) return O_NONE;
-  v = *k->look;
-  if (!(v & LOOK_VALID)) return O_NONE;
-  return (v >> ORIENT_SHIFT) & 3u;
+  if (!k->orient) return O_NONE;
+  v = *k->orient;
+  if (!(v & ORIENT_VALID)) return O_NONE;
+  return v & 3u;
 }
 
 #ifdef DIAG
