@@ -16,15 +16,14 @@ export type Page = 'ic' | 'ratio' | 'wall' | 'copies';
 export interface RatioItem { id: string; ratio: string; name: string; preview?: RatioPreview }
 export interface PresetState { fileName: string; kind: 'xmp' | 'cube'; text: string; busy: boolean; result?: PresetResult; error?: string }
 export interface IconState { mode: 'keep' | 'text' | 'image'; text: string; style: 'film' | 'plain'; image?: string; pixels?: Uint8Array }
-export interface SlotState { preset?: PresetState; names: Partial<Record<LangCode, string>>; icon: IconState;
-  /** GR III / IIIx films: halation level built in (0 off, 1 weak, 2 strong). */
-  halation?: 0 | 1 | 2 }
+/** `halation`: Cinema Yellow / Green with a preset (0.8.2); their Toning becomes the Halation slider. */
+export interface SlotState { preset?: PresetState; names: Partial<Record<LangCode, string>>; icon: IconState; halation?: HalationState }
 /**
  * An added Image Control slot (style 34, 35, ... in the camera): `key` is `x-` and a random id;
  * `name` as typed (empty: the default name of its place), one name for every language.
  */
-/** An added slot's halation (the fixed CineStill 800T look): on, and which level the preview shows (0 = off). */
-export interface HalationState { on: boolean; preview: 0 | 1 | 2 }
+/** A slot's halation (the fixed CineStill 800T look): on (always for an added slot), and which level the preview shows (0 = off, 1 Weak, 2 Medium, 3 Strong). */
+export interface HalationState { on: boolean; preview: 0 | 1 | 2 | 3; /** Colour the preview shows (chosen in the camera). */ colour?: 'red' | 'white' }
 export interface ExtraSlot { key: string; name: string; preset?: PresetState; icon: IconState; halation?: HalationState }
 /** A factory Cinema slot (`CY`, `CG`) or the key of an added slot. */
 export type SlotKey = SlotId | string;
@@ -189,7 +188,9 @@ export async function init(): Promise<void> {
         if (!d) continue;
         slots[id].names = d.names || {};
         if (d.icon) slots[id].icon = { mode: d.icon.mode || 'keep', text: d.icon.text || '', style: d.icon.style || 'film', image: d.icon.image };
-        if (d.halation === 1 || d.halation === 2) slots[id].halation = d.halation;
+        // GR III projects up to 0.8.0-gr3exp.9 kept the film's level as a number (1 Weak, 2 Strong).
+        const h = validHalation(d.halation === 1 || d.halation === 2 ? { on: true, preview: d.halation === 2 ? 3 : 1 } : d.halation);
+        if (h) slots[id].halation = h;
       }
       const extras: ExtraSlot[] = (Array.isArray(doc.extras) ? doc.extras : []).slice(0, MAX_EXTRA_SLOTS)
         .filter((x: ExtraSlot) => x && typeof x.key === 'string' && /^x-[a-z0-9]{1,12}$/.test(x.key))
@@ -433,18 +434,20 @@ export function extraSpecs(s: State = state): ExtraSlotSpec[] {
 function validHalation(v: unknown): HalationState | null {
   if (!v || typeof v !== 'object') return null;
   const h = v as Partial<HalationState>;
-  return { on: h.on === true, preview: h.preview === 1 || h.preview === 2 ? h.preview : 0 };
+  return { on: h.on === true, preview: h.preview === 1 || h.preview === 2 || h.preview === 3 ? h.preview : 0, ...(h.colour === 'white' ? { colour: 'white' as const } : {}) };
 }
-export function halationOf(x: ExtraSlot): HalationState {
-  return x.halation ?? { on: true, preview: 0 };
+/** A slot's halation: every added slot has it (the camera switches it); a Cinema slot when it is switched on (with a preset). */
+export function halationOf(k: SlotKey, s: State = state): HalationState {
+  // GR III / IIIx: every film has it, as GR IV's added slots.
+  if (s.info?.family === 'gr3x' && !isExtra(k)) return { ...(s.slots[k as SlotId]?.halation ?? { preview: 0 }), on: true };
+  if (isExtra(k)) return { ...(s.extras.find((x) => x.key === k)?.halation ?? { preview: 0 }), on: true };
+  return s.slots[k as SlotId]?.halation ?? { on: false, preview: 0 };
 }
-/** Change the halation preview level of an added slot (every added slot carries halation; the camera switches it). */
-export function setHalation(key: string, patch: Partial<HalationState>): void {
-  set((s) => ({ extras: s.extras.map((x) => {
-    if (x.key !== key) return x;
-    const next = { ...halationOf(x), ...patch };
-    return { ...x, halation: next };
-  }) }));
+/** Change a slot's halation (on / off for a Cinema slot, strength, the level the preview shows). */
+export function setHalation(key: SlotKey, patch: Partial<HalationState>): void {
+  const next = { ...halationOf(key), ...patch };
+  if (isExtra(key)) set((s) => ({ extras: s.extras.map((x) => (x.key === key ? { ...x, halation: next } : x)) }));
+  else setSlot(key as SlotId, { halation: next });
   scheduleSave();
 }
 export function addExtraSlot(): void {
@@ -655,7 +658,7 @@ export function softText(list: readonly (SoftFocusRequest | ClarityChange)[]): s
 
 // ------------------------------------------------------------------ added aspect ratios
 const RATIO_PROBLEMS: Record<NonNullable<RatioPreview['problem']>, Key> = {
-  'bad-ratio': 'ratioBad', 'ratio-factory': 'ratioIsFactory', 'ratio-too-extreme': 'ratioExtreme', 'ratio-quick-view': 'ratioQuick',
+  'bad-ratio': 'ratioBad', 'ratio-factory': 'ratioIsFactory', 'ratio-portrait': 'ratioPortrait', 'ratio-too-extreme': 'ratioExtreme', 'ratio-quick-view': 'ratioQuick',
   'ratio-metering': 'ratioMetering', 'ratio-conflict': 'ratioConflict', 'ratio-duplicate': 'ratioDup',
 };
 const NAME_PROBLEMS: Record<string, Key> = { 'too-long': 'ratioNameLong', 'bad-char': 'ratioNameBad', empty: 'ratioNameBad' };
@@ -722,7 +725,6 @@ export function removeRatio(id: string): void {
   set((s) => { const ratios = s.ratios.filter((r) => r.id !== id); return { ratios, activeRatio: s.activeRatio === id ? ratios[0]?.id : s.activeRatio }; });
   ratiosChanged(true);
 }
-/** GR III / IIIx: a film's halation level (built in; the camera has no slider for it). */
 /** The experimental GR III build: how many films (1..maxFilms); the active slot stays among them. */
 export function setFilmCount(n: number): void {
   const max = state.info?.features.maxFilms ?? 9;
@@ -731,10 +733,6 @@ export function setFilmCount(n: number): void {
     const ids = (s.info?.slots ?? []).slice(0, want).map((x) => x.id);
     return { filmCount: want, activeSlot: ids.includes(s.activeSlot as SlotId) ? s.activeSlot : (ids[Math.max(0, want - 1)] ?? 'CY') };
   });
-  scheduleSave();
-}
-export function setFilmHalation(id: SlotId, level: 0 | 1 | 2): void {
-  set((s) => ({ slots: { ...s.slots, [id]: { ...s.slots[id], halation: level || undefined } } }));
   scheduleSave();
 }
 export function setActiveRatio(id: string): void { if (state.activeRatio !== id) set({ activeRatio: id }); }
@@ -814,8 +812,13 @@ export function pendingChanges(s: State = state): SlotChange[] {
       if (v && v !== off.names[lang].text && !nameProblem(s.info, id, lang, v)) names[lang] = v;
     }
     if (Object.keys(names).length) { req.names = names; parts.push(`${t('name')} ${Object.values(names).join(' / ')}`); labels.push(`${t('name')} “${Object.values(names)[0]}”`); }
-    // The experimental GR III build: Halation is set in the camera (the level here is the preview's).
-    if (s.info.family === 'gr3x' && sl.halation && !filmCountChoosable(s)) { req.halation = sl.halation; parts.push(`${t('halation')} ${t(sl.halation === 2 ? 'haloStrong' : 'haloWeak')}`); labels.push(t('halation')); }
+    // GR III / IIIx: every film has Halation. The experimental build sets it in the camera (the level
+    // here is the preview's); legacy builds without a film count fix it in the build (Weak, or Strong
+    // for the preview's Medium / Strong).
+    if (s.info.family === 'gr3x') {
+      const h = sl.halation;
+      if (h && h.preview > 0 && !filmCountChoosable(s)) { req.halation = h.preview === 1 ? 1 : 2; parts.push(`${t('halation')} ${t(h.preview === 1 ? 'haloWeak' : 'haloStrong')}`); labels.push(t('halation')); }
+    } else if (req.preset && sl.halation?.on) { req.halation = true; parts.push(t('halation')); labels.push(t('halation')); }
     if (parts.length) out.push({ id, parts, labels, request: req });
   }
   return out;

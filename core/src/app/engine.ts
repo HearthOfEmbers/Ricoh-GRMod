@@ -149,8 +149,10 @@ export interface SlotRequest {
   preset?: { matrixQ13: ArrayLike<number>; curves: [ArrayLike<number>, ArrayLike<number>, ArrayLike<number>]; postQ9?: ArrayLike<number> };
   icon?: Uint8Array;
   names?: Partial<Record<LangCode, string>>;
-  /** GR III / IIIx films: halation level fixed in the build (0 off, 1 weak, 2 strong). */
-  halation?: 0 | 1 | 2;
+  /** Halation. GR IV (0.8.2): on or off for Cinema Yellow / Green with a preset (its Toning becomes
+   * the Halation row). GR III / IIIx legacy builds (no film count): level fixed in the build (0 off,
+   * 1 weak, 2 strong); with a film count every film has it, set in the camera. */
+  halation?: boolean | 0 | 1 | 2;
 }
 
 /** Soft focus on one negative clarity setting: its row of the clarity table gets the gains of `strength`. */
@@ -165,7 +167,7 @@ export type FirmwareBuild = Omit<BuildResult, 'decoded'>;
 export interface RatioPreview {
   status?: 'planning-only';
   screenActual?: string;
-  problem?: 'bad-ratio' | 'ratio-factory' | 'ratio-too-extreme' | 'ratio-quick-view' | 'ratio-metering' | 'ratio-conflict' | 'ratio-duplicate';
+  problem?: 'bad-ratio' | 'ratio-factory' | 'ratio-portrait' | 'ratio-too-extreme' | 'ratio-quick-view' | 'ratio-metering' | 'ratio-conflict' | 'ratio-duplicate';
   /** The ratio the pixel grid really gives, reduced (e.g. `30:11` for 65:24). */
   actual?: string;
   /** Relative difference between the actual and the requested ratio, in percent. */
@@ -228,10 +230,15 @@ export interface BuildOptions {
   dateStamp?: boolean;
   /** The six black-and-white looks of the GR IV Monochrome. */
   monoUnlock?: boolean;
-  /** Added Image Control slots (1 to 6), after the factory ones. */
+  /** Added Image Control slots (1 to 20), after the factory ones. */
   extraSlots?: ExtraSlotSpec[];
   /** Power-off pictures (1 to 8) chosen in the camera's End Screen menu; see `encodeShutdownPicture`. */
   shutdownPictures?: ShutdownPictureSpec[];
+  /**
+   * The settings guard and what comes with it from 0.8.2 (see `aspect/guard.ts`); default true.
+   * False only to build files as GR Mod 0.8.1 and earlier did (regression tests).
+   */
+  guard?: boolean;
   /** Test builds only: a fixed setting byte (1 short, 3 long style) instead of the camera menu. */
   dateStampFixed?: number;
   /** Test builds only: print the encoder configuration on the 720x480 picture. */
@@ -592,6 +599,11 @@ export class Engine {
       if (!slots) return { ...unknown, kind: 'modified' };
       features.extraSlots = slots;
     }
+    // Halation of Cinema Yellow / Green (0.8.2): from the image as well.
+    const halation = aspect.readHalation(new aspect.Patch(dec.slice(RTOS_OFFSET, rtosEnd + rtosGrowth)), aspect.EXTRA_FIRST_STYLE, extraCount);
+    const cinemaHalation: Partial<Record<'CY' | 'CG', true>> = {};
+    for (const [id, style] of [['CY', 18], ['CG', 19]] as const) if (halation?.has(style)) cinemaHalation[id] = true;
+    if (Object.keys(cinemaHalation).length > 0) features.cinemaHalation = cinemaHalation;
     // Power-off pictures: names and identities from the image, JPEGs from RES.
     const pictureCount = readShutdownCount(dec.subarray(RTOS_OFFSET, rtosEnd + rtosGrowth)) ?? 0;
     if (pictureCount > 0 || resInsert) {
@@ -613,7 +625,8 @@ export class Engine {
     if (!specs) return modified(false, [], aligned);
     let ratios: BuiltRatio[] = [];
     try {
-      const plan = planRatios(specs);
+      // Files of earlier versions may hold ratios narrower than 1:1, which are no longer built.
+      const plan = planRatios(specs, { portrait: true });
       ratios = plan.map((r) => ({ id: r.id, name: r.name, ratio: r.ratio, actual: ratioText(r.geometry.actual.n, r.geometry.actual.d), sizes: gr4Sizes(r.geometry) }));
       // Undo the hook words (their places are the same for every list of ratios of this length
       // or any other: they are found by building once on the official image).
@@ -708,7 +721,7 @@ export class Engine {
       };
     } catch (e) {
       if (e instanceof FirmwareError) {
-        const known = ['bad-ratio', 'ratio-factory', 'ratio-too-extreme', 'ratio-quick-view', 'ratio-metering', 'ratio-conflict'];
+        const known = ['bad-ratio', 'ratio-factory', 'ratio-portrait', 'ratio-too-extreme', 'ratio-quick-view', 'ratio-metering', 'ratio-conflict'];
         const problem = (known.includes(e.code) ? e.code : 'bad-ratio') as RatioPreview['problem'];
         if (problem !== 'ratio-quick-view' || !suggest) return { problem };
         // Step the screen rectangle 4 pixels at a time in both directions until a ratio works.
@@ -820,7 +833,7 @@ export class Engine {
           const own = Object.fromEntries(given.filter(([, v]) => v !== name));
           return { name, ...(Object.keys(own).length ? { names: own } : {}), ...(r?.preset ? { preset: r.preset } : {}), ...(r?.icon ? { icon: r.icon } : {}),
             // Round 6: Halation is set in the camera (each film has the line).
-            ...(r?.halation && filmCount === undefined ? { halation: r.halation } : {}) };
+            ...(typeof r?.halation === 'number' && r.halation > 0 && filmCount === undefined ? { halation: r.halation as 1 | 2 } : {}) };
         }),
       } : undefined;
       if (options.adjSoftFocus && softFocus.length) throw new FirmwareError('bad-clarity', 'soft focus on the ADJ lever and on the clarity table cannot be combined');
@@ -831,8 +844,14 @@ export class Engine {
     if (this.layout === null || !this.info.capabilities.build) requireGr3xPort('custom firmware');
     if (this.info.bridge) throw new FirmwareError('bridge-firmware', 'open the official firmware: the bridge firmware is not a base for builds');
     const edits: SlotEdit[] = [];
+    const cinemaHalation: Partial<Record<'CY' | 'CG', true>> = {};
     for (const r of requests) {
       if (r.slot !== 'CY' && r.slot !== 'CG') throw new FirmwareError('bad-edit', 'IIIx film slot is not a GR IV slot');
+      if (r.halation !== undefined && r.halation !== false) {
+        if (r.halation !== true) throw new FirmwareError('bad-halation', `${r.slot}: halation is on or off`);
+        if (!r.preset) throw new FirmwareError('bad-halation', `${r.slot}: halation needs a preset`);
+        cinemaHalation[r.slot] = true;
+      }
       const e: SlotEdit = { slot: r.slot };
       if (r.preset) e.color = { matrixQ13: r.preset.matrixQ13, curves: r.preset.curves, ...(r.preset.postQ9 ? { postQ9: r.preset.postQ9 } : {}) };
       if (r.icon) e.icon = r.icon;
@@ -854,8 +873,11 @@ export class Engine {
     if (dateStamp && clarity.length > 0) throw new FirmwareError('bad-clarity', 'the date imprint cannot be combined with the clarity-table soft focus of 0.4.x');
     if (extraSlots.length > 0 && clarity.length > 0) throw new FirmwareError('bad-clarity', 'added slots cannot be combined with the clarity-table soft focus of 0.4.x');
     if (edits.length === 0 && ratios.length === 0 && clarity.length === 0 && !adjSoftFocus && !dateStamp && !monoUnlock && extraSlots.length === 0 && pictures.length === 0) throw new FirmwareError('bad-edit', 'nothing to change');
-    const features = { adjSoftFocus, ...(dateStamp ? { dateStamp } : {}), ...(monoUnlock ? { monoUnlock } : {}), ...(extraSlots.length > 0 ? { extraSlots } : {}), ...(pictures.length > 0 ? { shutdown: { pictures, factory: aspect.factoryShutdownJpegs(this.decoded) } } : {}) };
-    const test = options && options.dateStampFixed ? { dateStampFixed: options.dateStampFixed, dateStampDiag: !!options.dateStampDiag } : {};
+    if (Object.keys(cinemaHalation).length > 0 && clarity.length > 0) throw new FirmwareError('bad-clarity', 'halation cannot be combined with the clarity-table soft focus of 0.4.x');
+    const features = { adjSoftFocus, guard: clarity.length === 0 && options.guard !== false, ...(Object.keys(cinemaHalation).length > 0 ? { cinemaHalation } : {}), ...(dateStamp ? { dateStamp } : {}), ...(monoUnlock ? { monoUnlock } : {}), ...(extraSlots.length > 0 ? { extraSlots } : {}), ...(pictures.length > 0 ? { shutdown: { pictures, factory: aspect.factoryShutdownJpegs(this.decoded) } } : {}) };
+    const test = {
+      ...(options && options.dateStampFixed ? { dateStampFixed: options.dateStampFixed, dateStampDiag: !!options.dateStampDiag } : {}),
+    };
     const { decoded: _decoded, ...rest } = await buildFirmware(this.raw, edits, ratios, clarity, features, test);
     return rest;
   }

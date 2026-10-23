@@ -86,8 +86,8 @@ All endpoints are under `/api/`. Request and response bodies are JSON unless not
 | `GET /api/store/KEY` | | raw bytes, or 404 |
 | `PUT /api/store/KEY` | raw bytes | `{"ok":true,"size":N}` |
 | `DELETE /api/store/KEY` | | `{"ok":true}` (also when the key did not exist) |
-| `GET /api/firmware/latest?model=M` | `M` is `STANDARD`, `HDF` or `MONO` | `{"model":"HDF","name":"GR IV","applies":"RICOH GR IV / RICOH GR IV HDF","version":"1.11","date":"2026/02/13","page":"https://…/gr4_s.html","file":"gr4_v111.zip","size":34478368}`; 404 when Ricoh lists nothing for the model |
-| `POST /api/firmware/download` | `{"model":"HDF"}` | the firmware file itself (`application/octet-stream`), its name and version in `X-GRMod-Firmware-Name` / `X-GRMod-Firmware-Version` |
+| `GET /api/firmware/latest?model=M` | `M` is `STANDARD`, `HDF` or `MONO` | `{"model":"HDF","name":"GR IV","applies":"RICOH GR IV / RICOH GR IV HDF","version":"1.11","date":"2026/02/13","page":"https://…/gr4_s.html","file":"gr4_v111.zip","size":34478368}`. When Ricoh offers another version (1.20 since 2026-10-21), the answer is that release with the supported one (`ricoh.Supported`, still on Ricoh's site at a fixed address) under `"fallback"`; when Ricoh lists nothing for a model the supported release covers, it is the answer itself. 404 when there is neither |
+| `POST /api/firmware/download` | `{"model":"HDF"}`, or `{"model":"HDF","version":"1.11"}` for the fallback | the firmware file itself (the fallback's archive must match its SHA-256, else 502 `checksum`) (`application/octet-stream`), its name and version in `X-GRMod-Firmware-Name` / `X-GRMod-Firmware-Version` |
 | `GET /api/firmware/progress` | | `{"active":true,"received":N,"total":N}` of the running (or last) download |
 | `POST /api/firmware/page` | `{"model":"HDF"}` | `{"page":"…"}` after showing the model's download page (with Ricoh's licence terms) in the default browser |
 
@@ -174,7 +174,7 @@ Nothing Windows-specific can be executed on the Linux build machine. Things to v
 8. Reveal: Explorer opens with the file selected (try a path with spaces and a comma) and opens a folder.
 9. Eject: afterwards Explorer shows the reader as empty or the drive as gone; with a file from the card open in another program it fails and the card stays usable.
 10. Paths: `\\?\E:\x`, `E:\x.`, `E:\x:stream`, `E:\..\..\Windows` and a junction on an NTFS volume pointing to `C:\Windows` are all refused with 403.
-11. Online firmware: the dialog shows version 1.11 with its date and size, the download ends with the firmware open (compare with a manual download: SHA-256 `a2f664df…5655f`), "cancel" during the download stops it, and the licence line opens Ricoh's page in the default browser. Repeat with a system proxy switched on (Settings > Network > Proxy), and offline (a message and "retry", no hang).
+11. Online firmware: the dialog shows Ricoh's current version (1.20, marked as not supported, with a warning not to update the camera) and below it 1.11 with its date and size, the download ends with the firmware open (compare with a manual download: SHA-256 `a2f664df…5655f`), "cancel" during the download stops it, and the licence line opens Ricoh's page in the default browser. Repeat with a system proxy switched on (Settings > Network > Proxy), and offline (a message and "retry", no hang).
 12. Update: with a signed test release served locally (`set GRMOD_UPDATE_SOURCE=http://127.0.0.1:8000/` before starting), "Check for updates" offers it, "Update and restart" closes the window and a new one opens within a few seconds showing the new version and "Updated to …"; `GRMod.exe.old` is gone afterwards and `localStorage` is kept (same port). Also from a read-only folder (the dialog offers the download page instead) and in Edge app mode (`--browser`: the old Edge window closes).
 
 ## Checking the macOS build on a real Mac
