@@ -41,6 +41,9 @@ export interface Gr3xLookLayout {
 }
 
 const COUNT = 0x532c2a9c, COUNT_STILL = 0x532c2acc, COUNT_MOVIE = 0x532c2ae0, ITEM = 0x532c2c80, INDEX = 0x532c2f08;
+/** RawDevelopmentModel's own count of its Image Control values (`mov r0,#12; bx lr`): the range of
+ * RAW development's Image Control dial, whose entries come from ITEM with the byte 2. */
+const RAW_COUNT = 0x53283c08;
 const STILL_TABLES = [0x53b59224, 0x53b58fcc, 0x53b5919c], MOVIE_TABLES = [0x53b59234, 0x53b591c8, 0x53b5936c];
 const fail = (code: string, m: string): never => { throw new FirmwareError(code, `IIIx look layout: ${m}`); };
 const lo = (v: number) => v & 0xffff, hi = (v: number) => v >>> 16;
@@ -93,6 +96,7 @@ export function checkGr3xLookLayoutSites(p: Pick<Gr3xLookLayoutProgram, 'u32' | 
     [COUNT_MOVIE - 4, 0xe3500002], [COUNT_MOVIE, 0x93a0000a], [COUNT_MOVIE + 4, 0x9afffffa],
     [ITEM, 0xe1a0c00d], [ITEM + 4, 0xe92dd870], [ITEM + 0x58, 0xe5d5301b],
     [INDEX, 0xe1a0c00d], [INDEX + 4, 0xe92dd870], [INDEX + 0x28, 0xe5d4001b],
+    [RAW_COUNT, 0xe3a0000c], [RAW_COUNT + 4, 0xe12fff1e],
   ];
   for (const [at, w] of guards) if (p.u32(at) !== w >>> 0) fail('unexpected-instruction', `guard at ${at.toString(16)}`);
   for (const t of STILL_TABLES) if ([...p.read(t, 12)].join() !== GR3X_STILL_LOOKS.join()) fail('unexpected-layout', `still look table ${t.toString(16)}`);
@@ -112,6 +116,8 @@ export function installGr3xLookLayout(p: Gr3xLookLayoutProgram, layout: Gr3xLook
   const count = p.code(`bhi #${COUNT_STILL + 4};cmp r3,#0;moveq r0,#${L.still.length};movne r0,#${L.raw.length};b #${COUNT_STILL + 8};`);
   p.patch(COUNT_STILL, 0x93a0000c, branchWord(COUNT_STILL, count), 'look layout: still / RAW development list count');
   p.patch(COUNT_MOVIE, 0x93a0000a, (0x93a00000 | L.movie.length) >>> 0, 'look layout: movie list count');
+  // RAW development's dial counts its values itself (twelve): its list's length.
+  p.patch(RAW_COUNT, 0xe3a0000c, (0xe3a00000 | L.raw.length) >>> 0, 'look layout: RAW development dial count');
   // Entry i of the list (this = r0, i = r1).
   const item = p.code(`ldrb ip,[r0,#0x1b];cmp ip,#1;beq imovie;cmp ip,#2;beq iraw;cmp ip,#0;bne inative;
     cmp r1,#${L.still.length};bhs inative;${addr('ip', still)}ldrb r0,[ip,r1];bx lr;

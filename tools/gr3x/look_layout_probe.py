@@ -20,7 +20,7 @@ from native_probe import NativeProbe,STACK,STOP,DIAGNOSTIC
 
 if not __debug__:raise RuntimeError('Validation requires Python assertions')
 
-COUNT,ITEM,INDEX,ACTIVE_SET,MAXIMUM=0x532c2a9c,0x532c2c80,0x532c2f08,0x532bd6d4,0x532c2b7c
+COUNT,ITEM,INDEX,ACTIVE_SET,MAXIMUM,RAW_COUNT=0x532c2a9c,0x532c2c80,0x532c2f08,0x532bd6d4,0x532c2b7c,0x53283c08
 STILL=[11,12,13,14,15,16,22,17,18,19,20,21]
 MOVIE=[11,12,13,15,16,22,17,18,19,21]
 MODEL=0x62058000
@@ -98,6 +98,10 @@ def verify(data,manifest):
             assert p.run(INDEX,MODEL,look)==o.run(INDEX,MODEL,look) and p.asserts==o.asserts;calls+=1
     # The widget allocation keeps its largest count (the camera's 12, with films 12 + n).
     p.model(0,0);assert p.run(MAXIMUM,MODEL)==12+films;calls+=1
+    # RAW development's dial (RawDevelopmentModel's own count, 0x53283c08): the RAW development list's
+    # length, so that its entries are the list's only (without a layout the camera's twelve).
+    for set_ in (0,1,2):
+        p.model(2,set_);assert p.run(RAW_COUNT,MODEL)==len(lists[2])==(len(lists[2]) if layout else 12);calls+=1
     return dict(schema=1,rtos_sha256=hashlib.sha256(data).hexdigest(),calls=calls,reverse_lookups=cases,layout=layout,
         lists={['still','movie','raw_development'][f]:L for f,L in lists.items()},hardware_tested=False,
         scope='The three ImageControlModel functions natively, the active set substituted; list widgets and controllers not executed.')

@@ -29,7 +29,8 @@ SetShootingInfoResultBeforeExpose; a third submenu line Follow Orientation, defa
 four values with the look's English name (the camera's own names for looks 11..22, the build's for
 films), the Style labels as wide as the row allows (GR IV test 052), and the Image Control order and
 hidden looks (`core/src/fw/gr3x/look-layout.ts`: ImageControlModel's count, entry and reverse lookup
-answer from the layout for the still / ADJ, movie and RAW development lists; a hidden look in use becomes
+answer from the layout for the still / ADJ, movie and RAW development lists, and RAW development's
+dial takes the list's length instead of its own fixed twelve (0x53283c08); a hidden look in use becomes
 Standard, a hidden film keeps its parameters, `native/slots3.c -DHIDDEN_FILMS`). Halation is 光晕 in
 Chinese again (GR III's fonts are GR IV's and have the glyph). The orientation byte and the frame's
 look share the End Screen mode word's upper bytes (0x5580437d, 0x5580437e). #7's fitting is used for

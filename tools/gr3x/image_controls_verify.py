@@ -18,6 +18,8 @@ from color_curve_probe import COMPOSE, ISP, INPUTS, OUTPUTS, interpolate
 
 MATRIX_OBJECT = 0x620c0000
 USERDATA_COPY = 0x620d0000
+STEP_ARG = 0x620e0000
+DEVELOP_LOOK_READ = 0x536db7f8   # ldrb r2,[r3,#0x77c] in the development step (source r3, r1 = its argument + 0x8000)
 # Standard's parameters (its native default getters answer); filter-custom setters are not look-indexed.
 STANDARD_PARAMETERS = (0x77d, 0x77e, 0x77f, 0x780, 0x781, 0x782, 0x784, 0x793, 0x794)
 FILTER_SETTERS = (0x532c1cf4, 0x532c2038, 0x532c237c)
@@ -72,6 +74,9 @@ def verify(data, base, manifest):
     # Round 6: the adapters map every reserved film look (64..83) to Standard, built or not.
     adapted = {64 + k: 11 for k in range(20)} if manifest.get('filmCount') else mapping
     calls, adapter_cases = 0, 0
+    raw_words = bool(manifest.get('round8') and manifest.get('dateImprint'))
+    if raw_words:
+        patched.uc.mem_write(STEP_ARG, bytes(0x400)); patched.uc.mem_write(STEP_ARG + 0x2ac, b'\x01')
     # Every byte value and all four condition bits. Only the intended destination
     # register changes; the caller's flags and stack are exactly preserved.
     for site in manifest['lookEntries']['adapters']:
@@ -80,6 +85,11 @@ def verify(data, base, manifest):
             for flags in range(16):
                 registers = [0x12340000 + i for i in range(15)]
                 registers[source] = COMMON
+                if raw_words and site['address'] == DEVELOP_LOOK_READ:
+                    # Round 8: the film adapter also reads the development step's flag (r1 = its
+                    # argument + 0x8000; RAW development's words are run by datestamp8_probe.py):
+                    # here a camera picture (flag set), so only the look path runs.
+                    registers[1] = STEP_ARG
                 registers[13] = STACK
                 for i, v in enumerate(registers):
                     patched.uc.reg_write(getattr(reg, 'UC_ARM_REG_R' + str(i)), v)
@@ -110,7 +120,10 @@ def verify(data, base, manifest):
         assert struct.unpack('<256H', probe.uc.mem_read(ISP, 512)) == reference
         calls += 3
 
-    # Preserve native menus, names, icons and defaults; append only to stills.
+    # Preserve native menus, names, icons and defaults; append only to stills. Round 8 with an
+    # Image Control order: the layout's lists (look_layout_probe.py checks them in full).
+    from look_layout_probe import expected as layout_lists
+    lists, layout = layout_lists(manifest)
     for mode in range(3):
         for bank in range(3):
             stock.menu_state(mode, bank); patched.menu_state(mode, bank)
@@ -118,6 +131,9 @@ def verify(data, base, manifest):
             expected = [stock.call(0x532c2c80, OBJECT, i) for i in range(old_count)]
             if mode == 0:
                 expected += list(mapping)
+            if layout:
+                assert sorted(expected) == sorted(set(expected)) and set(lists[mode]) <= set(expected)
+                expected = lists[mode]
             assert patched.call(0x532c2a9c, OBJECT) == len(expected)
             for i, identity in enumerate(expected):
                 assert patched.call(0x532c2c80, OBJECT, i) == identity
