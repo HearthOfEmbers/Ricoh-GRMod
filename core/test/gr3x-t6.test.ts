@@ -30,7 +30,7 @@ describe.skipIf(!input)('T6 nine independent colour films', () => {
     const inspected = await (await Engine.open(raw)).inspect(t6.bytes);
     expect(inspected).toMatchObject({ kind: 'modified', verified: true, monoUnlock: false });
     expect(inspected.slots.map(s => s.names.en)).toEqual([...T6_FILM_NAMES]);
-    expect(inspected.slots.map(s => s.id)).toEqual([...GR3X_FILM_IDS]);
+    expect(inspected.slots.map(s => s.id)).toEqual(GR3X_FILM_IDS.slice(0, 9));
     // The app builds T6d: the same films, each keeping its own parameters.
     const t6d = await buildGr3xTestFirmware(raw, soft, { displayRevision: 3, monoReplicas: false, films, ownParameters: true });
     expect(t6d.manifest).toMatchObject({ ownParameters: true, sharedParameters: true });

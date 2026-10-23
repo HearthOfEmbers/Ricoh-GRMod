@@ -98,13 +98,15 @@ class DateProbe(AdjProbe):
         s.uc.mem_write(PTR,struct.pack('<I',REC if pointer else 0))
     def byte(s):return s.uc.mem_read(REC+OFFSET,1)[0]
 
-def gr4_reference(setting,pictures):
-    """GR IV's camera-tested module (aspect/datestamp-code.ts) on the same pictures and clock."""
+def gr4_reference(setting,pictures,look=None):
+    """GR IV's camera-tested module (aspect/datestamp-code.ts, 0.8.2) on the same pictures and clock;
+    `look`: (the look word, the 64-byte table of black-and-white looks) for its look fields."""
     code=base64.b64decode(re.search(r"DATESTAMP_CODE = '([^']+)'",(ROOT/'core/src/fw/aspect/datestamp-code.ts').read_text()).group(1))
     mu=Uc(UC_ARCH_ARM,UC_MODE_ARM);ORG=0x10000;STUB=0x70000000
     mu.mem_map(ORG,0x10000);mu.mem_write(ORG,code);mu.mem_map(0x60000000,0x100000);mu.mem_map(STUB,0x100000)
     for base,size in ((0x63000000,0x1000000),(LOW,0x800000)):mu.mem_map(base,size)
     for i in range(5):mu.mem_write(STUB+i*16,struct.pack('<I',0xe12fff1e))
+    mu.mem_write(STUB+5*16,struct.pack('<2I',0xe3a00000,0xe12fff1e))   # the model check: 0 (not a Monochrome)
     def hook(uc,addr,size,ud):
         i=(addr-STUB)//16
         if i==0:uc.reg_write(reg.UC_ARM_REG_R0,0x70001000)
@@ -113,6 +115,9 @@ def gr4_reference(setting,pictures):
     mu.hook_add(UC_HOOK_CODE,hook,begin=STUB,end=STUB+0x50)
     mu.mem_write(0x70001004,struct.pack('<I',0x70002000));mu.mem_write(0x70003000,bytes([setting]))
     mu.mem_write(0x70004000,struct.pack('<6I',*(STUB+i*16 for i in range(5)),0x70003000))
+    if look is not None:
+        mu.mem_write(0x70007000,struct.pack('<I',look[0]));mu.mem_write(0x70007100,look[1])
+        mu.mem_write(0x70004018,struct.pack('<3I',0x70007000,0x70007100,STUB+5*16))
     for a,b in pictures['memory']:mu.mem_write(a,b)
     descs=pictures['descriptors']
     for i,d in enumerate(descs):mu.mem_write(0x70005000+i*0x20,d)
@@ -175,7 +180,7 @@ def verify_list(p,data,manifest,official,report):
     rec=bytes(c.mem_read(table+118*REC_SIZE,REC_SIZE));f=struct.unpack('<16I',rec)
     assert f[0]==0x10000 and f[1]==ids['name'] and f[2:10]==(e['dateCount'],0,e['dateDraw'],0,e['dateSet'],0,e['dateIsCurrent'],0) and not any(f[10:])
     assert p.call(e['dateCount'],0)==3
-    for v,(icon,text) in enumerate(((296,2),(ids['iconShort'],ids['short']),(ids['iconLong'],ids['long']))):
+    for v,(icon,text) in enumerate(((344,2),(ids['iconShort'],ids['short']),(ids['iconLong'],ids['long']))):
         p.ui=[];p.call(e['dateDraw'],0x62056000,0x6205a000,v);calls+=1
         assert p.ui==[(LIST_ITEM,0x6205a000,icon,text)],(v,p.ui)
     states={}
@@ -184,7 +189,7 @@ def verify_list(p,data,manifest,official,report):
         norm=stored if stored in (1,3) else 0
         assert cur==[int(norm==0),int(norm==1),int(norm==3)] and p.byte()==norm,(stored,cur,p.byte())
         p.ui=[];p.setting(stored);p.call(e['dateLine'],0x62056000,0x6205b000);calls+=1
-        icon={0:296,1:ids['iconShort'],3:ids['iconLong']}[norm]
+        icon={0:344,1:ids['iconShort'],3:ids['iconLong']}[norm]
         assert p.ui==[(LINE_ICON,0x6205b000,icon,p.ui[0][3]),(TITLE,0x6205b000,ids['name'],ids['name'])],(stored,p.ui)
         states[stored]=norm
     for v,byte in ((0,0),(1,1),(2,3)):
@@ -238,7 +243,9 @@ def verify_submenu(p,data,manifest,official,report):
         assert f[0]==0x10000 and f[1]==title and f[2:10]==(cnt,0,draw,0,st,0,cur,0) and not any(f[10:])
         h=struct.unpack('<16I',horizon);assert h[0]==f[0] and h[3]==f[3]
     assert p.call(e['dateCount'],0)==2;calls+=1
-    for draw,values in ((e['dateDrawOnOff'],((296,2),(297,1))),(e['dateDrawStyle'],((ids['iconShort'],ids['short']),(ids['iconLong'],ids['long'])))):
+    # Round 7: the camera's boxed OFF / ON (296 / 297); up to round 6 Horizon's line icons (344 / 345).
+    OFF,ON=ids.get('iconOff',344),ids.get('iconOn',345)
+    for draw,values in ((e['dateDrawOnOff'],((OFF,2),(ON,1))),(e['dateDrawStyle'],((ids['iconShort'],ids['short']),(ids['iconLong'],ids['long'])))):
         for v,(icon,text) in enumerate(values):
             p.ui=[];p.call(draw,0x62056000,0x6205a000,v);calls+=1
             assert p.ui==[(LIST_ITEM,0x6205a000,icon,text)],(v,p.ui)
@@ -262,7 +269,7 @@ def verify_submenu(p,data,manifest,official,report):
         assert sw==[int(norm&1==0),int(norm&1==1)] and p.byte()==norm,(stored,sw)
         p.setting(stored);sy=[p.call(e['dateIsStyle'],0,v) for v in range(2)];calls+=2
         assert sy==[int(norm&2==0),int(norm&2==2)] and p.byte()==norm,(stored,sy)
-        on=297 if norm&1 else 296;style=ids['iconLong'] if norm&2 else ids['iconShort']
+        on=ON if norm&1 else OFF;style=ids['iconLong'] if norm&2 else ids['iconShort']
         p.ui=[];p.setting(stored);p.call(e['dateLine'],0x62056000,0x6205b000);calls+=1
         assert p.ui==[(TWO_ICONS,0x6205b000,on,style),(TITLE,0x6205b000,ids['name'],ids['name'])],(stored,p.ui)
         p.ui=[];p.setting(stored);p.call(e['dateLineOnOff'],0x62056000,0x6205b000);calls+=1
@@ -281,7 +288,7 @@ def verify_submenu(p,data,manifest,official,report):
     p.setting(3,pointer=False)
     assert [p.call(e['dateIsOnOff'],0,v) for v in range(2)]==[1,0] and [p.call(e['dateIsStyle'],0,v) for v in range(2)]==[1,0];calls+=4
     p.call(e['dateSetOnOff'],0,1);p.call(e['dateSetStyle'],0,1);assert p.byte()==3;calls+=2
-    p.ui=[];p.call(e['dateLine'],0x62056000,0x6205b000);assert p.ui[0]==(TWO_ICONS,0x6205b000,296,ids['iconShort']);calls+=1
+    p.ui=[];p.call(e['dateLine'],0x62056000,0x6205b000);assert p.ui[0]==(TWO_ICONS,0x6205b000,OFF,ids['iconShort']);calls+=1
     report['submenu']={'record':18,'lists':[118,119],'values':4,'stored_normalised':{hex(k):v for k,v in states.items()}}
     return calls
 
@@ -336,6 +343,33 @@ def verify(data,manifest):
     assert results['3']>results['1']
     low=pictures(LOW);p.setting(1);got=execute(p,low)
     assert got[:2]==[b for _,b in low['memory']][:2]   # main picture below 0x5d000000: untouched
+    if ids.get('iconOff'):
+        # Round 7 (as GR IV 0.8.2): the imprint is light only exactly for black-and-white looks, by the
+        # look word the development step leaves (the stash); without a valid word, by the colours.
+        ctx=e['dateContext'];words=struct.unpack('<10I',bytes(c.mem_read(ctx,40)))
+        assert words[5:7]==(PTR,OFFSET) and words[7]==0x55804378
+        table=bytes(c.mem_read(words[8],64));assert [i for i in range(64) if table[i]]==[13,14,15,16]+[32+k for k,m in enumerate(manifest.get('monoFilms') or []) if m]
+        assert p.call(words[9])==0;calls+=1
+        looks={}
+        for word in [0,13|0x10000,16|0x10000,11|0x10000,22|0x10000,32|0x10000,51|0x10000,63|0x10000,13,255|0x10000]:
+            c.mem_write(0x55804378,struct.pack('<I',word));p.setting(3);got=execute(p,pics);calls+=1
+            assert got==gr4_reference(3,pics,(word,table)),hex(word)
+            looks[hex(word)]=sum(sum(a!=b for a,b in zip(x,y)) for x,y in zip(got,base))
+        c.mem_write(0x55804378,b'\0'*4)
+        report['by_look']=dict(equal_to_gr4_module=True,changed_bytes=looks)
+    if 'lookStash' in e:
+        # Round 7 without films: the development step's look read also leaves look | 0x10000.
+        rec=0x62059800;regs=[0x6000+i for i in range(13)];regs[3]=rec;cases=0
+        for look in list(range(0,24))+[64,83,255]:
+            for flags in (0,0xf):
+                c.mem_write(rec+0x77c,bytes([look]));c.mem_write(0x55804378,b'\xa5'*4)
+                for i,v in enumerate(regs):c.reg_write(getattr(reg,'UC_ARM_REG_R'+str(i)),v)
+                c.reg_write(reg.UC_ARM_REG_SP,STACK);c.reg_write(reg.UC_ARM_REG_CPSR,0x13|flags<<28)
+                c.emu_start(0x536db7f8,0x536db7fc,count=100)
+                out=[c.reg_read(getattr(reg,'UC_ARM_REG_R'+str(i))) for i in range(13)]
+                assert out[2]==look and out[:2]==regs[:2] and out[3:]==regs[3:] and c.reg_read(reg.UC_ARM_REG_SP)==STACK
+                assert c.reg_read(reg.UC_ARM_REG_CPSR)>>28==flags and u32(c,0x55804378)==look|0x10000;cases+=1;calls+=1
+        report['look_stash_cases']=cases
     report['pictures']=dict(changed_bytes=results,equal_to_gr4_module=True,low_main_plane_untouched=True)
     return dict(schema=1,rtos_sha256=hashlib.sha256(data).hexdigest(),calls=calls,**report,hardware_tested=False,
         scope='Patched builder, factory, key map read, list SetCurrentMenu, list handlers and JPEG entry with substitutes for UI widgets, model, cache and clock.')

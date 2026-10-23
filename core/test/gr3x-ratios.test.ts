@@ -49,8 +49,14 @@ describe.skipIf(!input)('GR III / IIIx custom ratio builds', () => {
   beforeAll(async () => { raw = new Uint8Array(readFileSync(input!)); engine = await Engine.open(raw); });
   it('builds the T4 seven exactly as the tested T4 and recognises it', async () => {
     const t4 = await buildGr3xTestFirmware(raw);
-    const api = await engine.buildFirmware([], GR3X_T4_CUSTOM.map(r => ({ ratio: r.ratio, name: r.name! })));
+    // Without the settings guard (round 7 on the experimental GR III build, as GR IV 0.8.2): T4 itself.
+    const api = await engine.buildFirmware([], GR3X_T4_CUSTOM.map(r => ({ ratio: r.ratio, name: r.name! })), [], { guard: false });
     expect(api.sha256).toBe(t4.report.outputSha256);
+    if (engine.info.features.maxFilms === 20) {
+      const guarded = await engine.buildFirmware([], GR3X_T4_CUSTOM.map(r => ({ ratio: r.ratio, name: r.name! })));
+      expect(guarded.sha256).not.toBe(t4.report.outputSha256);
+      expect(await (await Engine.open(raw)).inspect(guarded.file)).toMatchObject({ kind: 'modified', verified: true });
+    }
   }, 120000);
   it('builds, records and recognises another list', async () => {
     const ratios = [{ ratio: '2.39:1', name: 'Scope' }, { ratio: '4:5', name: 'Portrait' }, { ratio: '65:24', name: 'XPan' }];

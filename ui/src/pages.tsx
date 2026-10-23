@@ -241,26 +241,21 @@ function SlotCard({ id }: { id: SlotId }) {
   );
 }
 
-/** The experimental GR III build: how many films are added (0 to maxFilms), as GR IV's added slots. */
+/** The experimental GR III build: how many films are added (0 to maxFilms), laid out as GR IV's added slots (ExtrasHead). */
 function FilmCountHead() {
   const n = useStore((s) => s.filmCount);
   const max = useStore((s) => s.info?.features.maxFilms ?? 9);
+  const options = Array.from({ length: max + 1 }, (_, i) => ({ value: String(i), label: String(i) }));
   return (
     <div className="card extras-head" data-tour="ic-extra">
       <div className="extras-row">
         <span className="page-icon soft-ico">{Ico.plus}</span>
         <div className="soft-text">
-          <b>{t('filmCountTitle')}</b>
+          <b>{t('extraTitle')}</b>
           <span className="muted small ellipsis">{t('filmCountSub', { n: max })}</span>
         </div>
-        <div className="film-stepper">
-          <button className="btn small icon-only" aria-label={t('filmFewer')} title={t('filmFewer')} disabled={n <= 0} onClick={() => setFilmCount(n - 1)}>−</button>
-          <select aria-label={t('filmCountTitle')} value={n} onChange={(e) => setFilmCount(Number(e.target.value))}>
-            {Array.from({ length: max + 1 }, (_, i) => <option key={i} value={i}>{i === 0 ? t('extraNone') : t('filmCountLabel', { n: i })}</option>)}
-          </select>
-          <button className="btn small icon-only" aria-label={t('filmMore')} title={t('filmMore')} disabled={n >= max} onClick={() => setFilmCount(n + 1)}>+</button>
-        </div>
       </div>
+      <div className="extras-count"><Select variant="box" value={String(n)} onChange={(v) => setFilmCount(Number(v))} options={options} label={t('extraTitle')} /></div>
     </div>
   );
 }
@@ -370,7 +365,7 @@ function HalationProp({ k }: { k: SlotKey }) {
             {preview > 0 && <Segmented value={colour} onChange={(v) => setHalation(k, { colour: v as 'red' | 'white' })} options={[{ value: 'red', label: t('haloRed') }, { value: 'white', label: t('haloWhite') }]} />}
           </div>
         )}
-        <span className="muted small halo-note">{t(cinema ? 'halationCinemaSub' : fixed ? 'gr3xHalationSub' : 'halationSub')}</span>
+        <span className="muted small halo-note">{t(cinema ? 'halationCinemaSub' : fixed ? 'gr3xHalationSub' : gr3x ? 'gr3xHalationRowsSub' : 'halationSub')}</span>
       </div>
     </Prop>
   );

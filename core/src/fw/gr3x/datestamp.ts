@@ -53,12 +53,14 @@
  *    list ends 117 records after the table start (an immediate), so it still covers exactly the
  *    official records.
  *  - Texts: the name (21 languages, GR IV's) and the two value names; Off is the camera's text 2.
- *  - Icons: the camera's boxed OFF / ON text icons (296, 297; GR IV uses its own 310, 311) and two
- *    new 40 x 40 style icons (GR IV's).
+ *  - Icons: Off as Horizon Correction's (344; the submenu's On 345) up to round 6; from round 7 the
+ *    camera's boxed OFF / ON text icons (296, 297), as GR IV's 310 / 311. Two new 40 x 40 style
+ *    icons (GR IV's).
  */
 import { assembleWords, branchWord, movWord } from '../aspect/arm';
 import { FirmwareError } from '../types';
 import { GR3X_DATESTAMP_CODE } from './picture-modules';
+import { GR3X_DATESTAMP_R6_CODE } from './picture-modules-r6';
 import { GR3X_JPEG_EXECUTE } from './jpeg-stage';
 import { GR3X_PICTURE_MENU_ID, installGr3xEndScreenSetup, installGr3xPictureList, installGr3xPictureSetupLine } from './shutdown';
 import { GR3X_END_SCREEN_ID as END_SCREEN_ID, GR3X_PICTURE_LIST_ID, GR3X_PICTURE_MODE } from './endscreen';
@@ -93,7 +95,8 @@ const SELECT_SITES: readonly (readonly [number, number, number])[] = [
 ];
 export const GR3X_DATE_RECORD = SELECT_RECORDS + 1;
 const LINE_VALUE_ICON = 0x5339de20, TOP_SET_TITLE = 0x5339dc70, LIST_SET_ITEM = 0x5339e8b0;
-const ICON_OFF = 296, TEXT_OFF = 2;
+/** Horizon Correction's line icons (rounds 4..6) and, from round 7, the camera's boxed OFF / ON texts. */
+const ICON_OFF = 344, TEXT_OFF = 2, TEXT_ICON_OFF = 296;
 const HORIZON_HANDLERS = { title: 362, count: 0x531b3b04, draw: 0x531b5310, set: 0x531b6de4, isCurrent: 0x531b8544 };
 
 const CACHE = 0x536bbc30, CACHE_FLUSH_FOR_READ = 0x536bbcc0, CACHE_CLEAN = 0x536bbcac, PLATFORM = 0x536bd838, GET_TIME = 0x536b6510;
@@ -121,7 +124,7 @@ const SUB_SITES: readonly (readonly [number, number, number])[] = [
   [0x531c5d18, 0x531c5d20, 3], [0x531c5d80, 0x531c5d88, 2], [0x531c60e8, 0x531c60f4, 8], [0x531c6318, 0x531c631c, 5], [0x531c63e4, 0x531c63f0, 3],
 ];
 const TOP_SET_TWO_ICONS = 0x5339df08, SUB_SET_ICON = 0x533a6a70;
-const ICON_ON = 297, TEXT_ON = 1;
+const ICON_ON = 345, TEXT_ON = 1, TEXT_ICON_ON = 297;
 const END_SCREEN_TITLE = 665;
 
 const lo = (v: number) => v & 0xffff, hi = (v: number) => v >>> 16;
@@ -138,22 +141,45 @@ const load = (n: string) => `movw r2,#${lo(GR3X_DATE_SETTINGS_POINTER)};movt r2,
 const load4 = (n: string) => `movw r2,#${lo(GR3X_DATE_SETTINGS_POINTER)};movt r2,#${hi(GR3X_DATE_SETTINGS_POINTER)};ldr r2,[r2];mov r3,#0;
   cmp r2,#0;beq ld${n};ldrb r3,[r2,#${GR3X_DATE_OFFSET}];cmp r3,#3;movhi r3,#0;strbhi r3,[r2,#${GR3X_DATE_OFFSET}];ld${n}:`;
 
-export function gr3xDateModule(): Uint8Array {
-  const raw = Uint8Array.from(atob(GR3X_DATESTAMP_CODE), c => c.charCodeAt(0));
+/** The module: round 7's (0.8.2 sources: with the look fields) or, for the files of rounds 4..6, theirs. */
+export function gr3xDateModule(round7 = true): Uint8Array {
+  const raw = Uint8Array.from(atob(round7 ? GR3X_DATESTAMP_CODE : GR3X_DATESTAMP_R6_CODE), c => c.charCodeAt(0));
   if (raw.length % 4) fail('date imprint module length');
   return raw;
 }
 
+/** GR III's black-and-white looks: Monotone, Soft Monotone, Hard Monotone, Hi-Contrast B&W (as GR IV's 13..16). */
+export const GR3X_MONO_LOOKS = [13, 14, 15, 16] as const;
+/** Films in the look word the development step leaves (look 64 + k as 32 + k: the modules' tables have 64 entries). */
+export const GR3X_STASH_FILM = 32;
+
+/** Round 7 (as GR Mod 0.8.2): the imprint is light only exactly for black-and-white looks, from the
+ * look word the development step leaves (the halation stash, jpeg-stage.ts): `stash` its address,
+ * `monoFilms` which films are black and white (their presets give grey for every colour). */
+export interface Gr3xDateLook { stash: number; monoFilms: readonly boolean[] }
+
+/** The 64-byte table of black-and-white looks of the stash word (GR IV's monoTable). */
+export function gr3xMonoTable(monoFilms: readonly boolean[]): Uint8Array {
+  const t = new Uint8Array(64);
+  for (const l of GR3X_MONO_LOOKS) t[l] = 1;
+  monoFilms.forEach((m, k) => { if (m) t[GR3X_STASH_FILM + k] = 1; });
+  return t;
+}
+
 /** The picture side: the module behind a stub at the start of Execute. Returns the stub, which
  * ends by carrying on with Execute; the halation (jpeg-stage.ts) goes in front of it. */
-export function installGr3xDateImprintStage(p: Gr3xDateProgram) {
+export function installGr3xDateImprintStage(p: Gr3xDateProgram, look?: Gr3xDateLook) {
   const guards: readonly (readonly [number, number])[] = [
     [GR3X_JPEG_EXECUTE, 0xe1a0c00d], [GR3X_JPEG_EXECUTE + 4, 0xe92ddff0], [GR3X_JPEG_EXECUTE + 0x18, 0xe5914008],
     [CACHE, 0xe30d01b4], [CACHE_FLUSH_FOR_READ, 0xe1a0c00d], [CACHE_CLEAN, 0xe1a00001], [PLATFORM, 0xe1a0c00d], [GET_TIME, 0xe5d0300c],
   ];
   for (const [at, w] of guards) if (p.word(at) !== w) fail(`IIIx date imprint guard at ${at.toString(16)}`);
-  const ctx = p.append(u32([CACHE, CACHE_FLUSH_FOR_READ, CACHE_CLEAN, PLATFORM, GET_TIME, GR3X_DATE_SETTINGS_POINTER, GR3X_DATE_OFFSET]));
-  const module = p.append(gr3xDateModule());
+  if (look && (look.monoFilms.length > 20)) fail('IIIx date imprint: films');
+  // Round 7: the look word, the table of black-and-white looks and the model check (GR III has no
+  // Monochrome model: always 0).
+  const lookWords = look ? [look.stash, p.append(gr3xMonoTable(look.monoFilms)), p.code('mov r0,#0;bx lr;')] : [];
+  const ctx = p.append(u32([CACHE, CACHE_FLUSH_FOR_READ, CACHE_CLEAN, PLATFORM, GET_TIME, GR3X_DATE_SETTINGS_POINTER, GR3X_DATE_OFFSET, ...lookWords]));
+  const module = p.append(gr3xDateModule(!!look));
   const stub = p.code(`push {r0-r3,ip,lr};ldr r1,[r1,#8];movw r0,#${lo(ctx)};movt r0,#${hi(ctx)};bl #${module};pop {r0-r3,ip,lr};
     mov ip,sp;b #${GR3X_JPEG_EXECUTE + 4};`);
   p.patch(GR3X_JPEG_EXECUTE, 0xe1a0c00d, branchWord(GR3X_JPEG_EXECUTE, stub), 'date imprint: JPEG encode step');
@@ -173,7 +199,10 @@ export function installGr3xDateImprintMenu(p: Gr3xDateProgram, ids: Gr3xDateIds)
 /** Round 6: Setup's End Screen line opens a submenu (Type / Picture, endscreen.ts). */
 export interface Gr3xEndScreenMenu { typeText: number; pictureText: number; lineType: number; linePicture: number }
 
-export function installGr3xMenuAdditions(p: Gr3xDateProgram, o: { date?: Gr3xDateIds; dateForm?: Gr3xDateForm; picture?: Gr3xPictureIds; endScreen?: Gr3xEndScreenMenu }) {
+export function installGr3xMenuAdditions(p: Gr3xDateProgram, o: { date?: Gr3xDateIds; dateForm?: Gr3xDateForm; picture?: Gr3xPictureIds; endScreen?: Gr3xEndScreenMenu;
+  /** Round 7: the submenu's On / Off as the camera's boxed OFF / ON texts (round 6: Horizon's line icons). */
+  onOffText?: boolean }) {
+  const iconOff = o.onOffText ? TEXT_ICON_OFF : ICON_OFF, iconOn = o.onOffText ? TEXT_ICON_ON : ICON_ON;
   const ids = o.date;
   if (o.picture && o.endScreen) fail('IIIx pictures: list or submenu');
   const sub = !!ids && o.dateForm === 'submenu';
@@ -224,14 +253,14 @@ export function installGr3xMenuAdditions(p: Gr3xDateProgram, o: { date?: Gr3xDat
     const I = ids;
     // --- The line of the still menu: both values' icons (on/off, style) and the name.
     line = p.code(`push {r4,lr};mov r4,r1;${load4('a')}
-      tst r3,#1;movweq r1,#${ICON_OFF};movwne r1,#${ICON_ON};tst r3,#2;movweq r2,#${I.iconShort};movwne r2,#${I.iconLong};
+      tst r3,#1;movweq r1,#${iconOff};movwne r1,#${iconOn};tst r3,#2;movweq r2,#${I.iconShort};movwne r2,#${I.iconLong};
       mov r0,r4;bl #${TOP_SET_TWO_ICONS};mov r0,r4;movw r1,#${I.name};mov r2,r1;pop {r4,lr};b #${TOP_SET_TITLE};`);
     // --- Submenu lines: the icon of the current value (this = r0, line = r1).
-    const lineOnOff = p.code(`${load4('b')}mov r0,r1;tst r3,#1;movweq r1,#${ICON_OFF};movwne r1,#${ICON_ON};b #${SUB_SET_ICON};`);
+    const lineOnOff = p.code(`${load4('b')}mov r0,r1;tst r3,#1;movweq r1,#${iconOff};movwne r1,#${iconOn};b #${SUB_SET_ICON};`);
     const lineStyle = p.code(`${load4('c')}mov r0,r1;tst r3,#2;movweq r1,#${I.iconShort};movwne r1,#${I.iconLong};b #${SUB_SET_ICON};`);
     // --- The two lists (this = r0; draw: item r1, value r2; set / is current: value r1).
     const count = p.code('mov r0,#2;bx lr;');
-    const drawOnOff = p.code(`mov r0,r1;cmp r2,#0;movweq r1,#${ICON_OFF};moveq r2,#${TEXT_OFF};movwne r1,#${ICON_ON};movne r2,#${TEXT_ON};b #${LIST_SET_ITEM};`);
+    const drawOnOff = p.code(`mov r0,r1;cmp r2,#0;movweq r1,#${iconOff};moveq r2,#${TEXT_OFF};movwne r1,#${iconOn};movne r2,#${TEXT_ON};b #${LIST_SET_ITEM};`);
     const setOnOff = p.code(`cmp r1,#1;bxhi lr;push {r4};mov r4,r1;${load4('d')}cmp r2,#0;beq so;bic r3,r3,#1;orr r3,r3,r4;strb r3,[r2,#${GR3X_DATE_OFFSET}];so:pop {r4};bx lr;`);
     const isOnOff = p.code(`${load4('e')}and r3,r3,#1;cmp r3,r1;moveq r0,#1;movne r0,#0;bx lr;`);
     const drawStyle = p.code(`mov r0,r1;cmp r2,#0;movweq r1,#${I.iconShort};movweq r2,#${I.short};movwne r1,#${I.iconLong};movwne r2,#${I.long};b #${LIST_SET_ITEM};`);

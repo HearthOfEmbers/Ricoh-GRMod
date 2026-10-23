@@ -1,5 +1,5 @@
 """Validate the exact fixed-nine candidate before giving it an update filename."""
-import argparse,hashlib,json
+import argparse,hashlib,json,os
 from pathlib import Path
 from adj_probe import verify as adj,verify_image_identity,CombinedGeometryProbe
 from experiment_probe import verify as geometry
@@ -18,6 +18,7 @@ from adj_softfocus_probe import verify as adj_soft_focus
 from datestamp_probe import verify as date_imprint
 from shutdown_probe import verify as power_off_pictures
 from endscreen_probe import verify as end_screen
+from guard_probe import verify as settings_guard
 
 if not __debug__:raise RuntimeError('Validation requires Python assertions')
 
@@ -39,6 +40,9 @@ def main():
     assert manifest['originalRtosSha256']==profile['rtos_sha256'] and manifest['profile']==profile['id']
     assert build['profile']==profile['id'] and build['inputSha256']==profile['container_sha256'] and build['filename']==profile['filename']
     results={}
+    # GR3X_ONLY=name,name: a development re-run of some checks only (a release runs them all).
+    only={x for x in os.environ.get('GR3X_ONLY','').split(',') if x}
+    want=lambda name:not only or name in only
     for name,run in (
         ('adj',lambda:adj(data,manifest)),
         ('geometry',lambda:geometry(data,manifest['geometry'],CombinedGeometryProbe(data,manifest))),
@@ -56,9 +60,11 @@ def main():
         *((('date-imprint',lambda:date_imprint(data,manifest)),) if manifest.get('dateImprint') else ()),
         *((('power-off-pictures',lambda:power_off_pictures(data,manifest)),) if manifest.get('pictures') and manifest['pictures'].get('form')!='submenu' else ()),
         *((('end-screen-pictures',lambda:end_screen(data,manifest)),) if manifest.get('pictures') and manifest['pictures'].get('form')=='submenu' else ()),
+        *((('settings-guard',lambda:settings_guard(data,manifest)),) if manifest.get('round7') else ()),
         ('updater-loader',lambda:loader(data,a.boot.read_bytes(),original,candidate,build)),
         ('independent-codec',lambda:package(original,candidate,manifest,build,a.reference)),
     ):
+        if not want(name):continue
         report=run();report['candidate_sha256']=sha
         path=a.output/(name+'.json')
         with path.open('x') as f:json.dump(report,f,indent=2);f.write('\n')
@@ -66,7 +72,7 @@ def main():
         if not isinstance(count,int):raise ValueError('Unexpected call count')
         results[name]=dict(passed=True,calls=count,report=path.name,sha256=hashlib.sha256(path.read_bytes()).hexdigest())
         print(name+': passed',flush=True)
-    if manifest['kind']=='gr3x-image-control-patchset':
+    if manifest['kind']=='gr3x-image-control-patchset' and want('image-controls'):
         from image_controls_verify import verify as look_verify
         assert a.base_look_manifest is not None
         report=look_verify(data,json.loads(a.base_look_manifest.read_text()),manifest)
@@ -83,7 +89,8 @@ def main():
             with path.open('x') as f:json.dump(report,f,indent=2);f.write('\n')
             results['look-icons']=dict(passed=True,calls=report['native_calls'],report=path.name,sha256=hashlib.sha256(path.read_bytes()).hexdigest())
             print('look-icons: passed',flush=True)
-        if any(k in manifest['lookEntries'] for k in ('jpeg','postMatrix')):
+    if manifest['kind']=='gr3x-image-control-patchset':
+        if any(k in manifest['lookEntries'] for k in ('jpeg','postMatrix')) and want('picture-stage'):
             from picture_stage_probe import verify as stage_verify
             report=stage_verify(data,manifest,a.halation_reference)
             report['candidate_sha256']=sha
@@ -91,7 +98,7 @@ def main():
             with path.open('x') as f:json.dump(report,f,indent=2);f.write('\n')
             results['picture-stage']=dict(passed=True,calls=report['calls'],report=path.name,sha256=hashlib.sha256(path.read_bytes()).hexdigest())
             print('picture-stage: passed',flush=True)
-        if manifest.get('ownParameters'):
+        if manifest.get('ownParameters') and want('own-film-parameters'):
             from slots_probe import verify as slots_verify
             report=slots_verify(data,manifest)
             report['candidate_sha256']=sha
@@ -99,14 +106,17 @@ def main():
             with path.open('x') as f:json.dump(report,f,indent=2);f.write('\n')
             results['own-film-parameters']=dict(passed=True,calls=report['calls'],report=path.name,sha256=hashlib.sha256(path.read_bytes()).hexdigest())
             print('own-film-parameters: passed',flush=True)
-        if manifest.get('filmCount'):
-            from halation_screen_probe import verify as screen_verify
+        if manifest.get('filmCount') and want('halation-screen'):
+            # Round 7: the Halation and Colour rows; round 6: the Halation line.
+            if manifest.get('round7'):from halation_rows_probe import verify as screen_verify
+            else:from halation_screen_probe import verify as screen_verify
             report=screen_verify(data,manifest)
             report['candidate_sha256']=sha
             path=a.output/'halation-screen.json'
             with path.open('x') as f:json.dump(report,f,indent=2);f.write('\n')
             results['halation-screen']=dict(passed=True,calls=report['calls'],report=path.name,sha256=hashlib.sha256(path.read_bytes()).hexdigest())
             print('halation-screen: passed',flush=True)
+    if only:print(json.dumps({'only':sorted(only),'passed':sorted(results)}));return
     summary=dict(schema=1,kind='gr3x-adj9-'+build['revision']+'-validation',candidate_sha256=sha,
                  all_checks_passed=True,checks=results,native_function_cases=sum(r['calls'] for r in results.values()),
                  container_checks=len(build['checks']),patch_sites=len(manifest['sites']),

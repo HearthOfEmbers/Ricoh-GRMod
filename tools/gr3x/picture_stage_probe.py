@@ -85,9 +85,30 @@ def run_execute(n,film,w,h,y,c,img=IMG):
 def verify(data,manifest,reference=None):
     films=manifest['addedLooks'];entries=manifest['lookEntries'];calls=0;report={}
     n=StageProbe(data,manifest)
-    round6=manifest.get('filmCount')
+    round6=manifest.get('filmCount');round7=manifest.get('round7')
     # 1. Stash: every look the builder sees leaves its id, its level and the valid bit.
-    if round6:
+    if round7:
+        # Round 7: slots3.c's settings (strength | white << 2) per film and photo set (State 'TLS3',
+        # settings at +587); a film 64 + k is left as 32 + k, the strength at bits 8..15, white at bit 17.
+        state=0x55880000;n.uc.mem_write(state,bytes(0x400))
+        n.uc.mem_write(state,struct.pack('<5I',0x33534c54,1,0,0,round6))
+        st=lambda k,s:(k+3*s)%8
+        n.uc.mem_write(state+587,bytes(st(k,s) for k in range(20) for s in range(3)))
+        rec=0x55890000;n.uc.mem_write(rec,bytes(0xb28));n.uc.mem_write(0x55063f34,struct.pack('<I',rec))
+        cases=0
+        for table in (True,False):
+            n.uc.mem_write(0x55804374,struct.pack('<I',state if table else 0))
+            for movie in (0,1):
+                for s in range(3):
+                    n.uc.mem_write(rec+0x44,bytes([movie]));n.uc.mem_write(rec+0x1c0,bytes([s]))
+                    for tone in NATIVE+list(range(64,84))+[0,63,255]:
+                        n.uc.mem_write(STASH,b'\xa5'*4);n.descriptor(tone);calls+=1;cases+=1
+                        v=st(tone-64,s) if table and not movie and 64<=tone<64+round6 else 0
+                        look=tone-32 if tone>=64 else tone
+                        assert u32(n.uc,STASH)==look|(v&3)<<8|(0x20000 if v&4 else 0)|0x10000,(tone,s,movie,hex(u32(n.uc,STASH)))
+        n.uc.mem_write(0x55804374,b'\0'*4)
+        report['stash_states']=cases
+    elif round6:
         # Round 6: the level is the film's Halation in the active photo set (slots2.c's table,
         # planted here: State 'TLS2', loaded, films, levels at +587); none in movie mode, none for
         # looks this build does not have, none without the table.
@@ -142,11 +163,28 @@ def verify(data,manifest,reference=None):
             raw=Path(reference).read_bytes();k=0
             while k<len(raw):
                 look,=struct.unpack_from('<I',raw,k);k+=4
-                # Round 6: the header also says at which level the reference was made.
+                # Round 6: the header also says at which level the reference was made; round 7: the
+                # header is the stash word (film 32 + k, strength, white).
+                if round7:expected[look]=(raw[k:k+w*h],raw[k+w*h:k+2*w*h]);k+=2*w*h;continue
                 expected[look&0xff]=(raw[k:k+w*h],raw[k+w*h:k+2*w*h],look>>8);k+=2*w*h
         results={}
         runs=[(11,0)]+[(f['id'],f['halation']) for f in films]
         if round6:runs=[(11,0),(11,2)]+[(f['id'],l) for f in films for l in ((0,expected[f['id']][2]) if f['id'] in expected else (0,1,2))]+[(64+round6,2)]
+        if round7:
+            # Round 7: the stash words of the reference (film 32 + k, strength, white) as they are,
+            # every film Off, another strength and colour, a native look and looks without halation.
+            results={}
+            words=[(11,False),(11|3<<8|0x20000,False),((32+round6)|2<<8,False),(63|1<<8,False),(31|3<<8,False)]
+            words+=[(32+k|v<<8|w,v>0) for k in range(round6) for v,w in ((0,0),(1+k%3,0),(3-k%3,0x20000))]
+            words+=[(wd,True) for wd in expected]
+            for word,changes in words:
+                Y,C=run_execute(n,word|0x10000,w,h,y,c);calls+=1
+                if word in expected:assert (Y,C)==expected[word][:2],hex(word)
+                if changes:assert Y!=y and len(n.log['alloc'])>0,hex(word)
+                else:assert (Y,C)==(y,c),hex(word)
+                assert len(n.log['alloc'])==n.log['free']
+                results[hex(word)]=dict(changed_luma=sum(a!=b for a,b in zip(Y,y)),allocs=len(n.log['alloc']),frees=n.log['free'],invalidate=n.log['invalidate'],clean=n.log['clean'])
+            report['jpeg_stage']=results;report['halation_matches_reference']=bool(expected);runs=[]
         for tone,level in runs:
             film=next((f for f in films if f['id']==tone),None)
             if not film:level_in=level;level=0
@@ -168,7 +206,7 @@ def verify(data,manifest,reference=None):
             if diag:
                 # Row 0 of the diagnostics on this 320-wide picture: no stash/status (wide pictures only).
                 assert any(Y[r*w+x]!=y[r*w+x] for r in range(4,20) for x in range(4,60)),tone
-        report['jpeg_stage']=results
+        if not round7:report['jpeg_stage']=results
         if 'dateDiagnostics' in entries['jpeg']:
             # 720 x 480: row 0 carries the stash and the status; the dump rows follow.
             w2,h2=720,480
@@ -181,7 +219,7 @@ def verify(data,manifest,reference=None):
             Y3,C3=run_execute(n,11|0x10000,w2,h2,y2,c2,img=LOWIMG);calls+=1
             assert (Y3,C3)==(y2,c2)
             report['diagnostics']=dict(row0_right_edge=short,low_planes_untouched=True)
-        report['halation_matches_reference']=bool(expected) and 'dateDiagnostics' not in entries['jpeg']
+        if not round7:report['halation_matches_reference']=bool(expected) and 'dateDiagnostics' not in entries['jpeg']
     return dict(schema=1,rtos_sha256=hashlib.sha256(data).hexdigest(),calls=calls,**report,hardware_tested=False,
         scope='Patched descriptor builder, matrix module wrapper and JPEG entry with synthetic objects; no ISP, encoder or camera picture.')
 

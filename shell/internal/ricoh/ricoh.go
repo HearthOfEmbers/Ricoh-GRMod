@@ -425,7 +425,7 @@ func (c *Client) Fallback(model string, latest *Release) (*Release, error) {
 	}
 	fileURL := base.ResolveReference(&url.URL{Path: a.Path})
 	page := base.ResolveReference(&url.URL{Path: a.Page}).String()
-	name := baseModel
+	name := baseModelFor(model)
 	if latest != nil {
 		page = latest.Page
 	}

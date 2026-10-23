@@ -54,7 +54,11 @@ const pictures = process.env.GR3X_PICTURES ? await Promise.all(JSON.parse(proces
 // GR3X_DATE_MENU=list rebuilds round 4's single list; the default is round 6's submenu (as GR IV).
 const dateMenu = process.env.GR3X_DATE_MENU ?? 'submenu';
 if (!['list', 'submenu'].includes(dateMenu)) throw new Error('GR3X_DATE_MENU is list or submenu');
-const features = { adjSoftFocus: round >= 3, ...(dateImprint ? { dateImprint, dateMenu } : {}), ...(pictures.length ? { pictures, pictureMenu } : {}) };
+// GR3X_R7=1 (round 7, as GR Mod 0.8.2): settings guard, date imprint by look and OFF / ON icons,
+// with GR3X_FILMS the films' Halation strength and colour and 0.8.2's halation.
+const round7 = process.env.GR3X_R7 === '1';
+if (round7 && (diagnostics || (dateImprint && dateMenu !== 'submenu'))) throw new Error('GR3X_R7 needs the date submenu and no GR3X_DIAG');
+const features = { adjSoftFocus: round >= 3, ...(dateImprint ? { dateImprint, dateMenu } : {}), ...(pictures.length ? { pictures, pictureMenu } : {}), ...(round7 ? { round7 } : {}) };
 // GR3X_FILMS=n (round 6): n films (1..20; the nine T6 films first, then plain ones), each with the
 // Halation line in the camera (no level in the build). Not with GR3X_DIAG.
 const filmCount = process.env.GR3X_FILMS ? Number(process.env.GR3X_FILMS) : undefined;
@@ -105,18 +109,22 @@ for (const source of sources) await writeFile(join(target, 'CUBE', source.filena
 // from GR Mod's own reference (halateYcc), per film with halation.
 const { halateYcc, halationLight } = await import('../../core/src/fw/aspect/halation.ts');
 const W = 320, H = 240, parts = [];
-for (const [k, film] of films.entries()) {
-  // Round 6: the level comes from the camera; the reference is made at 2 for odd films, 1 for even.
-  const level = filmCount !== undefined ? (film.preset ? 1 + (k % 2) : 0) : film.halation;
-  if (!level) continue;
+// Round 7 only: GR Mod's reference is 0.8.2's halation now (0.8.0's, which round 6 builds carry, is
+// not kept as a reference; their probe runs without one).
+for (const [k, film] of (round7 ? films : []).entries()) {
+  // The strength and colour come from the camera: the reference is made at 1..3, red for even films, white for odd.
+  const level = 1 + (k % 3), white = k % 2 === 1;
   const Y = new Uint8Array(W * H), C = new Uint8Array(W * H);
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
     Y[y * W + x] = 140 < x && x < 180 && 100 < y && y < 140 ? 252 : 16 + ((x * 3 + y * 5) % 220);
     C[y * W + x] = 128 + ((Math.floor(x / 2) + y) % 40) - 20;
   }
-  const post = film.preset.postQ9 && !Array.from(film.preset.postQ9).every((v, i) => v === [512,0,0,0,512,0,0,0,512][i]) ? film.preset.postQ9 : undefined;
-  halateYcc(Y, C, W, H, level, halationLight(film.preset.curves, post));
-  const head = new Uint8Array(4); new DataView(head.buffer).setUint32(0, (64 + k) | (filmCount !== undefined ? level << 8 : 0), true);
+  const post = film.preset?.postQ9 && !Array.from(film.preset.postQ9).every((v, i) => v === [512,0,0,0,512,0,0,0,512][i]) ? film.preset.postQ9 : undefined;
+  // As the build: the film's quantized curves when it has a preset (image-control.ts), else Standard's.
+  const look = result.manifest.addedLooks[k];
+  halateYcc(Y, C, W, H, level, look.quantizedCurves ? halationLight(look.quantizedCurves, look.postQ9) : halationLight(), white ? 'white' : 'red');
+  void post;
+  const head = new Uint8Array(4); new DataView(head.buffer).setUint32(0, (32 + k) | level << 8 | (white ? 0x20000 : 0), true);
   parts.push(head, Y, C);
 }
 const halationReference = join(target, 'halation-reference.bin');

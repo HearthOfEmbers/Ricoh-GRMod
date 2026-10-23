@@ -50,7 +50,7 @@ export interface Gr3xLookExtras {
   icons: readonly { w: number; h: number; pixels: Uint8Array }[];
 }
 
-export async function buildGr3xLookMenuResearch(raw: Uint8Array, looks: readonly Gr3xResearchLook[], displayIcons = false, ratioMenu?: readonly Gr3xMenuRatio[], features: Gr3xAdjFeatures = {}, extras?: Gr3xLookExtras) {
+export async function buildGr3xLookMenuResearch(raw: Uint8Array, looks: readonly Gr3xResearchLook[], displayIcons = false, ratioMenu?: readonly Gr3xMenuRatio[], features: Gr3xAdjFeatures = {}, extras?: Gr3xLookExtras, monoFilms?: readonly boolean[]) {
   if (!looks.length || looks.length > GR3X_LOOK_RESEARCH.maxAdditions)
     throw new FirmwareError('bad-edit', 'research menu requires 1..20 extra looks');
   const extraTexts = extras?.texts ?? [], extraIcons = extras?.icons ?? [];
@@ -70,7 +70,8 @@ export async function buildGr3xLookMenuResearch(raw: Uint8Array, looks: readonly
         throw new FirmwareError('bad-edit', 'unknown look name language');
     }
   }
-  const base = await buildGr3xAdjResearch(raw, ratioMenu, features);
+  // The image-control layer follows: it installs the settings guard and the look word itself (round 7).
+  const base = await buildGr3xAdjResearch(raw, ratioMenu, features, { looksFollow: true, ...(monoFilms ? { monoFilms } : {}) });
   const { decoded } = await openGr3xOfficial(raw);
   for (const look of looks) for (const [lang, text] of Object.entries(look.names ?? {}))
     if (text) validateGr3xLookNameFor(text, gr3xAllowedChars(decoded, lang as typeof GR3X_TEXT_ROWS[number]));

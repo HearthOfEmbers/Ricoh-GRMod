@@ -896,8 +896,9 @@ export async function outputFirmware(dest: Dest, stock = false): Promise<void> {
   if (!stock && (hasNameErrors() || hasRatioErrors())) return;
   if (!stock && hasExtraErrors()) { toast(t('extraIncomplete'), 'error'); return; }
   const extras = stock ? [] : extraSpecs();
-  // GR III / IIIx have no power-off pictures in GR Mod: pictures left from a GR IV project are not sent
-  const noPictures = stock || state.info?.family === 'gr3x';
+  // GR III / IIIx: power-off pictures only on the experimental GR III build (End Screen › Picture, as
+  // GR IV); elsewhere pictures left from a GR IV project are not sent.
+  const noPictures = stock || (state.info?.family === 'gr3x' && !state.info.capabilities.menuPictures);
   if (!noPictures && state.wall.length > 0 && !menuReady()) { toast(t('wallMenuIncomplete'), 'error'); return; }
   const pictures = noPictures ? [] : menuPictures();
   const films = filmCountChoosable() ? state.filmCount : 0;
@@ -907,7 +908,8 @@ export async function outputFirmware(dest: Dest, stock = false): Promise<void> {
     const lines = changes.map((c) => `${state.info?.family === 'gr3x' ? (state.slots[c.id].names[state.lang] || state.info.slots.find(s => s.id === c.id)?.defaultName || c.id) : t(('slot' + c.id) as Key)}  ·  ${c.labels.join(' / ')}`);
     if (ratios.length) lines.push(t('ratioLine', { n: ratios.length, l: ratios.map((r) => r.name).join(' / ') }));
     if (soft) lines.push(sourceInfo.features.softFocus === 'clarity' ? t('softLine', { l: softText(GR3X_SOFT_FOCUS) }) : t('softAdjLine'));
-    if (films) lines.push(t('filmCountLine', { n: films }));
+    // As GR IV's added slots: every film has Halation.
+    if (films) lines.push(t('extraLine', { n: films, l: (state.info?.slots ?? []).slice(0, films).map((sl) => `${state.slots[sl.id]?.names[state.lang] || sl.defaultName} (${t('halation')})`).join(' / ') }));
     if (dateStamp) lines.push(t('dateLine'));
     if (monoUnlock) lines.push(t(state.info?.family === 'gr3x' ? 'gr3xReplicaLine' : 'monoLine'));
     if (extras.length) lines.push(t('extraLine', { n: extras.length, l: extras.map((x) => (x.halation ? `${x.name} (${t('halation')})` : x.name)).join(' / ') }));

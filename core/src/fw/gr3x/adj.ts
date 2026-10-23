@@ -17,7 +17,10 @@ import type { Gr3xPictureSpec } from './shutdown';
 import { sectionsOf, sha256Hex } from '../container';
 import { FirmwareError } from '../types';
 import { buildGr3xExperiment } from './experimental';
-import { GR3X_T4_MENU, gr3xCustoms } from './geometry';
+import { GR3X_T4_MENU, gr3xCustoms, gr3xMaxId } from './geometry';
+import { installGr3xGuard } from './guard';
+import { GR3X_DEVELOP_LOOK_READ, GR3X_HALATION_STASH } from './jpeg-stage';
+import { GR3X_GAP, GR3X_HEAP_BASE, GR3X_ZERO_FILL_END } from './look-addresses';
 import type { Gr3xMenuRatio } from './geometry';
 import { GR3X_160, openGr3xOfficial } from './profile';
 import { installGr3xImageIdentity, installGr3xDevelopAndPlayback, installGr3xAutofocus } from './image-pipeline';
@@ -70,10 +73,24 @@ export interface Gr3xAdjFeatures {
   /** Their menu: 'submenu' (round 6, as GR IV: End Screen opens Type / Picture, endscreen.ts; the
    * pictures need their `id`) or 'list' (round 5; the default, so older recipes rebuild). */
   pictureMenu?: 'list' | 'submenu';
+  /** Round 7 (as GR Mod 0.8.2): the settings guard (guard.ts), the date imprint light only for
+   * black-and-white looks (from the look the development step leaves), the date imprint's On /
+   * Off as the camera's boxed OFF / ON, and with films their Halation strength and colour
+   * (halation-rows.ts, native/slots3.c) and 0.8.2's halation. Absent: the files of rounds 4..6,
+   * byte for byte as before. */
+  round7?: boolean;
+}
+/** How the image-control layer builds on this one (not recorded: it follows from the films). */
+export interface Gr3xAdjLayer {
+  /** The image-control layer follows: it installs the guard and the look word itself. */
+  looksFollow?: boolean;
+  /** Round 7: which films are black and white (the date imprint's table of looks). */
+  monoFilms?: readonly boolean[];
 }
 
-export async function buildGr3xAdjResearch(raw: Uint8Array, ratioMenu: readonly Gr3xMenuRatio[] = GR3X_T4_MENU, features: Gr3xAdjFeatures = {}) {
-  const softFocus = features.adjSoftFocus === true, dateImprint = features.dateImprint === true;
+export async function buildGr3xAdjResearch(raw: Uint8Array, ratioMenu: readonly Gr3xMenuRatio[] = GR3X_T4_MENU, features: Gr3xAdjFeatures = {}, layer: Gr3xAdjLayer = {}) {
+  const softFocus = features.adjSoftFocus === true, dateImprint = features.dateImprint === true, round7 = features.round7 === true;
+  if (round7 && dateImprint && features.dateMenu !== 'submenu') fail('IIIx round 7: the date imprint submenu');
   const dateForm: Gr3xDateForm = features.dateMenu === 'submenu' ? 'submenu' : 'list';
   // Texts of the date imprint: name, short, long (both forms), then On/Off and Style (submenu).
   const dateTexts = dateImprint ? (dateForm === 'submenu' ? 5 : 3) : 0;
@@ -275,9 +292,26 @@ export async function buildGr3xAdjResearch(raw: Uint8Array, ratioMenu: readonly 
     ...(endScreen ?? {}),
     ...installGr3xMenuAdditions({ code, append, patch, word, read }, { ...(dateImprint ? { date: dateIds, dateForm } : {}),
       ...(pictureCount && !pictureSub ? { picture: pictureIds } : {}),
-      ...(endScreen ? { endScreen: { typeText: endIds.typeText, pictureText: endIds.pictureText, lineType: endScreen.endScreenLineType, linePicture: endScreen.endScreenLinePicture } } : {}) }),
-    ...(dateImprint ? installGr3xDateImprintStage({ code, append, patch, word, read }) : {}),
+      ...(endScreen ? { endScreen: { typeText: endIds.typeText, pictureText: endIds.pictureText, lineType: endScreen.endScreenLineType, linePicture: endScreen.endScreenLinePicture } } : {}),
+      ...(round7 ? { onOffText: true } : {}) }),
+    ...(dateImprint ? installGr3xDateImprintStage({ code, append, patch, word, read },
+      round7 ? { stash: GR3X_HALATION_STASH, monoFilms: layer.monoFilms ?? [] } : undefined) : {}),
     ...(pictureCount ? installGr3xPictureStage({ code, append, patch, word, read }, pictureCount, { pick: !pictureSub }) : {}) } : {};
+  // Round 7 without films: the look word for the date imprint (the image-control layer's
+  // development adapter writes it when there are films), and the settings guard.
+  const lookEntries = round7 && !layer.looksFollow ? (() => {
+    const out: Record<string, number> = {};
+    if (dateImprint) {
+      // ldrb r2,[r3,#0x77c] (the frame's look): also store look | 0x10000 (level 0: no halation).
+      const stash = code(`push {r0,r1};mrs r0,cpsr;ldrb r2,[r3,#0x77c];orr r1,r2,#0x10000;push {r2};
+        movw r2,#${GR3X_HALATION_STASH & 0xffff};movt r2,#${GR3X_HALATION_STASH >>> 16};str r1,[r2];pop {r2};msr cpsr_f,r0;pop {r0,r1};b #${GR3X_DEVELOP_LOOK_READ + 4};`);
+      patch(GR3X_DEVELOP_LOOK_READ, 0xe5d3277c, branchWord(GR3X_DEVELOP_LOOK_READ, stash), 'date imprint: the look of the picture, for the steps after development');
+      if (!sites.some(s => s.address === GR3X_ZERO_FILL_END))
+        patch(GR3X_ZERO_FILL_END, GR3X_GAP, GR3X_HEAP_BASE, 'start-up zero fill reaches the heap base (clears the added RAM words)');
+      out.lookStash = stash;
+    }
+    return { ...out, ...installGr3xGuard({ code, patch, u32: word }, { films: 0, maxRatio: gr3xMaxId(menu) }) };
+  })() : {};
   const payload = new Uint8Array((length + 3) & ~3);
   let at = 0; for (const part of parts) { payload.set(part, at); at += part.length; }
   const iconAddition = new Uint8Array(iconOffset - originalIcons.length);
@@ -286,10 +320,11 @@ export async function buildGr3xAdjResearch(raw: Uint8Array, ratioMenu: readonly 
     schema: 1, kind: 'gr3x-adj-patchset' as const, profile: profile.id,
     originalRtosSha256: profile.rtosSha256, originalLength: p.rtosLength, base: BASE,
     sites, append: { address: geometry.append.address, bytes: hex(payload) }, geometry,
-    entries: { ...geometry.entries, ratioText, ratioIcon, fnCycle, ...imageEntries, ...developEntries, ...afEntries, ...mapEntries, ...liveEntries, ...rawEntries, ...shadingEntries, ...fullRawEntries, ...softEntries, ...dateEntries },
+    entries: { ...geometry.entries, ratioText, ratioIcon, fnCycle, ...imageEntries, ...developEntries, ...afEntries, ...mapEntries, ...liveEntries, ...rawEntries, ...shadingEntries, ...fullRawEntries, ...softEntries, ...dateEntries, ...lookEntries },
     catalogs: { order, textRoots, textColumns: columns, iconRoot, iconCount },
     adjSoftFocus: softFocus,
-    dateImprint: dateImprint ? { ...dateIds, form: dateForm } : undefined,
+    dateImprint: dateImprint ? { ...dateIds, form: dateForm, ...(round7 ? { iconOff: 296, iconOn: 297 } : {}) } : undefined,
+    round7,
     pictures: pictureCount ? (pictureSub ? { form: 'submenu' as const, count: pictureCount, ...endIds, names: pictures.map((_, k) => endIds.factoryText + 1 + k),
       factoryIcons: [...endIds.factoryIcons], icons: [...endIds.icons], choices: pictures.map(x => x.id!) }
       : { ...pictureIds, count: pictureCount, names: [...pictureIds.names], icons: [...pictureIds.icons] }) : undefined,

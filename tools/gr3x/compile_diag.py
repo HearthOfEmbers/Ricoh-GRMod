@@ -12,7 +12,10 @@
    (how far it got, the first picture's format and why it was refused) for the line above.
 
 Both position independent (checked by linking at two addresses, as gen.py). Writes
-core/src/fw/gr3x/picture-modules.ts. GR IV's datestamp-code.ts and halation-code.ts are not
+core/src/fw/gr3x/picture-modules.ts. Round 7 (GR Mod 0.8.2 sources): the date imprint's context ends with
+GR IV's look fields (the stash word, the 64-byte table of black-and-white looks, the model check)
+and the halation is 0.8.2's ('HAL4': three levels, red / white). Round 6's builds of the older
+sources are kept in picture-modules-r6.ts. GR IV's datestamp-code.ts and halation-code.ts are not
 regenerated; their builds do not define these macros, and GR IV's builds of the edited sources
 equal those of the sources before the edit (same compiler).
 """
@@ -42,13 +45,16 @@ def main():
         '// -DDIAG -DSTRICT_PLANES -DGR3_WORDS) and tools/halation/halation.c (-DSTATUS).\n'
         f'// Compiler: {version}\n'
         f'// Source SHA-256: {hashlib.sha256(ds.SRC.read_bytes()).hexdigest()} (datestamp.c), {hashlib.sha256(ha.SRC.read_bytes()).hexdigest()} (halation.c)\n'
-        "/** GR III: the date imprint (context: cache, invalidate, clean, platform, get time, address of the\n"
-        " * settings-record pointer, offset of the setting byte). Writes planes above 0x5d000000 only. */\n"
+        "/** GR III round 7: the date imprint (context: cache, invalidate, clean, platform, get time, address\n"
+        " * of the settings-record pointer, offset of the setting byte, the look stash, the table of\n"
+        " * black-and-white looks, the model check). Writes planes above 0x5d000000 only. */\n"
         f"export const GR3X_DATESTAMP_CODE = '{base64.b64encode(release).decode()}';\n"
         "/** GR III test builds: the date imprint's diagnostic module (writes planes above 0x5d000000 only;\n"
-        " * its context has a seventh word, the address of the halation stash and status words). */\n"
+        " * its context has a seventh word, the address of the halation stash and status words, then the\n"
+        " * three look words). */\n"
         f"export const GR3X_DATESTAMP_DIAG_CODE = '{base64.b64encode(date).decode()}';\n"
-        "/** GR III test builds: halation with a status word (its context has the word's address after `magic`). */\n"
+        "/** GR III test builds: halation ('HAL4') with a status word (its context has the word's address\n"
+        " * after the look map). */\n"
         f"export const GR3X_HALATION_STATUS_CODE = '{base64.b64encode(halo).decode()}';\n")
     print(len(release),len(date),len(halo))
 main()
