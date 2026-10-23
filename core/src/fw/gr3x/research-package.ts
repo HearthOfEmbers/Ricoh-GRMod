@@ -16,6 +16,8 @@ import type { Gr3xLookOptions } from './image-control';
 import { encodeGr3xLookRecipe } from './look-recipe';
 import { encodeGr3xRatioRecipe } from './ratio-recipe';
 import { GR3X_T4_MENU, gr3xIsT4Menu } from './geometry';
+import { readRes, resRecords } from '../aspect/res';
+import { GR3X_RES_BEFORE, GR3X_RES_MAX_FILES, gr3xPicturePath } from './shutdown';
 import type { Gr3xMenuRatio } from './geometry';
 
 const unhex = (s: string) => Uint8Array.from(s.match(/../g) ?? [], b => parseInt(b, 16));
@@ -45,7 +47,7 @@ async function buildContainer(raw: Uint8Array, purpose: 'research' | 'hardware-t
   const addition = unhex(manifest.append.bytes), pixels = unhex(manifest.iconAddition.bytes);
   const revision = looks ? (looks.displayRevision === 3 ? 'T6' : looks.displayRevision === 1 ? 'T5' : 'T5-L1') : softFocus.length ? 'T4-SF1' : 'T4';
   const lookRecipe = looks ? encodeGr3xLookRecipe(looks) : new Uint8Array();
-  const ratioRecipe = t4 && !features.adjSoftFocus && !features.dateImprint ? new Uint8Array() : encodeGr3xRatioRecipe(menu, features);
+  const ratioRecipe = t4 && !features.adjSoftFocus && !features.dateImprint && !features.pictures?.length ? new Uint8Array() : encodeGr3xRatioRecipe(menu, features);
   const recipe = new Uint8Array(lookRecipe.length + ratioRecipe.length);
   recipe.set(lookRecipe); recipe.set(ratioRecipe, lookRecipe.length);
   const record = new TextEncoder().encode(purpose === 'research'
@@ -53,19 +55,43 @@ async function buildContainer(raw: Uint8Array, purpose: 'research' | 'hardware-t
   const rtosGrowth = roundFrame(addition.length + recipe.length + record.length + 4);
   const iconGrowth = roundFrame(pixels.length);
   const rtosEnd = rtos.offset + rtos.size, iconEnd = icon.offset + icon.size;
-  const out = new Uint8Array(decoded.length + rtosGrowth + iconGrowth);
+  // Power-off pictures: RES records (two frames each) before the last RES file (shutdown.ts).
+  const pictures = features.pictures ?? [];
+  let resAt = 0, resCountOffset = 0, resCount = 0, resBlock: Uint8Array = new Uint8Array();
+  if (pictures.length) {
+    const dir = readRes(decoded);
+    const at = dir.files.findIndex(f => f.path === GR3X_RES_BEFORE);
+    // Official: 22 A: files, then 13 B: files; the pictures go between them.
+    if (dir.files.length !== 35 || at !== 22 || dir.files.slice(0, at).some(f => !f.path.startsWith('A:\\')) || dir.files.slice(at).some(f => !f.path.startsWith('B:\\')) ||
+      dir.countOffset < iconEnd || dir.end !== decoded.length - 4) throw new FirmwareError('unexpected-layout', 'IIIx RES section is not the official one');
+    if (dir.files.length + pictures.length > GR3X_RES_MAX_FILES) throw new FirmwareError('too-many-pictures', 'IIIx RES file count');
+    const last = dir.files[at];
+    const files = pictures.map((pic, k) => ({ path: gr3xPicturePath(k), data: pic.jpeg }));
+    if (dir.files.some(f => files.some(x => x.path === f.path))) throw new FirmwareError('unexpected-layout', 'IIIx RES already holds power-off pictures');
+    resBlock = resRecords(files);
+    if (resBlock.length % FRAME_SIZE) throw new FirmwareError('internal', 'IIIx power-off pictures are not whole frames');
+    resAt = last.offset; resCountOffset = dir.countOffset; resCount = dir.files.length + files.length;
+  }
+  const resGrowth = resBlock.length;
+  const out = new Uint8Array(decoded.length + rtosGrowth + iconGrowth + resGrowth);
   out.set(decoded.subarray(0, rtosEnd));
   out.set(addition, rtosEnd);
   out.set(recipe, rtosEnd + addition.length);
   out.set(decoded.subarray(rtosEnd, iconEnd), rtosEnd + rtosGrowth);
   out.set(pixels, iconEnd + rtosGrowth);
-  out.set(decoded.subarray(iconEnd), iconEnd + rtosGrowth + iconGrowth);
+  const shifted = rtosGrowth + iconGrowth;
+  if (resGrowth) {
+    out.set(decoded.subarray(iconEnd, resAt), iconEnd + shifted);
+    out.set(resBlock, resAt + shifted);
+    out.set(decoded.subarray(resAt), resAt + shifted + resGrowth);
+  } else out.set(decoded.subarray(iconEnd), iconEnd + shifted);
   const view = new DataView(out.buffer);
+  if (resGrowth) view.setUint32(resCountOffset + shifted, resCount, true);
   view.setUint32(rtos.offset - 4, rtos.size + rtosGrowth, true);
   const iconOffset = icon.offset + rtosGrowth;
   view.setUint32(iconOffset - 4, icon.size + iconGrowth, true);
   const ranges: Range[] = [];
-  let changedBytes = rtosGrowth + iconGrowth;
+  let changedBytes = rtosGrowth + iconGrowth + resGrowth;
   for (const site of manifest.sites) {
     const offset = rtos.offset + site.address - GR3X_160.rtosBase;
     const old = unhex(site.expected), next = unhex(site.replacement);
@@ -90,10 +116,13 @@ async function buildContainer(raw: Uint8Array, purpose: 'research' | 'hardware-t
     { what: 'IIIx appended code, catalogs and checksum', offset: rtosEnd, length: rtosGrowth },
     { what: 'IIIx ICONBIN section length', offset: iconOffset - 4, length: 4 },
     { what: 'IIIx appended ratio icon pixels', offset: iconEnd + rtosGrowth, length: iconGrowth },
+    ...(resGrowth ? [{ what: 'IIIx RES file count', offset: resCountOffset + shifted, length: 4 },
+      { what: 'IIIx power-off pictures (RES files)', offset: resAt + shifted, length: resGrowth }] : []),
   );
   changedBytes += countChangedBytes(decoded.subarray(rtos.offset - 4, rtos.offset), out.subarray(rtos.offset - 4, rtos.offset));
   changedBytes += countChangedBytes(decoded.subarray(icon.offset - 4, icon.offset), out.subarray(iconOffset - 4, iconOffset));
-  const insertions = [{ at: rtosEnd, length: rtosGrowth }, { at: iconEnd, length: iconGrowth }];
+  if (resGrowth) changedBytes += countChangedBytes(decoded.subarray(resCountOffset, resCountOffset + 4), out.subarray(resCountOffset + shifted, resCountOffset + shifted + 4));
+  const insertions = [{ at: rtosEnd, length: rtosGrowth }, { at: iconEnd, length: iconGrowth }, ...(resGrowth ? [{ at: resAt, length: resGrowth }] : [])];
   const built = buildGrown(fw, out, insertions);
   const checks = selfCheckGrown(raw, built.out, ranges, out);
   if (Object.values(checks).some(v => !v)) {
@@ -113,7 +142,7 @@ async function buildContainer(raw: Uint8Array, purpose: 'research' | 'hardware-t
       filename: purpose === 'research' ? `${profile.tag}-ADJ${menu.length}.NOT-FOR-CAMERA.bin` : profile.filename,
       inputSha256: profile.sha256, outputSha256: await sha256Hex(built.out),
       outputBytes: built.out.length, decodedBytes: out.length,
-      rtosGrowth, iconGrowth, reencodedFrames: built.reencoded.length,
+      rtosGrowth, iconGrowth, resGrowth, pictures: pictures.map(pic => pic.name), reencodedFrames: built.reencoded.length,
       firmwareGenerated: true, hardwareTested: false, cameraUpdateCandidate: purpose === 'hardware-test',
       rearDialPatched: false, versionRaised: false,
       rawFullFrame: true, rawDefaultCrop: [6000, 4000], faceDetectionModeInitialized: true,

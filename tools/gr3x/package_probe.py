@@ -11,6 +11,49 @@ from pathlib import Path
 
 if not __debug__: raise RuntimeError('Run without Python -O')
 
+def res_records(buf,start,count):
+    import struct
+    at=start+16;out=[]
+    for _ in range(count):
+        path=buf[at:at+32].split(b'\0')[0].decode('ascii');size=struct.unpack_from('<I',buf,at+32)[0]
+        out.append((path,at,size));at+=36+size
+    return out,at
+
+def check_res(old,a,dec,b,build):
+    """Power-off pictures: the official 22 A: records, then one record of exactly two frames per
+    picture (A:\\Resource\\Jpeg\\GRMODk.jpg, 720x480 baseline 4:2:0 JPEG), then the 13 official B: records."""
+    import struct
+    n=len(build['pictures']);assert 1<=n<=8
+    oc=a['resource_count'];nc=b['resource_count'];assert oc==35 and nc==35+n<=43
+    orec,oend=res_records(old,a['start'],oc);nrec,nend=res_records(dec,b['start'],nc)
+    assert oend==a['end'] and nend==b['end']
+    for (p,at,size),(q,bt,bsize) in zip(orec[:22]+orec[22:],nrec[:22]+nrec[22+n:]):
+        assert p==q and size==bsize and old[at:at+36+size]==dec[bt:bt+36+size]
+    assert all(p.startswith('A:\\') for p,_,_ in orec[:22]) and all(p.startswith('B:\\') for p,_,_ in orec[22:])
+    for k,(path,at,size) in enumerate(nrec[22:22+n]):
+        assert path==f'A:\\Resource\\Jpeg\\GRMOD{k+1}.jpg' and size==2*0x6000-36,(path,size)
+        j=dec[at+36:at+36+size];assert j[:2]==b'\xff\xd8' and j.rstrip(b'\0')[-2:]==b'\xff\xd9'
+        sof=j.find(b'\xff\xc0');assert sof>0 and j.find(b'\xff\xc2')<0
+        assert struct.unpack('>HH',j[sof+5:sof+9])==(480,720) and j[sof+9]==3 and (j[sof+11],j[sof+14],j[sof+17])==(0x22,0x11,0x11)
+    assert nrec[22][1]-(b['start']+16)==orec[22][1]-(a['start']+16)
+
+def updater_walk_past_res(dec):
+    """The camera's updater (DspFwUpdate, 0x5362a4c0) steps past RES by its file COUNT in bytes and
+    reads section headers from there on until the payload is used up. Never on a header that it
+    would act on (v1 1..8)."""
+    import struct,sys
+    sys.path.insert(0,'.')
+    from gr4_editor.codec.frames import section_rows
+    res=next(s for s in section_rows(dec) if s['name']=='RES')
+    p=res['start']+16+res['resource_count'];rem=len(dec)-(res['start']+16)-res['resource_count']
+    while True:
+        if p+16>len(dec):return 'beyond'
+        v1,v2,size=struct.unpack_from('<HHI',dec,p+8);rem-=16
+        if 1<=v1<=8:return 'danger'
+        if rem<size:return 'exit-ok'
+        p+=16+size;rem-=size
+        if rem==0:return 'exit-ok'
+
 def verify(original,new,manifest,build,reference):
     sys.path.insert(0,str(reference.resolve()))
     from identity import by_container
@@ -51,11 +94,14 @@ def verify(original,new,manifest,build,reference):
     assert dec[icon_new['start']+16:icon_new['start']+16+len(old_pixels)]==old_pixels
     icon_append=icon_new['start']+16+len(old_pixels);px=bytes.fromhex(manifest['iconAddition']['bytes'])
     assert dec[icon_append:icon_append+len(px)]==px
+    res_growth=build.get('resGrowth',0)
     for a,b in zip(old_sections,new_sections):
         assert a['flags']==b['flags']
-        if a['name'] not in ('RTOS','ICONBIN'):assert old[a['start']:a['end']]==dec[b['start']:b['end']]
+        if a['name']=='RES' and res_growth:check_res(old,a,dec,b,build)
+        elif a['name'] not in ('RTOS','ICONBIN'):assert old[a['start']:a['end']]==dec[b['start']:b['end']]
         else:assert b['end']-b['start']-(a['end']-a['start'])==build['rtosGrowth' if a['name']=='RTOS' else 'iconGrowth']
-    assert len(dec)==len(old)+build['rtosGrowth']+build['iconGrowth']
+    assert len(dec)==len(old)+build['rtosGrowth']+build['iconGrowth']+res_growth
+    assert updater_walk_past_res(dec)=='exit-ok'
     assert sum(f.decoded_end-f.decoded_start for f in frames)==len(dec)
     part=next(s for s in old_sections if s['name']=='PARTPARA')
     import struct
@@ -86,7 +132,7 @@ def verify(original,new,manifest,build,reference):
             assert recipe['schema']==(1 if revision=='T5' else 2) and len(recipe['films'])<=2
             assert len(manifest['addedLooks'])==2+6*recipe['monoReplicas']
         padding=start+length
-    if not is_t4(m) or manifest.get('adjSoftFocus') or manifest.get('dateImprint'):
+    if not is_t4(m) or manifest.get('adjSoftFocus') or manifest.get('dateImprint') or manifest.get('pictures'):
         # The ratio list follows the film recipe; it must name exactly the manifest's added ratios.
         magic=b'GR3X-RATIO-RECIPE\0'
         assert dec[padding:padding+len(magic)]==magic
@@ -96,6 +142,7 @@ def verify(original,new,manifest,build,reference):
         expected={'schema':1,'ratios':[{'ratio':m.ratios[i],'name':m.names[i]} for i,_,_ in m.custom]}
         if manifest.get('adjSoftFocus'):expected['adjSoftFocus']=True
         if manifest.get('dateImprint'):expected['dateImprint']=True
+        if manifest.get('pictures'):expected['pictures']=build['pictures']
         assert recipe==expected,recipe
         padding=start+length
     assert not any(dec[padding:rt['end']-4-len(marker)])

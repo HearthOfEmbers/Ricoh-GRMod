@@ -43,7 +43,7 @@ ctx.onmessage = async (ev: MessageEvent<Req>) => {
         break;
       }
       case 'menuPicture': {
-        const r = encodeShutdownPicture(new Uint8Array(m.rgb), progress);
+        const r = engine ? engine.encodeMenuPicture(new Uint8Array(m.rgb), progress) : encodeShutdownPicture(new Uint8Array(m.rgb), progress);
         ctx.postMessage({ id: m.id, ok: true, result: r }, [r.buffer as ArrayBuffer]);
         break;
       }

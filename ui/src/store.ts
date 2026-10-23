@@ -255,7 +255,7 @@ export function endTour(): void {
 
 // ------------------------------------------------------------------ settings
 export function setPage(page: Page): void {
-  if (page === 'wall' && isGr3(state.model)) return; // no power-off pictures for GR III / IIIx
+  if (page === 'wall' && isGr3(state.model) && !state.info?.capabilities.menuPictures) return; // power-off pictures: GR III experimental build only
   set({ page }); scheduleSave(); if (page === 'copies') void refreshCopies();
 }
 export function setLang(lang: LangCode): void { set({ lang }); scheduleSave(); }
@@ -302,7 +302,8 @@ async function openFirmware(raw: Uint8Array, name: string, persist: boolean): Pr
       const p = slotOf(id)?.preset;
       if (p && !p.result && !p.busy) void runPreset(id, p.fileName, p.kind, p.text);
     }
-    if (info.capabilities.wallpaper) for (const w of state.wall) void encodeWall(w.id);
+    // Encoded again for every firmware: GR IV and GR III store the pictures differently (4:2:2 / 4:2:0).
+    if (info.capabilities.wallpaper || info.capabilities.menuPictures) for (const w of state.wall) void encodeWall(w.id);
     void refreshRatios();
     return true;
   } catch (e) {

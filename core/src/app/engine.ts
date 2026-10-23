@@ -65,6 +65,10 @@ import { planGr3xRatio } from '../fw/gr3x/geometry';
 import { GR3X_MAX_CUSTOM_RATIOS, GR3X_T4_MENU, gr3xCustoms, planGr3xMenu } from '../fw/gr3x/geometry';
 import type { Gr3xMenuRatio } from '../fw/gr3x/geometry';
 import { readGr3xBuildRecipe } from '../fw/gr3x/ratio-recipe';
+import { encodeGr3xPicture, GR3X_MAX_PICTURES, gr3xPicturePath } from '../fw/gr3x/shutdown';
+import { encodeShutdownPicture } from '../fw/aspect/shutdown';
+import type { Gr3xPictureSpec } from '../fw/gr3x/shutdown';
+import { readRes, resFile } from '../fw/aspect/res';
 import { buildGr3xTestFirmware } from '../fw/gr3x/research-package';
 import { readGr3xFactoryEntry } from '../fw/gr3x/factory';
 import { GR3X_CLARITY_OFFSET } from '../fw/gr3x/clarity';
@@ -101,7 +105,8 @@ export interface FirmwareInfo {
   experimental?: boolean;
   models: CameraModel[];
   factoryRatios: string[];
-  capabilities: { build: boolean; presets: boolean; wallpaper: boolean; factoryEntry: boolean; bridge: boolean };
+  /** `menuPictures`: power-off pictures chosen in the camera's menu (GR IV: End Screen submenu; GR III: a Setup line after End Screen). */
+  capabilities: { build: boolean; presets: boolean; wallpaper: boolean; factoryEntry: boolean; bridge: boolean; menuPictures: boolean };
   features: { softFocus: 'clarity' | 'adj'; dateStamp: boolean; monoUnlock: boolean };
   version: string;
   sha256: string;
@@ -310,15 +315,16 @@ export class Engine {
   private monoWords: { offset: number; bytes: Uint8Array }[] | null = null;
   private gr3xCandidates = new Map<string, Promise<FirmwareBuild>>();
 
-  private fixedGr3x(softFocus: readonly SoftFocusRequest[] = [], looks?: Gr3xLookOptions, menu: readonly Gr3xMenuRatio[] = GR3X_T4_MENU, adjSoftFocus = false, dateImprint = false): Promise<FirmwareBuild> {
+  private fixedGr3x(softFocus: readonly SoftFocusRequest[] = [], looks?: Gr3xLookOptions, menu: readonly Gr3xMenuRatio[] = GR3X_T4_MENU, adjSoftFocus = false, dateImprint = false, pictures: readonly Gr3xPictureSpec[] = []): Promise<FirmwareBuild> {
     const requests = [...softFocus].sort((a, b) => a.level - b.level);
-    const key = JSON.stringify({ requests, looks, menu, adjSoftFocus, dateImprint });
+    const key = JSON.stringify({ requests, looks, menu, adjSoftFocus, dateImprint, pictures: pictures.map(p => ({ name: p.name, jpeg: Array.from(p.jpeg) })) });
     let candidate = this.gr3xCandidates.get(key);
     if (candidate) return candidate;
-    candidate = buildGr3xTestFirmware(this.raw, requests, looks, menu, { adjSoftFocus, ...(dateImprint ? { dateImprint } : {}) }).then(r => ({
+    candidate = buildGr3xTestFirmware(this.raw, requests, looks, menu, { adjSoftFocus, ...(dateImprint ? { dateImprint } : {}), ...(pictures.length ? { pictures } : {}) }).then(r => ({
       file: r.bytes, sha256: r.report.outputSha256, decodedSha256: r.decodedSha256,
       changedFrames: r.changedFrames, changedBytes: r.changedBytes,
-      ranges: r.report.ranges, checks: r.report.checks, features: { ...(looks?.monoReplicas ? { monoUnlock: true } : {}), ...(adjSoftFocus ? { adjSoftFocus: true } : {}), ...(dateImprint ? { dateStamp: true } : {}) },
+      ranges: r.report.ranges, checks: r.report.checks, features: { ...(looks?.monoReplicas ? { monoUnlock: true } : {}), ...(adjSoftFocus ? { adjSoftFocus: true } : {}), ...(dateImprint ? { dateStamp: true } : {}),
+        ...(pictures.length ? { shutdown: { pictures: pictures.map((p, k) => ({ id: k + 1, name: p.name, jpeg: p.jpeg })), factory: [] } } : {}) },
       ratios: gr3xCustoms(r.manifest.menu).map(x => {
         const plan = planGr3xRatio(x.ratio);
         return { id: x.id, name: x.name, ratio: x.ratio, actual: plan.actual, sizes: plan.sizes };
@@ -361,7 +367,8 @@ export class Engine {
         factoryRatios: [...profile.factoryRatios],
         // Power-off images and the factory-menu entry reached the camera through a start-up script.
         // GR Mod 0.8 dropped that route, and it was never tested on these cameras: not offered.
-        capabilities: { build: true, presets: true, wallpaper: false, factoryEntry: false, bridge: false },
+        // Power-off pictures: the experimental GR III build only (tested there first).
+        capabilities: { build: true, presets: true, wallpaper: false, factoryEntry: false, bridge: false, menuPictures: profile.experimental === true },
         // The date imprint is offered in the experimental GR III build only (tested there first).
         features: { softFocus: 'adj', dateStamp: profile.experimental === true, monoUnlock: false },
         version: profile.version, sha256: profile.sha256, bridge: false,
@@ -411,7 +418,7 @@ export class Engine {
     const info: FirmwareInfo = {
       family: 'gr4', filename: 'fwdc248b.bin', models: ['STANDARD', 'HDF', 'MONO'],
       factoryRatios: ['3:2', '4:3', '16:9', '1:1'],
-      capabilities: { build: true, presets: true, wallpaper: true, factoryEntry: true, bridge: !bridge },
+      capabilities: { build: true, presets: true, wallpaper: true, factoryEntry: true, bridge: !bridge, menuPictures: true },
       features: { softFocus: 'adj', dateStamp: true, monoUnlock: true },
       version: FIRMWARE_VERSION,
       sha256: await sha256Hex(raw),
@@ -444,6 +451,7 @@ export class Engine {
       let softFocus: ClarityChange[] = [];
       let looks: Gr3xLookOptions | null = null;
       let adjSoftFocus = false, dateImprint = false;
+      let pictures: Gr3xPictureSpec[] = [];
       if (!official) try {
         // Read only recognized negative gain rows, rebuild from the verified
         // original, and compare the entire file. A valid container or metadata
@@ -455,11 +463,23 @@ export class Engine {
           const appended = decoded.subarray(rtos.offset + GR3X_160.rtosLength, rtos.offset + rtos.size);
           looks = readGr3xLookRecipe(appended);
           const build = readGr3xBuildRecipe(appended);
-          if (build) { menu = planGr3xMenu(build.ratios); adjSoftFocus = build.adjSoftFocus; dateImprint = build.dateImprint; }
+          if (build) {
+            menu = planGr3xMenu(build.ratios); adjSoftFocus = build.adjSoftFocus; dateImprint = build.dateImprint;
+            // Power-off pictures: the names from the recipe, the JPEGs from the file's own RES section.
+            if (build.pictures.length) {
+              if (build.pictures.length > GR3X_MAX_PICTURES) throw new FirmwareError('bad-edit', 'IIIx picture recipe');
+              const dir = readRes(decoded);
+              pictures = build.pictures.map((name, k) => {
+                const jpeg = resFile(decoded, gr3xPicturePath(k), dir);
+                if (!jpeg) throw new FirmwareError('bad-edit', 'IIIx picture missing');
+                return { name, jpeg };
+              });
+            }
+          }
         }
         const changes = clarityChanges(decoded, GR3X_CLARITY_OFFSET);
         if (changes.every(c => SOFT_FOCUS_LEVELS.includes(c.level as SoftFocusLevel) && c.strength !== 'custom')) {
-          candidate = await this.fixedGr3x(changes as SoftFocusRequest[], looks ?? undefined, menu, adjSoftFocus, dateImprint);
+          candidate = await this.fixedGr3x(changes as SoftFocusRequest[], looks ?? undefined, menu, adjSoftFocus, dateImprint, pictures);
           softFocus = changes;
         }
       } catch { /* unrecognized input remains non-writable */ }
@@ -472,7 +492,8 @@ export class Engine {
           nameChanged: (!!looks!.films?.[i]?.name && looks!.films?.[i]?.name !== GR3X_FILM_NAMES[i]) || !!looks!.films?.[i]?.names,
           iconChanged: !!looks!.films?.[i]?.icon,
         })) : [], ratios: matched ? candidate!.ratios : [], softFocus: matched ? softFocus : [],
-        adjSoftFocus: matched && adjSoftFocus, dateStamp: matched && dateImprint, monoUnlock: matched && looks?.monoReplicas === true, extraSlots: [] };
+        adjSoftFocus: matched && adjSoftFocus, dateStamp: matched && dateImprint, monoUnlock: matched && looks?.monoReplicas === true, extraSlots: [],
+        ...(matched && pictures.length ? { shutdownPictures: pictures.map((p, k) => ({ id: k + 1, name: p.name, jpeg: p.jpeg })) } : {}) };
     }
     if (raw.length === BRIDGE_SIZE && sha256 === BRIDGE_SHA256) return { sha256, kind: 'bridge', changedBytes: 0, verified: true, slots: [], ratios: [], softFocus: [], adjSoftFocus: false, dateStamp: false, monoUnlock: false, extraSlots: [] };
     const describe = (d: Uint8Array): FirmwareSummary['slots'] =>
@@ -757,8 +778,10 @@ export class Engine {
   /** Build a firmware file. The result has passed the built-in self-check (otherwise this throws). */
   async buildFirmware(requests: SlotRequest[], ratios: readonly RatioSpec[] = [], softFocus: readonly SoftFocusRequest[] = [], options: BuildOptions = {}): Promise<FirmwareBuild> {
     if (this.info.family === 'gr3x') {
-      if (Object.entries(options).some(([k, v]) => k !== 'monoUnlock' && k !== 'adjSoftFocus' && k !== 'dateStamp' && Boolean(v)))
-        throw new FirmwareError('gr3x-unsupported', 'power-off pictures and the test settings of the date imprint are not ported to GR III / IIIx');
+      if (Object.entries(options).some(([k, v]) => k !== 'monoUnlock' && k !== 'adjSoftFocus' && k !== 'dateStamp' && k !== 'shutdownPictures' && Boolean(v)))
+        throw new FirmwareError('gr3x-unsupported', 'added Image Control slots and the test settings of the date imprint are not ported to GR III / IIIx');
+      if (options.shutdownPictures?.length && !this.info.capabilities.menuPictures)
+        throw new FirmwareError('gr3x-unsupported', 'power-off pictures are tested on the GR III build first');
       if (options.dateStamp && !this.info.features.dateStamp)
         throw new FirmwareError('gr3x-unsupported', 'the date imprint is tested on the GR III build first');
       // 1..7 added ratios; the T4 seven keep the tested T4 menu (see planGr3xMenu).
@@ -785,7 +808,8 @@ export class Engine {
         }),
       } : undefined;
       if (options.adjSoftFocus && softFocus.length) throw new FirmwareError('bad-clarity', 'soft focus on the ADJ lever and on the clarity table cannot be combined');
-      const r = await this.fixedGr3x(softFocus, looks, menu, !!options.adjSoftFocus, !!options.dateStamp);
+      const r = await this.fixedGr3x(softFocus, looks, menu, !!options.adjSoftFocus, !!options.dateStamp,
+        (options.shutdownPictures ?? []).map(p => ({ name: p.name, jpeg: p.jpeg })));
       return { ...r, file: r.file.slice() };
     }
     if (this.layout === null || !this.info.capabilities.build) requireGr3xPort('custom firmware');
@@ -826,6 +850,12 @@ export class Engine {
    * grain; one that is too detailed for it is softened. Throws `JpegError('unreachable-size')` if
    * neither helps.
    */
+  /** A 720 x 480 RGB picture as a power-off picture of the camera menu, in this firmware's format
+   * (GR IV: 4:2:2; GR III: 4:2:0 like its own end-screen pictures). */
+  encodeMenuPicture(rgb: Uint8Array, onProgress?: (f: number) => void): Uint8Array {
+    return this.info.family === 'gr3x' ? encodeGr3xPicture(rgb, onProgress) : encodeShutdownPicture(rgb, onProgress);
+  }
+
   encodeShutdownImage(rgb: Uint8Array, model: CameraModel, onProgress?: (f: number) => void): ShutdownImage {
     if (!this.info.capabilities.wallpaper) requireGr3xPort('power-off images');
     const res = this.info.models.includes(model) ? this.info.shutdown[model] : undefined;

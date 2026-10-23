@@ -20,12 +20,13 @@ function Sidebar() {
   const page = useStore((s) => s.page);
   const model = useStore((s) => s.model);
   const lang = useStore((s) => s.lang);
+  const menuPics = useStore((s) => !!s.info?.capabilities.menuPictures);
   return (
     <aside className="sidebar">
       <nav>
         <button className={`nav ${page === 'ic' ? 'on' : ''}`} data-tour="nav-ic" onClick={() => setPage('ic')}>{Ico.aperture}<span>{t('navIC')}</span></button>
         <button className={`nav ${page === 'ratio' ? 'on' : ''}`} data-tour="nav-ratio" onClick={() => setPage('ratio')}>{Ico.ratio}<span>{t('navRatio')}</span></button>
-        {!isGr3(model) && <button className={`nav ${page === 'wall' ? 'on' : ''}`} data-tour="nav-wall" onClick={() => setPage('wall')}>{Ico.image}<span>{t('navWall')}</span></button>}
+        {(!isGr3(model) || menuPics) && <button className={`nav ${page === 'wall' ? 'on' : ''}`} data-tour="nav-wall" onClick={() => setPage('wall')}>{Ico.image}<span>{t('navWall')}</span></button>}
       </nav>
       <div className="grow" />
       <button className={`nav low ${page === 'copies' ? 'on' : ''}`} data-tour="nav-copies" onClick={() => setPage('copies')}>{Ico.archive}<span>{t('navCopies')}</span></button>
@@ -74,7 +75,7 @@ function OutputBar() {
   const vol = s.volumes.find((v) => v.id === s.volumeId);
   // Image Control (with its switches), the added ratios and the power-off images go into one firmware file: every page writes the same thing.
   const isIC = s.page === 'ic' || s.page === 'ratio'; const isWall = s.page === 'wall';
-  const can = !!s.info && s.info.models.includes(s.model) && (isIC ? s.info.capabilities.build : isWall ? s.info.capabilities.wallpaper : s.info.capabilities.factoryEntry) && !s.busy && (isIC ? (pendingChanges(s).length + ratioSpecs(s).length > 0 || extrasOn(s) || (s.model !== 'MONO' && s.info.family !== 'gr3x' && s.extras.length > 0) || menuPictures(s).length > 0) && !hasNameErrors(s) && !hasRatioErrors(s) : isWall ? wallReady(s) && !hasNameErrors(s) && !hasRatioErrors(s) : true);
+  const can = !!s.info && s.info.models.includes(s.model) && (isIC ? s.info.capabilities.build : isWall ? (s.info.capabilities.wallpaper || s.info.capabilities.menuPictures) : s.info.capabilities.factoryEntry) && !s.busy && (isIC ? (pendingChanges(s).length + ratioSpecs(s).length > 0 || extrasOn(s) || (s.model !== 'MONO' && s.info.family !== 'gr3x' && s.extras.length > 0) || menuPictures(s).length > 0) && !hasNameErrors(s) && !hasRatioErrors(s) : isWall ? wallReady(s) && !hasNameErrors(s) && !hasRatioErrors(s) : true);
   const role: Key | '' = s.role === 'firmware' ? 'roleFirmware' : s.role === 'wallpaper' ? 'roleWallpaper' : s.role === 'mixed' ? 'roleMixed' : s.role === 'empty' ? 'roleEmpty' : '';
   // With the bridge firmware open the buttons stay live but offer the official download instead.
   const bridge = bridgeLoaded(s) && !s.busy;
@@ -134,6 +135,7 @@ function ExperimentalBanner() {
 export function App() {
   const page = useStore((s) => s.page);
   const gr3 = useStore((s) => isGr3(s.model));
+  const menuPicsReady = useStore((s) => !!s.info?.capabilities.menuPictures);
   const ready = useStore((s) => s.ready);
   if (!host.available) return <div className="nohost">{t('hostMissing')}</div>;
   return (
@@ -142,7 +144,7 @@ export function App() {
       <main className="main">
         <BridgeBanner />
         <ExperimentalBanner />
-        <div className="stage">{ready ? (page === 'ratio' ? <RatioPage /> : page === 'wall' && !gr3 ? <WallpaperPage /> : page === 'copies' ? <CopiesPage /> : <ImageControlPage />) : <div className="page"><span className="spinner" /></div>}</div>
+        <div className="stage">{ready ? (page === 'ratio' ? <RatioPage /> : page === 'wall' && (!gr3 || menuPicsReady) ? <WallpaperPage /> : page === 'copies' ? <CopiesPage /> : <ImageControlPage />) : <div className="page"><span className="spinner" /></div>}</div>
         <OutputBar />
       </main>
       <CropEditor />
