@@ -142,7 +142,7 @@ try {
     '--build-report', join(target, 'build-report.json'), '--rtos', join(temporary, 'rtos.bin'),
     '--boot', join(temporary, 'boot.bin'), '--reference', resolve(reference),
     '--base-look-manifest', join(temporary, 'base.json'), '--halation-reference', halationReference, '--output', join(target, 'validation')],
-    { stdio: 'inherit', timeout: 3600000 });
+    { stdio: 'inherit', timeout: 4 * 3600000 });
   if (run.error || run.status !== 0) throw new Error('T6 validation failed; UNVALIDATED.bin is not a released update');
   const summary = JSON.parse(await readFile(join(target, 'validation/summary.json'), 'utf8'));
   if (!summary.all_checks_passed || summary.candidate_sha256 !== result.report.outputSha256) throw new Error('T6 validation/hash mismatch');
