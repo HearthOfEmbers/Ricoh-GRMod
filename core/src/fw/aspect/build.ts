@@ -28,6 +28,7 @@ import type { RatioGeometry } from './geometry';
 import { RATIO_ICON_BYTES, RATIO_ICON_H, RATIO_ICON_W, drawRatioIcon } from './icon';
 import { linkNative } from './native-link';
 import { installAdjSoftFocus } from './softfocus';
+import { installDirectFlash } from './directflash';
 import { DATESTAMP_BYTE, installDateStamp, lookNames } from './datestamp';
 import { installDateStampMenu } from './datestamp-menu';
 import { installMonoUnlock } from './monounlock';
@@ -134,6 +135,8 @@ export interface ExtensionFeatures {
   shutdown?: { pictures: readonly ShutdownPictureSpec[]; factory: readonly Uint8Array[] };
   /** Put back setting values this firmware does not know (see `guard.ts`). Every build from 0.8.2 on. */
   guard?: boolean;
+  /** Direct Flash, a fifth Flash Mode (0.8.4, see `directflash.ts`); the guide number is chosen in the camera. */
+  directFlash?: boolean;
 }
 
 /** For test builds only: a fixed setting byte (1 short, 3 long style) instead of the camera menu. */
@@ -996,7 +999,7 @@ export function installExtensions(rtos: Uint8Array, iconbin: Uint8Array, ratios:
   const slots = features.extraSlots ?? [];
   const shutdown = features.shutdown && features.shutdown.pictures.length > 0 ? features.shutdown : undefined;
   const cinema = (['CY', 'CG'] as const).filter((id) => features.cinemaHalation?.[id] === true);
-  const extra = !!features.adjSoftFocus || !!features.dateStamp || !!features.monoUnlock || slots.length > 0 || !!shutdown || !!features.guard || cinema.length > 0;
+  const extra = !!features.adjSoftFocus || !!features.dateStamp || !!features.monoUnlock || slots.length > 0 || !!shutdown || !!features.guard || cinema.length > 0 || !!features.directFlash;
   if (extra) revision = 3;
   if (revision !== 1 && revision !== 2 && revision !== 3) fail('internal', 'unknown build revision');
   if (rtos.length !== OFFICIAL_RTOS_LENGTH || iconbin.length !== OFFICIAL_ICONBIN_LENGTH) fail('unexpected-layout', 'RTOS or ICONBIN does not have the official length');
@@ -1024,6 +1027,8 @@ export function installExtensions(rtos: Uint8Array, iconbin: Uint8Array, ratios:
     if (revision >= 2) installPlaybackDecode(patch);
   }
   if (features.adjSoftFocus) icons = installAdjSoftFocus(patch, icons);
+  // Before the date imprint's menu, which copies the list table with Flash Mode's records.
+  if (features.directFlash) icons = installDirectFlash(patch, icons);
   if (features.monoUnlock) installMonoUnlock(patch);
   if (features.dateStamp) {
     const fixed = test.dateStampFixed;
@@ -1058,5 +1063,5 @@ export function installExtensions(rtos: Uint8Array, iconbin: Uint8Array, ratios:
   if (features.guard) installSettingsGuard(patch, { slots: slots.length, ratios: ratios.length > 0, adjSoftFocus: !!features.adjSoftFocus, ...(features.lookLayout ? { hiddenLooks: features.lookLayout.hidden } : {}) });
   if (patch.length % 4 !== 0) fail('internal', 'image length is not a multiple of 4');
   if (BASE + patch.length >= APPEND_LIMIT) fail('too-many-ratios', 'the appended area would reach the RAM area');
-  return { revision, rtos: patch.bytes(), iconbin: icons, ratios: [...ratios], words: patch.words, features: { adjSoftFocus: !!features.adjSoftFocus, ...(features.dateStamp ? { dateStamp: true } : {}), ...(features.monoUnlock ? { monoUnlock: true } : {}), ...(slots.length > 0 ? { extraSlots: [...slots] } : {}), ...(shutdown ? { shutdown } : {}), ...(features.guard ? { guard: true } : {}), ...(cinema.length > 0 ? { cinemaHalation: Object.fromEntries(cinema.map((id) => [id, true])) } : {}), ...(features.lookLayout ? { lookLayout: features.lookLayout } : {}) } };
+  return { revision, rtos: patch.bytes(), iconbin: icons, ratios: [...ratios], words: patch.words, features: { adjSoftFocus: !!features.adjSoftFocus, ...(features.dateStamp ? { dateStamp: true } : {}), ...(features.monoUnlock ? { monoUnlock: true } : {}), ...(slots.length > 0 ? { extraSlots: [...slots] } : {}), ...(shutdown ? { shutdown } : {}), ...(features.guard ? { guard: true } : {}), ...(cinema.length > 0 ? { cinemaHalation: Object.fromEntries(cinema.map((id) => [id, true])) } : {}), ...(features.lookLayout ? { lookLayout: features.lookLayout } : {}), ...(features.directFlash ? { directFlash: true } : {}) } };
 }

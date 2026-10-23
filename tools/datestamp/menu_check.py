@@ -56,6 +56,8 @@ STYLE_TEXTS = [T_SHORT, T_LONG, T_SHORT_NAME, T_LONG_NAME]
 NAME_WORDS = ['Název', 'Navn', 'Name', 'Nimi', 'Nom', 'Name', 'Όνομα', 'Név', 'Nome', '名称', '이름', 'Naam', 'Nazwa', 'Nome',
               'Имя', '名称', 'Nombre', 'Namn', 'ชื่อ', '名稱', 'Ad']
 COUNTS = [2, 4, 2]
+# Flash Mode's list records, whose handlers Direct Flash replaces (0.8.4).
+DIRECT_FLASH_RECORDS = (11, 12)
 TEXT_CATALOG, ICON_CATALOG = 0x543d4ac0, 0x543d3ac0
 NAMES = ['Vkopírování data', 'Datostempel', 'Date Imprint', 'Päiväysleima', 'Impression date', 'Datumseinbelichtung',
          'Αποτύπωση ημ/νίας', 'Dátumbélyegző', 'Stampa data', '日付写し込み', '날짜 각인', 'Datumafdruk', 'Nadruk daty',
@@ -313,7 +315,15 @@ def check_records(new, off):
     st, lt = subs.pop(), sels.pop()
     check(st >= BASE + OFFICIAL_LEN and lt >= BASE + OFFICIAL_LEN, 'relocated tables are not in the appended area')
     check(new.rd(st, 19 * 0x64) == off.rd(0x53da6718, 19 * 0x64), 'submenu table: official records changed')
-    check(new.rd(lt, 125 * 0x4c) == off.rd(0x53da2d20, 125 * 0x4c), 'list table: official records changed')
+    # Direct Flash (0.8.4, directflash.ts) replaces the count / draw / set / is-current handlers of
+    # records 11 and 12 (Flash Mode) in place before the table is copied: those 8 words may differ.
+    table_new, table_off = bytearray(new.rd(lt, 125 * 0x4c)), bytearray(off.rd(0x53da2d20, 125 * 0x4c))
+    for rec in DIRECT_FLASH_RECORDS:
+        for o in (0x0c, 0x14, 0x24, 0x2c):
+            at = rec * 0x4c + o
+            if struct.unpack_from('<I', table_new, at)[0] >= BASE + OFFICIAL_LEN:
+                table_new[at:at + 4] = table_off[at:at + 4]
+    check(table_new == table_off, 'list table: official records changed')
     r = st + 19 * 0x64
     check(new.u16(r + 2) == T_NAME and new.rd(r + 6, 1)[0] == 3 and new.u16(r + 8) == T_ONOFF and new.u16(r + 10) == T_STYLE
           and new.u16(r + 12) == T_ORIENT and new.u16(r + 14) == 0, 'submenu record: title / count / line texts')
@@ -533,6 +543,13 @@ def check_constructor_scan(new, off):
             r = f'did not end: {str(ex)[:60]}'
         res.append((r, len(targets), tuple(targets)))
     print('  records scanned: new', res[0][:2], 'official', res[1][:2])
+    # Direct Flash: the count handlers of records 11 and 12 are its own (see check_records).
+    if len(res[0][2]) == len(res[1][2]):
+        t = list(res[0][2])
+        for rec in DIRECT_FLASH_RECORDS:
+            if rec < len(t) and t[rec] >= BASE + OFFICIAL_LEN:
+                t[rec] = res[1][2][rec]
+        res[0] = (res[0][0], res[0][1], tuple(t))
     check(res[0] == res[1] and res[1][1] == 124, f'list constructor scan: new {res[0][:2]} official {res[1][:2]}')
     end = new.u32(0x531d6dac)
     start = new.movw_movt(0x531d6d54, 0x531d6d64)

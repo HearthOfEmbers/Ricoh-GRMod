@@ -15,6 +15,7 @@ import {
   setSoft,
   setDateStamp,
   setMonoUnlock,
+  setDirectFlash,
   extraName, extraNameProblem, extraProblem, halationOf, removeExtraSlot, setExtraCount, setExtraName, setHalation, slotOf,
   hasLookLayout, KEEP_VISIBLE, lookName, lookOrderNow, lookStyleOf, moveLook, moveLookTo, normalizeLookHidden, normalizeLookOrder, resetLookLayout, setLookHidden,
   setWallName, wallMax, wallMenuProblem,
@@ -628,6 +629,7 @@ function FeatureSwitches({ mono, boxRef, from }: { mono: boolean; boxRef?: (el: 
   const soft = useStore((s) => s.soft);
   const date = useStore((s) => s.dateStamp);
   const looks = useStore((s) => s.monoUnlock);
+  const flash = useStore((s) => s.directFlash);
   const own = useRef<HTMLDivElement | null>(null);
   // Moved to the other column: glide from where it was (FLIP). Rectangles are in window pixels,
   // the transform is in the zoomed interface's pixels.
@@ -646,6 +648,7 @@ function FeatureSwitches({ mono, boxRef, from }: { mono: boolean; boxRef?: (el: 
       <FeatureRow icon={Ico.soft} title={t('navSoft')} sub={t('softAdjSub')} on={soft} onChange={setSoft} />
       <FeatureRow icon={Ico.date} title={t('navDate')} sub={t('dateSub')} on={date} onChange={setDateStamp} />
       {!mono && <FeatureRow icon={Ico.mono} title={t('navMono')} sub={t('monoSub')} on={looks} onChange={setMonoUnlock} />}
+      <FeatureRow icon={Ico.flash} title={t('navFlash')} sub={t('flashSub')} on={flash} onChange={setDirectFlash} />
     </div>
   );
 }
