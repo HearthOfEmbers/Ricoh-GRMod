@@ -52,6 +52,23 @@ describe('date imprint with the look\'s name (0.8.4): data', () => {
     const icons = [aspect.drawStyleIcon(false), aspect.drawStyleIcon(true), aspect.drawStyleIcon(false, true), aspect.drawStyleIcon(true, true)];
     for (let i = 0; i < 4; i++) for (let j = i + 1; j < 4; j++) expect(icons[i]).not.toEqual(icons[j]);
   });
+  it('every Style value fits its (widened) label in the Chinese font, with 10% to spare', () => {
+    // Measured on the camera (test 051, Chinese): the menu font is fixed-pitch, digits, Latin
+    // letters, space and marks take one cell, CJK characters two; the native label (400 px) holds
+    // 20.7 cells, so a cell is 19.3 px. From test 052 the Style list's labels end 20 px before the
+    // row's right edge, at most at x 680 (datestamp-menu.ts): at least 560 px for rows 680 px wide.
+    // (The fonts of the other languages are not in the firmware; checked here by the same cell
+    // model, provisionally, until the camera shows them.)
+    const CELL = 400 / 20.7;
+    const budget = Math.floor((560 / CELL) * 0.9);
+    const cells = (t: string): number => [...t].reduce((n, c) => n + (/[\u1100-\u11ff\u2e80-\u9fff\uac00-\ud7af\uf900-\ufaff\uff00-\uffef]/.test(c) ? 2 : /[\u0e31\u0e34-\u0e3a\u0e47-\u0e4e]/.test(c) ? 0 : 1), 0);
+    for (const date of ["'26 10 08", '2026.10.08 17:34']) {
+      aspect.datestampNameTexts(date).forEach((t, k) => expect(cells(t), `${t} (${k})`).toBeLessThanOrEqual(budget));
+    }
+    // the case that was cut in test 051 needed 23 cells in a 20.7-cell label
+    expect(cells('2026.10.08 17:34 + 名称')).toBe(23);
+    expect(budget).toBeGreaterThanOrEqual(26);
+  });
   it('names become fourteen-segment capitals; digits stay seven-segment', () => {
     const L = (c: string): number => 0x4000 | aspect.LETTER_SEGMENTS[c];
     expect(aspect.lookNameGlyphs('FilmV+')).toEqual([L('F'), L('I'), L('L'), L('M'), L('V'), L('+')]);
@@ -66,7 +83,7 @@ describe('date imprint with the look\'s name (0.8.4): data', () => {
 describe.skipIf(!have)('date imprint: firmware files', () => {
   it('0.8.4: the look names in the module\'s table, the look at the start of the exposure', async () => {
     const eng = await Engine.open(new Uint8Array(readFileSync(P + 'official.bin')));
-    const extra = (name: string) => ({ name, matrixQ13: [8192, 0, 0, 0, 8192, 0, 0, 0, 8192], curves: [0, 1, 2].map(() => Array.from({ length: 256 }, (_, i) => i * 16)), icon: new Uint8Array(40 * 40 * 4) });
+    const extra = (name: string) => ({ name, matrixQ13: [8192, 0, 0, 0, 8192, 0, 0, 0, 8192], curves: [0, 1, 2].map(() => Array.from({ length: 256 }, (_, i) => i * 16)) as [number[], number[], number[]], icon: new Uint8Array(40 * 40 * 4) });
     const b = await eng.buildFirmware([{ slot: 'CY', names: { 'zh-CN': 'FilmV+' } }], [], [], { dateStamp: true, extraSlots: [extra('GR Mod 1'), extra('Kodak 200')] });
     expect((await eng.inspect(b.file)).verified).toBe(true);
     const d = new fw.Firmware(b.file).decoded;

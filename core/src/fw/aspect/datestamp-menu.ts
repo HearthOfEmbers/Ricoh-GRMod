@@ -171,6 +171,24 @@ const TOP_SET_TWO_ICONS = 0x5357a510; // (menu line, icon, icon)
 const TOP_SET_TITLE = 0x5357a1c0; // (menu line, text)
 const SUB_SET_ICON = 0x53583188; // (submenu line, icon)
 const LIST_SET_ITEM = 0x5357aef0; // (list item, icon, text)
+/**
+ * 0.8.4 (test 052): the list rows of SelectMenuController are widgets of class 0x5357AB24 (vtable
+ * 0x53E98F18; constructor (x, y, width, height)): selection mark at x 10, icon 40..100, the value's
+ * text label (+0xFC, a label widget, vtable 0x53E984E0) at x 100, 400 wide, y 10, 40 high, whatever
+ * the row's width. The longest Style values ("2026.10.08 17:34 + ...") did not fit in 400 (test 051:
+ * the last character cut in half). For the Style list only, after a value is drawn, its label is
+ * made as wide as the row allows: to 20 px before the row's right edge, and never beyond x 680, the
+ * right edge of the row's widest own widget (+0x100, 40..680), through the label's own SetRect (vtable +0x18, as the row's
+ * icon layout 0x5357AE64 does). Nothing else changes; other lists are not touched.
+ */
+const ROW_VTABLE = 0x53e98f18;
+const ROW_VTABLE_LITERAL = 0x5357ad3c; // in the row constructor 0x5357AB24
+const LABEL_VTABLE = 0x53e984e0;
+const LABEL_VTABLE_LITERAL = 0x53572e34; // in the label constructor 0x53572D50
+const LABEL_SET_RECT = 0x53587c3c; // label vtable +0x18
+const ROW_RIGHT_MARGIN = 20;
+/** The right edge of the row's widest own widget (+0x100: x 40, 640 wide): the label never goes beyond it. */
+const ROW_CONTENT_RIGHT = 680;
 
 const TABLE_STRIDE = 0xd14;
 const FIRST_TABLE_RAM = 0x55000000 + (0x5437d7b0 - 0x5437b640);
@@ -420,7 +438,10 @@ export function installDateStampMenu(patch: Patch, iconbin: Uint8Array): Uint8Ar
   expectWord(patch, SELECT_SET_CURRENT, 0xe28134fe);
   expectWord(patch, 0x531e2a10, 0xe3a02012); // the submenu constructor starts at record 18
   expectWord(patch, 0x531db2c4, 0xe3a0e07c); // the list constructor starts at record 124
-  for (const f of [APP, SPEC_MODEL, TOP_SET_TWO_ICONS, TOP_SET_TITLE, SUB_SET_ICON, LIST_SET_ITEM]) expectWord(patch, f, 0xe1a0c00d);
+  for (const f of [APP, SPEC_MODEL, TOP_SET_TWO_ICONS, TOP_SET_TITLE, SUB_SET_ICON, LIST_SET_ITEM, LABEL_SET_RECT]) expectWord(patch, f, 0xe1a0c00d);
+  expectWord(patch, ROW_VTABLE_LITERAL, ROW_VTABLE);
+  expectWord(patch, LABEL_VTABLE_LITERAL, LABEL_VTABLE);
+  if (new DataView(patch.readMapped(LABEL_VTABLE + 0x18, 4).buffer).getUint32(0, true) !== LABEL_SET_RECT) fail('unexpected-layout', 'label SetRect is not where it was expected');
   expectWord(patch, MODEL_NUMBER, 0xe5903000); // ldr r3, [r0]
   expectWord(patch, MODEL_NUMBER + 4, 0xe5930004); // ldr r0, [r3, #4]
 
@@ -511,14 +532,42 @@ export function installDateStampMenu(patch: Patch, iconbin: Uint8Array): Uint8Ar
     `${LOAD_SETTING}
      and r3, r3, #1; cmp r3, r1; moveq r0, #1; movne r0, #0; bx lr`, at), 16);
   // Style values: 0 short, 1 long, 2 short + name, 3 long + name (bit 0: bit 1 of the byte, bit 1: bit 3).
+  // The value's label made as wide as the row allows (see ROW_VTABLE): r0 = the row; every register
+  // but r0..r3, ip is kept. Only for a row and a label of the expected classes, and only wider.
+  const widenLabel = patch.append((at) => assembleWords(
+    `push {r4, r5, lr}
+     sub sp, sp, #20
+     cmp r0, #0x40000000; blo done; cmp r0, #0xc0000000; bhs done
+     ldr r3, [r0]; movw ip, #${lo(ROW_VTABLE)}; movt ip, #${hi(ROW_VTABLE)}; cmp r3, ip; bne done
+     ldr r5, [r0, #0x28]
+     cmp r5, #200; blt done; cmp r5, #720; bgt done
+     sub r5, r5, #${ROW_RIGHT_MARGIN}
+     cmp r5, #${ROW_CONTENT_RIGHT}; movgt r5, #${ROW_CONTENT_RIGHT}
+     ldr r4, [r0, #0xfc]
+     cmp r4, #0x40000000; blo done; cmp r4, #0xc0000000; bhs done
+     ldr r3, [r4]; movw ip, #${lo(LABEL_VTABLE)}; movt ip, #${hi(LABEL_VTABLE)}; cmp r3, ip; bne done
+     ldr r0, [r4, #0x20]; ldr r1, [r4, #0x24]; ldr r2, [r4, #0x28]; ldr r3, [r4, #0x2c]
+     cmp r0, #0; blt done
+     add ip, r0, r2; cmp ip, r5; bge done
+     sub r2, r5, r0
+     str r0, [sp]; str r1, [sp, #4]; str r2, [sp, #8]; str r3, [sp, #12]
+     ldr r3, [r4]; ldr r3, [r3, #0x18]
+     mov r0, r4; mov r1, sp; mov lr, pc; bx r3
+     done: add sp, sp, #20
+     pop {r4, r5, pc}`, at), 16);
   const drawStyle = patch.append((at) => assembleWords(
     `cmp r2, #3; bxhi lr
+     push {r4, lr}
+     mov r4, r1
      mov r0, r1; mov ip, r2
      cmp ip, #0; movweq r1, #${I.short}; movweq r2, #${T.short}
      cmp ip, #1; movweq r1, #${I.long}; movweq r2, #${T.long}
      cmp ip, #2; movweq r1, #${I.shortName}; movweq r2, #${T.shortName}
      cmp ip, #3; movweq r1, #${I.longName}; movweq r2, #${T.longName}
-     b #${LIST_SET_ITEM}`, at), 16);
+     bl #${LIST_SET_ITEM}
+     mov r0, r4
+     bl #${widenLabel}
+     pop {r4, pc}`, at), 16);
   const setStyle = patch.append((at) => assembleWords(
     `cmp r1, #3; bxhi lr
      ${LOAD_SETTING}
