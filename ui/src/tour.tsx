@@ -37,6 +37,7 @@ export const TOURS: Record<TourId, Step[]> = {
   ],
   ic: [
     step('ic-stock', 'IcStock', 'bottom'),
+    step('ic-views', 'IcViews', 'bottom'),
     step('ic-slot', 'IcSlot'),
     step('ic-name', 'IcName', 'bottom'),
     step('ic-preset', 'IcPreset', 'bottom'),
