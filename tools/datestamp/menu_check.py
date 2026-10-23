@@ -303,8 +303,12 @@ def check_records(new, off):
     d_range = 0x53da6718 + 6 * 0x64
     instant = 0x53da6718 + 11 * 0x64   # Instant Review: three lines, the layout followed
     check(off.rd(instant + 6, 1)[0] == 3 and off.u32(instant + 0x20) == 0x10000000 and off.u16(instant + 14) == 0, 'Instant Review record is not as expected')
-    same = [o for o in range(0, 0x64, 2) if not (o in (2, 6, 8, 10, 12, 14) or 0x14 <= o < 0x24 or 0x3c <= o < 0x54)]
-    check(all(new.u16(r + o) == off.u16(d_range + o) for o in same), 'submenu record: other fields differ from D-Range Correction')
+    # Every field but title, line texts, line ids and value-draw functions as Instant Review's (a
+    # native three-line submenu with value icons), among them the value icons' x at +0x28.. (540).
+    same = [o for o in range(0, 0x64, 2) if not (o in (2, 8, 10, 12) or 0x14 <= o < 0x20 or 0x3c <= o < 0x54)]
+    diff = [hex(o) for o in same if new.u16(r + o) != off.u16(instant + o)]
+    check(not diff, f'submenu record: fields differ from Instant Review: {diff}')
+    check([new.u32(r + 0x28 + 4 * i) for i in range(4)] == [0x21c, 0x21c, 0x21c, 0], 'submenu record: value icon places')
     check(all(new.u32(r + o) == 0 for o in (0x40, 0x48, 0x50)), 'submenu record: second words of the line functions')
     line_draw = [new.u32(r + 0x3c), new.u32(r + 0x44), new.u32(r + 0x4c)]
     lists = []
@@ -462,6 +466,29 @@ def check_controllers(new):
             print('  submenu: title', titles, 'lines', texts, 'icons', icons)
 
 
+def check_submenu_layout(new, off):
+    """SubMenuController's drawing (0x531E271C, lines by 0x531E2424) of our record and of Instant
+    Review's (official image, record 11), view functions stubbed: per line the calls that place it
+    (line visibility 0x535712B0, list height 0x538E9C2C, the value icon's x 0x5358304C) must be the
+    same; only the texts and the icons differ."""
+    PLACE = {hex(0x535712b0), hex(0x5358304c), hex(0x53570a9c), hex(0x53582fb4), hex(0x53571788)}
+    out = []
+    for img, rec in ((new, 19), (off, 11)):
+        def setup(e, this, rec=rec):
+            for o in (0x15c, 0x160, 0x164, 0x168, 0x16c, 0x170):
+                e.mu.mem_write(this + o, struct.pack('<I', 0x70700000 + o * 0x100))
+            e.mu.mem_write(this + 0x174, bytes([rec]))
+            return 0x531e271c
+        e, seen = views(img, 1, setup)
+        out.append([c for c in seen if c[0] in PLACE])
+    a, b = out
+    print('  our record :', [(c[0], c[1]) for c in a if c[0] == hex(0x5358304c)], 'lines shown', [c[1:] for c in a if c[0] == hex(0x535712b0)])
+    print('  Instant Review:', [(c[0], c[1]) for c in b if c[0] == hex(0x5358304c)], 'lines shown', [c[1:] for c in b if c[0] == hex(0x535712b0)])
+    # (function, first argument): line index, visibility, icon x; the second argument is left-over
+    # register contents for most of them.
+    check([(c[0], c[1]) for c in a] == [(c[0], c[1]) for c in b], 'submenu drawing: lines placed differently from Instant Review')
+
+
 def check_constructor_scan(new, off):
     """The list constructor's scan for the longest list (0x531D6D4C), run on both images: it must
     end (on the camera a wrong end address made it run on through memory) with the same result."""
@@ -506,6 +533,8 @@ def main():
     check_records(new, off)
     print('5. SelectMenuController / SubMenuController drawing the new records')
     check_controllers(new)
+    print('5b. submenu lines placed as in Instant Review (a native three-line submenu)')
+    check_submenu_layout(new, off)
     print('6. list constructor: scan of the relocated table')
     check_constructor_scan(new, off)
     print('7. texts and icons')

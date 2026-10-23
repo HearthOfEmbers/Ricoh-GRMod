@@ -537,8 +537,13 @@ export function installDateStampMenu(patch: Patch, iconbin: Uint8Array): Uint8Ar
     const v = new DataView(subRecord.buffer);
     v.setUint16(2, T.name, true);
     // Three lines, laid out as Instant Review's (record 11): texts from +8 (0 after the last),
-    // controller ids from +0x14 (0x10000000 after the last), value-draw functions from +0x3C.
+    // controller ids from +0x14 (0x10000000 after the last), per line from +0x28 the x of its value
+    // icon (540; SubMenuController's line drawing 0x531E2424 hands it to 0x5358304C, the line
+    // widget's +0x108; test 048 left it 0 for the third line: its icon was drawn at the left, over
+    // the name), value-draw functions from +0x3C.
     subRecord[6] = 3;
+    if (v.getUint32(0x28, true) !== 0x21c || v.getUint32(0x2c, true) !== 0x21c || v.getUint32(0x30, true) !== 0) fail('unexpected-layout', 'D-Range Correction submenu record: value icon places');
+    v.setUint32(0x30, v.getUint32(0x28, true), true);
     v.setUint16(8, T.onOff, true);
     v.setUint16(10, T.style, true);
     v.setUint16(12, T.orient, true);
