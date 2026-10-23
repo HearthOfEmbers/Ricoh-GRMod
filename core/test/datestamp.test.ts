@@ -41,7 +41,58 @@ describe('date imprint menu: data', () => {
   });
 });
 
+describe('date imprint with the look\'s name (0.8.4): data', () => {
+  it('setting bit, texts and icons', () => {
+    expect(aspect.DATESTAMP_NAME).toBe(8);
+    expect([aspect.DATESTAMP_TEXT_IDS.shortName, aspect.DATESTAMP_TEXT_IDS.longName]).toEqual([880, 881]);
+    expect([aspect.DATESTAMP_ICON_IDS.shortName, aspect.DATESTAMP_ICON_IDS.longName]).toEqual([731, 732]);
+    expect(aspect.DATESTAMP_NAME_WORDS.length).toBe(21);
+    // As long as the camera's own longer list values ("Snap Distance Priority AE", 25).
+    for (const t of aspect.datestampNameTexts('2026.10.08 17:34')) expect(t.length).toBeLessThanOrEqual(25);
+    const icons = [aspect.drawStyleIcon(false), aspect.drawStyleIcon(true), aspect.drawStyleIcon(false, true), aspect.drawStyleIcon(true, true)];
+    for (let i = 0; i < 4; i++) for (let j = i + 1; j < 4; j++) expect(icons[i]).not.toEqual(icons[j]);
+  });
+  it('names become fourteen-segment capitals; digits stay seven-segment', () => {
+    const L = (c: string): number => 0x4000 | aspect.LETTER_SEGMENTS[c];
+    expect(aspect.lookNameGlyphs('FilmV+')).toEqual([L('F'), L('I'), L('L'), L('M'), L('V'), L('+')]);
+    expect(aspect.lookNameGlyphs('GR Mod 12')).toEqual([L('G'), L('R'), 17, L('M'), L('O'), L('D'), 17, 1, 2]);
+    expect(aspect.lookNameGlyphs('  Hi-Contrast B&W ')).toEqual([...[...'HI-CONTRAST'].map(L), 17, L('B'), L('&'), L('W')]);
+    expect(aspect.lookNameGlyphs('A\u00e9\u4e2dB')).toEqual([L('A'), 17, L('B')]); // no shape: one space
+    expect(aspect.lookNameGlyphs('x'.repeat(40)).length).toBe(aspect.LOOK_NAME_MAX);
+    for (const name of Object.values(aspect.FACTORY_LOOK_NAMES)) expect(aspect.lookNameGlyphs(name).length).toBeGreaterThan(0);
+  });
+});
+
 describe.skipIf(!have)('date imprint: firmware files', () => {
+  it('0.8.4: the look names in the module\'s table, the look at the start of the exposure', async () => {
+    const eng = await Engine.open(new Uint8Array(readFileSync(P + 'official.bin')));
+    const extra = (name: string) => ({ name, matrixQ13: [8192, 0, 0, 0, 8192, 0, 0, 0, 8192], curves: [0, 1, 2].map(() => Array.from({ length: 256 }, (_, i) => i * 16)), icon: new Uint8Array(40 * 40 * 4) });
+    const b = await eng.buildFirmware([{ slot: 'CY', names: { 'zh-CN': 'FilmV+' } }], [], [], { dateStamp: true, extraSlots: [extra('GR Mod 1'), extra('Kodak 200')] });
+    expect((await eng.inspect(b.file)).verified).toBe(true);
+    const d = new fw.Firmware(b.file).decoded;
+    const rtos = fw.sectionsOf(d).find((x) => x.name === 'RTOS')!;
+    const data = d.subarray(rtos.offset, rtos.offset + rtos.size);
+    const word = (va: number): number => new DataView(data.buffer, data.byteOffset).getUint32(va - 0x53000000, true);
+    const half = (va: number): number => new DataView(data.buffer, data.byteOffset).getUint16(va - 0x53000000, true);
+    // The JPEG step's stub loads the context with movw / movt; its words 10 and 11: FRAME_LOOK, the table.
+    const stub = 0x537034b4 + 8 + (((word(0x537034b4) & 0xffffff) << 8) >> 6);
+    const imm = (w: number): number => ((w >> 4) & 0xf000) | (w & 0xfff);
+    const ctx = (imm(word(stub + 8)) | (imm(word(stub + 12)) << 16)) >>> 0;
+    expect(word(ctx + 40)).toBe(0x558372f8);
+    const table = word(ctx + 44);
+    const name = (style: number): number[] => { const r = word(table + style * 4); return r ? Array.from({ length: half(r) }, (_, i) => half(r + 2 + 2 * i)) : []; };
+    expect(name(17)).toEqual(aspect.lookNameGlyphs('Positive Film'));
+    expect(name(18)).toEqual(aspect.lookNameGlyphs('FilmV+'));
+    expect(name(19)).toEqual(aspect.lookNameGlyphs('Cinema (Green)'));
+    expect(name(34)).toEqual(aspect.lookNameGlyphs('GR Mod 1'));
+    expect(name(35)).toEqual(aspect.lookNameGlyphs('Kodak 200'));
+    expect(name(36)).toEqual([]);
+    // The exposure hook copies LOOK_STASH (0x558372e4) to FRAME_LOOK first.
+    const target = (at: number): number => at + 8 + (((word(at) & 0xffffff) << 8) >> 6);
+    const exposure = Array.from({ length: 8 }, (_, i) => word(target(0x53628cd8) + 4 * i));
+    expect([1, 2, 4, 5].map((i) => imm(exposure[i]))).toEqual([0x72e4, 0x5583, 0x72f8, 0x5583]);
+  });
+
   it('builds a file with the imprint and its menu entry; the engine recognises and verifies it', async () => {
     const eng = await Engine.open(new Uint8Array(readFileSync(P + 'official.bin')));
     const b = await eng.buildFirmware([], [], [], { dateStamp: true });

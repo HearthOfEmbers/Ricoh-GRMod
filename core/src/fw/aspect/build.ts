@@ -28,7 +28,7 @@ import type { RatioGeometry } from './geometry';
 import { RATIO_ICON_BYTES, RATIO_ICON_H, RATIO_ICON_W, drawRatioIcon } from './icon';
 import { linkNative } from './native-link';
 import { installAdjSoftFocus } from './softfocus';
-import { DATESTAMP_BYTE, installDateStamp } from './datestamp';
+import { DATESTAMP_BYTE, installDateStamp, lookNames } from './datestamp';
 import { installDateStampMenu } from './datestamp-menu';
 import { installMonoUnlock } from './monounlock';
 import { CINEMA_STYLES, installExtraSlots, installHalation } from './slots';
@@ -1028,7 +1028,7 @@ export function installExtensions(rtos: Uint8Array, iconbin: Uint8Array, ratios:
   if (features.dateStamp) {
     const fixed = test.dateStampFixed;
     // From 0.8.2 (builds with the guard) the imprint goes by the picture's look.
-    const look = features.guard ? { stash: LOOK_STASH, monoLooks: monoTable(patch, slots.map((x) => monoLook(x.matrixQ13, x.curves, x.postQ9)), FIRST_ADDED_LOOK) } : undefined;
+    const look = features.guard ? { stash: LOOK_STASH, monoLooks: monoTable(patch, slots.map((x) => monoLook(x.matrixQ13, x.curves, x.postQ9)), FIRST_ADDED_LOOK), names: lookNames(patch, slots.map((x) => x.name)) } : undefined;
     installDateStamp(patch, fixed ? patch.append([fixed, 0, 0, 0], 4) : DATESTAMP_BYTE, !!test.dateStampDiag, look);
     if (!fixed) icons = installDateStampMenu(patch, icons);
     if (look && slots.length === 0) installLookStash(patch);

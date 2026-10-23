@@ -11,6 +11,9 @@
  * camera held upright (or upside down) is stored as the sensor sees it, with an EXIF Orientation
  * that viewers apply, and the imprint is drawn turned so that it reads normally there.
  *
+ * Since 0.8.4 either style can be followed by the name of the picture's look (its Image Control),
+ * in fourteen-segment capitals drawn like the digits (the idea of PR #9 by jaylee / sjclijie).
+ *
  * Position-independent: no global data, every address comes in through `struct ctx`. No division
  * (the module must not need a run-time library).
  */
@@ -45,12 +48,21 @@ struct ctx {
   u32 (*mono_model)(void);                           /* 0x533EF000: 1 on the GR IV Monochrome */
   /* Since 0.8.3: the orientation of the picture, value | 0x100 (see `orientation`); 0 without. */
   const volatile u32 *orient;
+  /* Since 0.8.4: the look of the picture being made, as LOOK_STASH's word, left at the start of the
+   * exposure (and in RAW development by the development step; see lookstash.ts); and per look
+   * (0..63) its name as glyphs: {count, glyph...} (u16), or 0. */
+  const volatile u32 *frame_look;
+  const u16 *const *names;
 };
 
-/* The setting byte (see `datestamp.ts`): anything above 7 counts as off. */
+/* The setting byte (see `datestamp.ts`): anything above 15 counts as off. */
 #define SETTING_ON 1u
 #define SETTING_LONG 2u
 #define SETTING_AS_STORED 4u /* 0.8.3: "Follow Orientation" off */
+#define SETTING_NAME 8u      /* 0.8.4: with the look's name */
+#define SETTING_MAX 15u
+/* Longest name drawn (in glyphs; GR Mod's names are at most 16). */
+#define MAXNAME 24u
 
 /* Glyph codes besides the digits 0..15. */
 #define G_APOSTROPHE 16
@@ -84,21 +96,28 @@ static struct colour orange(void) {
   return c;
 }
 
+/* Glyph codes are 16 bits: the digits 0..15 and G_* above (seven-segment digits and marks), or
+ * (0.8.4) a letter of the look's name: G_LETTER | its fourteen segments (see `letter_segs`). */
+typedef u16 glyph;
+#define G_LETTER 0x4000u
+#define is_letter(g) (((g) & G_LETTER) != 0)
+
 static int narrow(u32 g) { return g == G_APOSTROPHE || g == G_DOT || g == G_COLON; }
 static int punct(u32 g) { return g == G_DOT || g == G_COLON; }
 
 /* Left edge and width of each glyph at digit height H, starting at 0; returns the advance of the
  * whole run (without a gap after the last glyph). The marks ' . : are T wide; . and : sit closer to
- * their neighbours (half the gap). A space advances H/2. */
-static s32 layout(const u8 *glyphs, u32 count, s32 H, s32 *left, s32 *width) {
-  s32 W = (H * 9) >> 4, T = (H * 9) >> 6, gap = (H * 5) >> 4, x = 0, end = 0;
+ * their neighbours (half the gap). A space advances H/2. A letter is 13/16 H wide (a digit 9/16 H:
+ * the diagonals need the room), with the digits' gap. */
+static s32 layout(const glyph *glyphs, u32 count, s32 H, s32 *left, s32 *width) {
+  s32 W = (H * 9) >> 4, WL = (H * 13) >> 4, T = (H * 9) >> 6, gap = (H * 5) >> 4, x = 0, end = 0;
   u32 i;
   if (T < 2) T = 2;
   for (i = 0; i < count; i++) {
     u32 g = glyphs[i];
     if (i > 0 && (punct(g) || punct(glyphs[i - 1]))) x -= gap >> 1;
     left[i] = x;
-    width[i] = g == G_SPACE ? 0 : narrow(g) ? T : W;
+    width[i] = g == G_SPACE ? 0 : narrow(g) ? T : is_letter(g) ? WL : W;
     end = x + width[i];
     x += (g == G_SPACE ? (H >> 1) : width[i]) + gap;
   }
@@ -127,22 +146,98 @@ static int in_bar(s32 px, s32 py, s32 x0, s32 y0, s32 x1, s32 y1, s32 t) {
   return across <= min32(t, min32(along, len - along));
 }
 
-/* Coverage (0..4 samples) of a digit cell at 1/4-pixel coordinates (qx, qy) inside a cell of
- * size w x h (1/4 px), bar half-thickness t. */
-static u32 digit_hit(u32 seg, s32 qx, s32 qy, s32 w, s32 h, s32 t) {
-  s32 g = t / 2 + 1; /* gap at the joints (t is a small positive number, /2 is a shift) */
-  s32 l = t, r = w - t, top = t, mid = h >> 1, bot = h - t;
-  if ((seg & 0x01) && in_bar(qx, qy, l + g, top, r - g, top, t)) return 1;
-  if ((seg & 0x02) && in_bar(qx, qy, r, top + g, r, mid - g, t)) return 1;
-  if ((seg & 0x04) && in_bar(qx, qy, r, mid + g, r, bot - g, t)) return 1;
-  if ((seg & 0x08) && in_bar(qx, qy, l + g, bot, r - g, bot, t)) return 1;
-  if ((seg & 0x10) && in_bar(qx, qy, l, mid + g, l, bot - g, t)) return 1;
-  if ((seg & 0x20) && in_bar(qx, qy, l, top + g, l, mid - g, t)) return 1;
-  if ((seg & 0x40) && in_bar(qx, qy, l + g, mid, r - g, mid, t)) return 1;
-  return 0;
+/* A glyph is drawn as a few shapes, each with the box (1/4 px, inclusive) outside of which it has
+ * no ink: a bar (in_bar), a slanted bar (a strip of half thickness t around the line through
+ * (x0,y0)-(x1,y1), of length len, cut by the box) or a box. The shapes of a glyph do not overlap. */
+#define S_BAR 0
+#define S_SLANT 1
+#define S_BOX 2
+struct shape { s32 kind, x0, y0, x1, y1, t, len, bx0, by0, bx1, by1; };
+
+static s32 isqrt(u32 v) {
+  u32 r = 0, bit = 1u << 30;
+  while (bit > v) bit >>= 2;
+  while (bit) {
+    if (v >= r + bit) { v -= r + bit; r = (r >> 1) + bit; } else r >>= 1;
+    bit >>= 2;
+  }
+  return (s32)r;
+}
+
+static void bar(struct shape *s, s32 x0, s32 y0, s32 x1, s32 y1, s32 t) {
+  s->kind = S_BAR; s->x0 = x0; s->y0 = y0; s->x1 = x1; s->y1 = y1; s->t = t;
+  if (y0 == y1) { s->bx0 = x0; s->bx1 = x1; s->by0 = y0 - t; s->by1 = y0 + t; }
+  else { s->bx0 = x0 - t; s->bx1 = x0 + t; s->by0 = y0; s->by1 = y1; }
+}
+
+static void box(struct shape *s, s32 bx0, s32 by0, s32 bx1, s32 by1) {
+  s->kind = S_BOX; s->bx0 = bx0; s->by0 = by0; s->bx1 = bx1; s->by1 = by1;
+}
+
+/* The slanted bar from corner (x0,y0) towards the centre (x1,y1), within the box. */
+static void slant(struct shape *s, s32 x0, s32 y0, s32 x1, s32 y1, s32 t, s32 bx0, s32 by0, s32 bx1, s32 by1) {
+  s32 dx = x1 - x0, dy = y1 - y0;
+  s->kind = S_SLANT; s->x0 = x0; s->y0 = y0; s->x1 = x1; s->y1 = y1; s->t = t;
+  s->len = isqrt((u32)(dx * dx + dy * dy));
+  s->bx0 = bx0; s->by0 = by0; s->bx1 = bx1; s->by1 = by1;
+}
+
+static int shape_hit(const struct shape *s, s32 qx, s32 qy) {
+  if (qx < s->bx0 || qx > s->bx1 || qy < s->by0 || qy > s->by1) return 0;
+  if (s->kind == S_BOX) return 1;
+  if (s->kind == S_BAR) return in_bar(qx, qy, s->x0, s->y0, s->x1, s->y1, s->t);
+  return abs32((qx - s->x0) * (s->y1 - s->y0) - (qy - s->y0) * (s->x1 - s->x0)) <= s->t * s->len;
+}
+
+/* The shapes of glyph g in a cell of w x h (1/4 px), bar half thickness t; returns their number.
+ * Digits and marks exactly as up to 0.8.3 (seven segments with gaps at the joints). Letters
+ * (0.8.4): the same bars for a..f, the middle bar split in two (g1, g2), a short bar up and one
+ * down from the middle, and four slanted bars between them, a little thinner. */
+static u32 glyph_shapes(u32 g, s32 w, s32 h, s32 t, s32 T, struct shape *s) {
+  s32 gp = t / 2 + 1; /* gap at the joints (t is a small positive number, /2 is a shift) */
+  s32 l = t, r = w - t, top = t, mid = h >> 1, bot = h - t, cx = w >> 1;
+  u32 n = 0, seg;
+  if (g == G_SPACE) return 0;
+  if (g == G_APOSTROPHE) { /* short bar at the top: qy < 5/16 h */
+    box(&s[n++], T * 2 - t, -(1 << 20), T * 2 + t, ((h * 5) >> 4) - 1); return n;
+  }
+  if (g == G_DOT) { /* square on the baseline */
+    box(&s[n++], T * 2 - t, h - 2 * t, T * 2 + t, 1 << 20); return n;
+  }
+  if (g == G_COLON) { /* two squares, at 5/16 and 11/16 of the height */
+    box(&s[n++], T * 2 - t, ((h * 5) >> 4) - t, T * 2 + t, ((h * 5) >> 4) + t);
+    box(&s[n++], T * 2 - t, ((h * 11) >> 4) - t, T * 2 + t, ((h * 11) >> 4) + t);
+    return n;
+  }
+  seg = is_letter(g) ? g & 0x3fffu : segments(g);
+  if (seg & 0x01) bar(&s[n++], l + gp, top, r - gp, top, t);
+  if (seg & 0x02) bar(&s[n++], r, top + gp, r, mid - gp, t);
+  if (seg & 0x04) bar(&s[n++], r, mid + gp, r, bot - gp, t);
+  if (seg & 0x08) bar(&s[n++], l + gp, bot, r - gp, bot, t);
+  if (seg & 0x10) bar(&s[n++], l, mid + gp, l, bot - gp, t);
+  if (seg & 0x20) bar(&s[n++], l, top + gp, l, mid - gp, t);
+  if (!is_letter(g)) {
+    if (seg & 0x40) bar(&s[n++], l + gp, mid, r - gp, mid, t);
+    return n;
+  }
+  if (seg & 0x40) bar(&s[n++], l + gp, mid, cx - gp, mid, t);
+  if (seg & 0x80) bar(&s[n++], cx + gp, mid, r - gp, mid, t);
+  if (seg & 0x200) bar(&s[n++], cx, top + gp, cx, mid - gp, t);
+  if (seg & 0x1000) bar(&s[n++], cx, mid + gp, cx, bot - gp, t);
+  {
+    /* The slanted bars run from a corner towards the centre, cut to the room between the bars. */
+    s32 d = (t * 3) >> 2, x1 = l + t + (gp >> 1), x2 = cx - t - (gp >> 1), x3 = cx + t + (gp >> 1), x4 = r - t - (gp >> 1);
+    s32 y1 = top + t + (gp >> 1), y2 = mid - t - (gp >> 1), y3 = mid + t + (gp >> 1), y4 = bot - t - (gp >> 1);
+    if (seg & 0x100) slant(&s[n++], l, top, cx, mid, d, x1, y1, x2, y2);
+    if (seg & 0x400) slant(&s[n++], r, top, cx, mid, d, x3, y1, x4, y2);
+    if (seg & 0x800) slant(&s[n++], l, bot, cx, mid, d, x1, y3, x2, y4);
+    if (seg & 0x2000) slant(&s[n++], r, bot, cx, mid, d, x3, y3, x4, y4);
+  }
+  return n;
 }
 
 #define MAXGLYPH 64
+#define MAXSHAPES 16
 
 /* Plausible RAM address (the camera's DDR, 0x40000000..0xBFFFFFFF); anything else is not
  * dereferenced. With RAW+JPEG the scaled-down main picture of the smaller sizes lives above
@@ -162,16 +257,18 @@ static void sync(const struct ctx *k, void *cache, struct picture *p, u32 y0, u3
   if (clean) k->clean(cache, a, b - a); else k->invalidate(cache, a, b - a);
 }
 
-/* Draw `count` glyphs (0..15 hex digit, then ' space . :) with their top left corner at
- * (x0, y0) of the picture as it is shown (orientation `o`), digit height H. With `bg` (test builds
- * only, always O_NONE), the box behind them is filled with black first. The caller has checked
- * that the box lies inside the picture and handles the cache. */
-static void text_at(struct picture *p, const u8 *glyphs, u32 count, s32 x0, s32 y0, s32 H, struct colour col, int bg, u32 o) {
-  s32 W, T, total;
+/* Draw `count` glyphs with their top left corner at (x0, y0) of the picture as it is shown
+ * (orientation `o`), digit height H. With `bg` (test builds only, always O_NONE), the box behind
+ * them is filled with black first. The caller has checked that the box lies inside the picture and
+ * handles the cache.
+ *
+ * Each pixel is sampled at 2 x 2 points and blended by the share of them inside the glyph. Only
+ * the pixels of each row that are inside a shape's box are looked at (0.8.4; the result is the
+ * same as sampling every pixel of the cell, as up to 0.8.3, at a fraction of the cost). */
+static void text_at(struct picture *p, const glyph *glyphs, u32 count, s32 x0, s32 y0, s32 H, struct colour col, int bg, u32 o) {
+  s32 T, total;
   s32 left[MAXGLYPH], width[MAXGLYPH];
   u32 i;
-  /* Digit 0.56 H wide, bars 0.14 H thick, 0.31 H between digits (see `layout`). */
-  W = (H * 9) >> 4;
   T = (H * 9) >> 6;
   if (T < 2) T = 2;
   if (count > MAXGLYPH) return;
@@ -185,26 +282,44 @@ static void text_at(struct picture *p, const u8 *glyphs, u32 count, s32 x0, s32 
       for (px = -2; px < total + 2; px++) { yrow[x0 + px] = 16; crow[(x0 + px) & ~1] = 128; crow[((x0 + px) & ~1) + 1] = 128; }
     }
   }
-  {
-    s32 py, px;
-    s32 qW = W * 4, qH = H * 4, qT = T * 2; /* half thickness in 1/4 px: T/2 * 4 */
+  for (i = 0; i < count; i++) {
+    struct shape s[MAXSHAPES];
+    u32 n, j;
+    s32 qH = H * 4, qT = T * 2; /* half thickness in 1/4 px: T/2 * 4 */
+    s32 py;
+    n = glyph_shapes(glyphs[i], width[i] * 4, qH, qT, T, s);
+    if (!n) continue;
     for (py = 0; py < H; py++) {
-      for (i = 0; i < count; i++) {
-        u8 g = glyphs[i];
-        u32 seg;
-        if (g == G_SPACE) continue;
-        seg = g >= G_APOSTROPHE ? 0 : segments(g);
-        for (px = 0; px < width[i]; px++) {
-          u32 cov = 0, sx, sy;
+      s32 qa = py * 4 + 1, qb = py * 4 + 3;
+      s32 sx0[MAXSHAPES], sx1[MAXSHAPES];
+      u32 act[MAXSHAPES], na = 0, ns = 0, a, b;
+      /* The shapes this row's sample points can be in, and their pixel spans. */
+      for (j = 0; j < n; j++) {
+        s32 p0, p1;
+        if (s[j].by1 < qa || s[j].by0 > qb) continue;
+        act[na++] = j;
+        p0 = s[j].bx0 >> 2;       /* the first pixel whose sample points (4 px + 1, + 3) reach bx0 */
+        p1 = (s[j].bx1 - 1) >> 2; /* the last whose first sample point is within bx1 */
+        if (p0 < 0) p0 = 0;
+        if (p1 > width[i] - 1) p1 = width[i] - 1;
+        if (p0 > p1) continue;
+        /* Insert in order of start, then merge overlapping or touching spans. */
+        for (a = ns; a > 0 && sx0[a - 1] > p0; a--) { sx0[a] = sx0[a - 1]; sx1[a] = sx1[a - 1]; }
+        sx0[a] = p0; sx1[a] = p1; ns++;
+      }
+      if (!ns) continue;
+      for (a = 0, b = 1; b < ns; b++) {
+        if (sx0[b] <= sx1[a] + 1) { if (sx1[b] > sx1[a]) sx1[a] = sx1[b]; }
+        else { a++; sx0[a] = sx0[b]; sx1[a] = sx1[b]; }
+      }
+      ns = a + 1;
+      for (a = 0; a < ns; a++) {
+        s32 px;
+        for (px = sx0[a]; px <= sx1[a]; px++) {
+          u32 cov = 0, sx, sy, q;
           for (sy = 0; sy < 2; sy++) for (sx = 0; sx < 2; sx++) {
             s32 qx = px * 4 + 1 + (s32)sx * 2, qy = py * 4 + 1 + (s32)sy * 2;
-            if (g == G_APOSTROPHE) { /* short bar at the top */
-              if (qy < (qH * 5) >> 4 && abs32(qx - (T * 2)) <= qT) cov++;
-            } else if (g == G_DOT) { /* square on the baseline */
-              if (qy >= qH - 2 * qT && abs32(qx - (T * 2)) <= qT) cov++;
-            } else if (g == G_COLON) { /* two squares, at 1/3 and 2/3 of the height */
-              if (abs32(qx - (T * 2)) <= qT && (abs32(qy - ((qH * 5) >> 4)) <= qT || abs32(qy - ((qH * 11) >> 4)) <= qT)) cov++;
-            } else if (digit_hit(seg, qx, qy, qW, qH, qT)) cov++;
+            for (q = 0; q < na; q++) if (shape_hit(&s[act[q]], qx, qy)) { cov++; break; }
           }
           if (cov) {
             s32 X, Y;
@@ -223,7 +338,7 @@ static void text_at(struct picture *p, const u8 *glyphs, u32 count, s32 x0, s32 
 }
 
 /* Width of a run of glyphs drawn at height H (same arithmetic as text_at). */
-static s32 text_width(const u8 *glyphs, u32 count, s32 H) {
+static s32 text_width(const glyph *glyphs, u32 count, s32 H) {
   s32 left[MAXGLYPH], width[MAXGLYPH];
   if (count > MAXGLYPH) return 1 << 20;
   return layout(glyphs, count, H, left, width);
@@ -268,19 +383,36 @@ static int mono_by_look(const struct ctx *k) {
 }
 
 /* Draw into the rectangle (rx, ry, rw, rh) of the picture (stored coordinates), bottom right as
- * the picture is shown (orientation `o`). `mono`: -1 decide from the picture's colours, else 0 / 1. */
-static void draw(const struct ctx *k, void *cache, struct picture *p, s32 rx, s32 ry, s32 rw, s32 rh, const u8 *glyphs, u32 count, struct colour col, int mono, u32 o) {
-  s32 H, margin, x0, y0, tw, W = p->width, PH = p->height;
+ * the picture is shown (orientation `o`): the date (`nd` glyphs) and after it, `nn` glyphs of the
+ * look's name (the two spaces before it included; 0: none). `mono`: -1 decide from the picture's
+ * colours, else 0 / 1.
+ *
+ * The line with the name is drawn only where it fits with a margin on either side: at the date's
+ * height, else made smaller (down to 3/4 of it), else with the name cut short at that height (at
+ * least one letter left); otherwise the date alone is drawn, as without the name. */
+static void draw(const struct ctx *k, void *cache, struct picture *p, s32 rx, s32 ry, s32 rw, s32 rh, const glyph *glyphs, u32 nd, u32 nn, struct colour col, int mono, u32 o) {
+  s32 H, H0, margin, x0, y0, tw, W = p->width, PH = p->height;
   s32 vx, vy, vw, vh, VH, r0, r1;
+  u32 count = nd + nn;
   /* Digit height ~ 1/26 of the shorter side, at least 7 px. */
-  H = (s32)(((u32)(rw < rh ? rw : rh) * 2521u) >> 16);
-  if (H < 7) H = 7;
-  margin = (H * 3) >> 1;
+  H0 = (s32)(((u32)(rw < rh ? rw : rh) * 2521u) >> 16);
+  if (H0 < 7) H0 = 7;
   /* The rectangle as shown, in a picture of ? x VH. */
   if (o == O_NONE) { vx = rx; vy = ry; vw = rw; vh = rh; VH = PH; }
   else if (o == O_HALF) { vx = W - rx - rw; vy = PH - ry - rh; vw = rw; vh = rh; VH = PH; }
   else if (o == O_RIGHT) { vx = PH - ry - rh; vy = rx; vw = rh; vh = rw; VH = W; }
   else { vx = ry; vy = W - rx - rw; vw = rh; vh = rw; VH = W; }
+  H = H0;
+  if (nn > 2) {
+    s32 Hmin = (H0 * 3) >> 2;
+    for (;;) {
+      if (text_width(glyphs, count, H) + 3 * H <= vw) break; /* margin 3/2 H on each side */
+      if (H > Hmin) { H--; continue; }
+      do count--; while (count > nd + 2 && glyphs[count - 1] == G_SPACE);
+      if (count <= nd + 2) { count = nd; H = H0; break; }
+    }
+  } else count = nd;
+  margin = (H * 3) >> 1;
   tw = text_width(glyphs, count, H);
   x0 = vx + vw - margin - tw;
   y0 = vy + vh - margin - H;
@@ -314,7 +446,7 @@ static u32 orientation(const struct ctx *k) {
 /* Test builds: the configuration and the four pictures it points at, as hex, top left of every
  * 720-pixel-wide picture. Rows 0..2: config words 0x30..0x5c, 4 per row; then per picture 2 rows of 16 bytes
  * (or "-" for no picture); then 32 bytes at config[0x38]. */
-static u32 hex_bytes(const u8 *b, u32 n, u8 *out) {
+static u32 hex_bytes(const u8 *b, u32 n, glyph *out) {
   u32 i, m = 0;
   for (i = 0; i < n; i++) {
     out[m++] = b[i] >> 4; out[m++] = b[i] & 15;
@@ -322,7 +454,7 @@ static u32 hex_bytes(const u8 *b, u32 n, u8 *out) {
   }
   return m;
 }
-static void hex_word_le(u32 v, u8 *out) {
+static void hex_word_le(u32 v, glyph *out) {
   s32 i;
   for (i = 7; i >= 0; i--) { out[i] = v & 15; v >>= 4; }
 }
@@ -344,7 +476,7 @@ static u32 refusal(const struct picture *p) {
  * 720-pixel-wide picture of the configuration whose planes look like memory at all. Row 0:
  * marker "A" then per slot the refusal digit (F = no picture). */
 static void diag(const struct ctx *k, void *cache, u32 *config) {
-  u8 line[MAXGLYPH];
+  glyph line[MAXGLYPH];
   u32 row, n, i, j, s;
   s32 Hd = 16, step = 22;
   struct colour white = { 250, 128, 128 };
@@ -366,9 +498,9 @@ static void diag(const struct ctx *k, void *cache, u32 *config) {
     line[n++] = 10; line[n++] = 17;
     for (i = 0; i < 4; i++) {
       struct picture *q = (struct picture *)config[(0x3c >> 2) + i];
-      line[n++] = ram(q) ? (u8)refusal(q) : 15;
+      line[n++] = ram(q) ? (glyph)refusal(q) : 15;
     }
-    line[n++] = 17; line[n++] = (u8)s;
+    line[n++] = 17; line[n++] = (glyph)s;
     text_at(p, line, n, 4, 4, Hm, white, 1, O_NONE); row++;
     sync(k, cache, p, 0, (u32)(Hm + 8), 1);
     if (p->width != 720 || p->height < 400) continue;
@@ -396,23 +528,23 @@ static void diag(const struct ctx *k, void *cache, u32 *config) {
 }
 #endif
 
-static u32 two_digits(u32 v, u8 *out) {
+static u32 two_digits(u32 v, glyph *out) {
   u32 t = 0;
   while (v >= 100) v -= 100;
   while (v >= 10) { v -= 10; t++; }
-  out[0] = (u8)t; out[1] = (u8)v;
+  out[0] = (glyph)t; out[1] = (glyph)v;
   return 2;
 }
 
 /* Entry: k = context, config = JpegEncodeMacroProcess configuration. */
 void datestamp(const struct ctx *k, u32 *config) {
   u8 time[16];
-  u8 glyphs[MAXGLYPH];
-  u32 n = 0, i, j, setting;
+  glyph glyphs[MAXGLYPH];
+  u32 n = 0, nd, nn = 0, i, j, setting;
   struct picture *seen[4];
   void *cache, *platform;
   setting = *k->setting;
-  if (setting > (SETTING_ON | SETTING_LONG | SETTING_AS_STORED) || !(setting & SETTING_ON) || !ram(config)) return;
+  if (setting > SETTING_MAX || !(setting & SETTING_ON) || !ram(config)) return;
 #ifdef DIAG
   diag(k, k->cache(), config);
 #endif
@@ -442,6 +574,22 @@ void datestamp(const struct ctx *k, u32 *config) {
       n += two_digits(month, glyphs + n);
       glyphs[n++] = G_SPACE;
       n += two_digits(day, glyphs + n);
+    }
+  }
+  nd = n;
+  /* The look's name: the look of the picture being made (left at the start of the exposure, or in
+   * RAW development), else the look the development step last saw. */
+  if ((setting & SETTING_NAME) && k->names) {
+    u32 v = k->frame_look ? *k->frame_look : 0;
+    if (!(v & LOOK_VALID) && k->look) v = *k->look;
+    if ((v & LOOK_VALID) && (v & 0xffu) < 64u) {
+      const u16 *name = k->names[v & 0xffu];
+      if (ram(name) && name[0] > 0) {
+        u32 m = name[0] > MAXNAME ? MAXNAME : name[0];
+        glyphs[n++] = G_SPACE; glyphs[n++] = G_SPACE;
+        for (i = 0; i < m; i++) glyphs[n++] = name[1 + i];
+        nn = n - nd;
+      }
     }
   }
   cache = k->cache();
@@ -486,7 +634,8 @@ void datestamp(const struct ctx *k, u32 *config) {
           rh = (s32)q;
         }
       }
-      draw(k, cache, p, (pw - rw) >> 1, (ph - rh) >> 1, rw, rh, glyphs, n, orange(), mono, o);
+      /* The thumbnail (160 x 120) gets the date alone. */
+      draw(k, cache, p, (pw - rw) >> 1, (ph - rh) >> 1, rw, rh, glyphs, nd, pw <= 160 ? 0 : nn, orange(), mono, o);
     }
   }
 }

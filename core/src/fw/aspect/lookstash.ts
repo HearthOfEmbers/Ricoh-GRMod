@@ -38,6 +38,14 @@ export const LOOK_STASH = 0x558372e4;
  */
 export const ORIENT_WORD = 0x558372f4;
 export const ORIENT_VALID = 0x100;
+/**
+ * The look of the picture being made (0.8.4, for the date imprint's look name), LOOK_STASH's word
+ * as it was at the start of the exposure (the look live view was being developed with; see
+ * datestamp.ts) or, in RAW development, the one the development step takes from the record being
+ * developed. Unlike LOOK_STASH it does not follow a look chosen while the picture is being
+ * processed. In the 44 zero-filled bytes before the heap.
+ */
+export const FRAME_LOOK = 0x558372f8;
 /** The development step's read of the look (the hook site). */
 export const LOOK_SITE = 0x539113f8;
 const LOOK_SITE_WORD = 0xe5d3279c; // ldrb r2, [r3, #0x79c]
@@ -65,7 +73,10 @@ export const STASH_ASM = `ldr r2,[r1,#0x2d0];push {r0,r1};
   cmp r1,#4;subhs r1,r1,#3;orrhs r0,r0,#0x20000;bhs stashlevel;
   cmp r1,#3;moveq r1,#2;beq stashlevel;
   cmp r1,#2;moveq r1,#3;
-  stashlevel:orr r0,r0,r1,lsl #8;orr r0,r0,#0x10000;movw r1,#${LOOK_STASH & 65535};movt r1,#${LOOK_STASH >>> 16};str r0,[r1];pop {r0,r1};`;
+  stashlevel:orr r0,r0,r1,lsl #8;orr r0,r0,#0x10000;movw r1,#${LOOK_STASH & 65535};movt r1,#${LOOK_STASH >>> 16};str r0,[r1];
+  ldr r1,[sp,#4];ldrb r1,[r1,#0x2ac];cmp r1,#0;bne stashdone;
+  movw r1,#${FRAME_LOOK & 65535};movt r1,#${FRAME_LOOK >>> 16};str r0,[r1];
+  stashdone:pop {r0,r1};`;
 /** The white glow's bit in the stash word. */
 export const STASH_WHITE = 0x20000;
 
