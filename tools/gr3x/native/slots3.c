@@ -26,6 +26,12 @@
  *     (sp_before_recall; up to round 6 a recall lost what was adjusted since the last look change);
  *   - version-2 (round 6) and version-1 records are taken over, as made with this build's
  *     presets: version 2's levels 0 / 1 / 2 (off, weak, strong) become off / weak / strong red.
+ * Round 8 (as GR Mod 0.8.4), built with -DHIDDEN_FILMS (compile_slots.py slots4): after the prints
+ * one word, bit k set when film k is hidden from the Image Control lists. A hidden film selected in
+ * the standard photo set (set 0; the custom sets 1 and 2 keep their look) is handled at start like a
+ * film this build does not have: the settings guard gives the set Standard, the film's values go to
+ * its table row (shown again with the same preset, it gets them back) and Standard's come back, in
+ * the record being loaded and in the stored ones.
  * Built position independent: tools/gr3x/compile_slots.py slots3. Addresses: GR III 2.10 = IIIx 1.60.
  */
 #include <stdint.h>
@@ -240,12 +246,28 @@ static void neutral_film(State *s, uint8_t *ud, uint32_t k) {
     s->dirty = 1;
 }
 
+/* A set's look that the settings guard turns into Standard after the load: a film this build does
+ * not have, or (round 8) a hidden film in the standard photo set. */
+#ifdef HIDDEN_FILMS
+static int away(uint32_t look, uint32_t set, uint32_t films, uint32_t hidden) {
+    if (look >= FIRST + films && look < FIRST + FILMS) return 1;
+    return set == 0u && look >= FIRST && look < FIRST + films && ((hidden >> (look - FIRST)) & 1u) != 0u;
+}
+#else
+#define away(look, set, films, hidden) ((look) >= FIRST + (films) && (look) < FIRST + FILMS)
+#endif
+
 /* After the firmware's settings load (once, at start). `films`: the build's number of films;
- * `prints`: their presets' fingerprints. Calls only the store and the allocator: nothing here
- * may ask for the settings object. */
+ * `prints`: their presets' fingerprints (round 8: then the hidden films). Calls only the store and
+ * the allocator: nothing here may ask for the settings object. */
 void sp_after_load(uint8_t *ud, uint32_t films, const uint32_t *prints) {
     uint8_t *rec = record_of(ud);
     if (state() || !rec || films < 1u || films > FILMS || !prints) return;
+#ifdef HIDDEN_FILMS
+    uint32_t hidden = prints[films];
+#else
+    uint32_t hidden = 0u;
+#endif
     State *s = (State *)heap_alloc(sizeof(State));
     if (!s) return;
     for (uint32_t i = 0; i < sizeof(State) / 4u; i++) ((volatile uint32_t *)s)[i] = 0;
@@ -275,7 +297,7 @@ void sp_after_load(uint8_t *ud, uint32_t films, const uint32_t *prints) {
      * fields hold the missing film's values, which stay in its table row). */
     for (uint32_t set = 0; set < SETS; set++) {
         uint32_t look = rec[LOOK_OF_SET + 2u * set];
-        if (look >= FIRST + films && look < FIRST + FILMS) {
+        if (away(look, set, films, hidden)) {
             swap(s, rec, set, (int)(look - FIRST + 1u), 0);
             ((volatile uint8_t *)rec)[LOOK_OF_SET + 2u * set] = (uint8_t)STANDARD;
         }
@@ -287,7 +309,7 @@ void sp_after_load(uint8_t *ud, uint32_t films, const uint32_t *prints) {
         if (!u) continue;
         for (uint32_t set = 0; set < SETS; set++) {
             uint32_t look = u[LOOK_OF_SET + 2u * set];
-            if (!(look >= FIRST + films && look < FIRST + FILMS)) continue;
+            if (!away(look, set, films, hidden)) continue;
             int std_here = owner(s, rec, set) == 0;
             for (uint32_t j = 0; j < NP; j++) u[field(j, set)] = std_here ? rec[field(j, set)] : s->t[0][set][j];
             u[LOOK_OF_SET + 2u * set] = (uint8_t)STANDARD;

@@ -12,6 +12,7 @@ import type { Gr3xAdjFeatures } from './adj';
 import type { Gr3xMenuRatio } from './geometry';
 import { GR3X_160, openGr3xOfficial } from './profile';
 import { GR3X_TEXT_ROWS, gr3xAllowedChars, validateGr3xLookNameFor } from './look-resources';
+import { installGr3xLookLayout, isGr3xFactoryLayout, validateGr3xLookLayout } from './look-layout';
 
 export const GR3X_LOOK_RESEARCH = {
   // The native list has 12 + n + 2 widgets: twelve originals, n films and Custom 1/2 (nine films
@@ -50,7 +51,7 @@ export interface Gr3xLookExtras {
   icons: readonly { w: number; h: number; pixels: Uint8Array }[];
 }
 
-export async function buildGr3xLookMenuResearch(raw: Uint8Array, looks: readonly Gr3xResearchLook[], displayIcons = false, ratioMenu?: readonly Gr3xMenuRatio[], features: Gr3xAdjFeatures = {}, extras?: Gr3xLookExtras, monoFilms?: readonly boolean[]) {
+export async function buildGr3xLookMenuResearch(raw: Uint8Array, looks: readonly Gr3xResearchLook[], displayIcons = false, ratioMenu?: readonly Gr3xMenuRatio[], features: Gr3xAdjFeatures = {}, extras?: Gr3xLookExtras, monoFilms?: readonly boolean[], filmNames?: readonly string[]) {
   if (!looks.length || looks.length > GR3X_LOOK_RESEARCH.maxAdditions)
     throw new FirmwareError('bad-edit', 'research menu requires 1..20 extra looks');
   const extraTexts = extras?.texts ?? [], extraIcons = extras?.icons ?? [];
@@ -71,7 +72,7 @@ export async function buildGr3xLookMenuResearch(raw: Uint8Array, looks: readonly
     }
   }
   // The image-control layer follows: it installs the settings guard and the look word itself (round 7).
-  const base = await buildGr3xAdjResearch(raw, ratioMenu, features, { looksFollow: true, ...(monoFilms ? { monoFilms } : {}) });
+  const base = await buildGr3xAdjResearch(raw, ratioMenu, features, { looksFollow: true, ...(monoFilms ? { monoFilms } : {}), ...(filmNames ? { filmNames } : {}) });
   const { decoded } = await openGr3xOfficial(raw);
   for (const look of looks) for (const [lang, text] of Object.entries(look.names ?? {}))
     if (text) validateGr3xLookNameFor(text, gr3xAllowedChars(decoded, lang as typeof GR3X_TEXT_ROWS[number]));
@@ -211,17 +212,28 @@ export async function buildGr3xLookMenuResearch(raw: Uint8Array, looks: readonly
   // The actual list, ADJ tiles and shooting-status wrappers call this second
   // lookup. T5 only extended icon(), leaving these consumers to return zero.
   const lookTileIcon = displayIcons ? hookLookup(cfg.tileIcon, 0xe351000a, 'iconId') : undefined;
-  const order = append(Uint8Array.from(slots.map(s => s.id)));
-  const count = code(`bhi #0x532c2ad0;cmp r3,#0;moveq r0,#${12 + slots.length};movne r0,#12;b #0x532c2ad4;`);
-  patch(cfg.countHook, 0x93a0000c, branchWord(cfg.countHook, count), 'research: extra still-photo look count');
-  const item = code(`ldrb ip,[r0,#0x1b];cmp ip,#0;bne native;cmp r1,#12;blo native;
-    cmp r1,#${12 + slots.length};bhs native;sub ip,r1,#12;${addr(2, order)}ldrb r0,[r2,ip];bx lr;
-    native:mov ip,sp;b #${cfg.item + 4};`);
-  patch(cfg.item, 0xe1a0c00d, branchWord(cfg.item, item), 'research: append still-photo look entries');
-  const index = code(`ldrb ip,[r0,#0x1b];cmp ip,#0;bne native;` +
-    slots.map((s, i) => `cmp r1,#${s.id};moveq r0,#${12 + i};bxeq lr;`).join('') +
-    `native:mov ip,sp;b #${cfg.index + 4};`);
-  patch(cfg.index, 0xe1a0c00d, branchWord(cfg.index, index), 'research: extra still-photo look reverse lookup');
+  // Round 8: with an Image Control order or hidden looks, the lists come from look-layout.ts (the
+  // films included); otherwise the films follow the camera's twelve looks.
+  const layout = features.round8 && features.lookLayout && !isGr3xFactoryLayout(features.lookLayout, slots.length) ? features.lookLayout : undefined;
+  if (features.lookLayout) validateGr3xLookLayout(features.lookLayout, slots.length);
+  let count: number, item: number, index: number, layoutEntries: Record<string, number> = {};
+  if (layout) {
+    if (slots.some((s, i) => s.id !== cfg.firstId + i)) throw new FirmwareError('bad-edit', 'IIIx look layout: the films are looks 64..');
+    layoutEntries = installGr3xLookLayout({ code, append, patch, u32: va => new DataView(originalRead(va, 4).buffer).getUint32(0, true), read: originalRead }, layout, slots.length);
+    count = layoutEntries.lookLayoutCount; item = layoutEntries.lookLayoutItem; index = layoutEntries.lookLayoutIndex;
+  } else {
+    const order = append(Uint8Array.from(slots.map(s => s.id)));
+    count = code(`bhi #0x532c2ad0;cmp r3,#0;moveq r0,#${12 + slots.length};movne r0,#12;b #0x532c2ad4;`);
+    patch(cfg.countHook, 0x93a0000c, branchWord(cfg.countHook, count), 'research: extra still-photo look count');
+    item = code(`ldrb ip,[r0,#0x1b];cmp ip,#0;bne native;cmp r1,#12;blo native;
+      cmp r1,#${12 + slots.length};bhs native;sub ip,r1,#12;${addr(2, order)}ldrb r0,[r2,ip];bx lr;
+      native:mov ip,sp;b #${cfg.item + 4};`);
+    patch(cfg.item, 0xe1a0c00d, branchWord(cfg.item, item), 'research: append still-photo look entries');
+    index = code(`ldrb ip,[r0,#0x1b];cmp ip,#0;bne native;` +
+      slots.map((s, i) => `cmp r1,#${s.id};moveq r0,#${12 + i};bxeq lr;`).join('') +
+      `native:mov ip,sp;b #${cfg.index + 4};`);
+    patch(cfg.index, 0xe1a0c00d, branchWord(cfg.index, index), 'research: extra still-photo look reverse lookup');
+  }
   const maximum = code(`mov r0,#${12 + slots.length};bx lr;`);
   patch(cfg.maximumCount, movWord(3, 0xd368), branchWord(cfg.maximumCount, maximum), 'research: maximum look menu allocation count');
 
@@ -235,7 +247,7 @@ export async function buildGr3xLookMenuResearch(raw: Uint8Array, looks: readonly
     catalogs: { ...base.catalogs, textRoots, textColumns: columns, iconRoot, iconCount: iconTotal },
     extraTextIds, extraIconIds,
     iconAddition: { ...base.iconAddition, bytes: hex(pixels) },
-    entries: { ...base.entries, lookName, lookIcon, lookShortName, ...(lookTileIcon ? { lookTileIcon } : {}), lookCount: count, lookItem: item, lookIndex: index, lookMaximum: maximum },
+    entries: { ...base.entries, lookName, lookIcon, lookShortName, ...(lookTileIcon ? { lookTileIcon } : {}), lookCount: count, lookItem: item, lookIndex: index, lookMaximum: maximum, ...layoutEntries },
     addedLooks: slots, flashable: false as const, cameraUpdateCandidate: false as const,
     renderingImplemented: false as const, persistenceImplemented: false as const,
     baseT4PatchCount: base.sites.length, blockers: [...cfg.blockers],

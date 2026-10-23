@@ -57,15 +57,16 @@ export async function previewGr3xCube(source: Gr3xCubeImport, rgb: Float64Array)
  * The reference curve comes from IIIx native code; no GR IV calibration is used.
  * Independent validation samples estimate approximation error, not camera accuracy.
  */
-export function convertGr3xCube(text: string, options: ConvertOptions = {}): Conversion {
+export function convertGr3xCube(text: string, options: ConvertOptions & { legacyFit?: boolean } = {}): Conversion {
   if (text.length > 32 * 1024 * 1024) throw new ColorError('bad-input', 'IIIx CUBE exceeds 32 MiB');
   const cube = parseCube(text);
   // As GR IV since 0.8.4 (PR #7): the synthetic colours plus a dense grey ramp, the LUT grid's
   // corners and skin tones; with `refine`, the guarded CIEDE2000 refinement on the IIIx model.
-  const base = syntheticSamples(2200, 160, 4), extra = extraFitSamples();
+  // `legacyFit`: the colours up to GR Mod 0.8.2 only (to rebuild the camera-tested round 7 files).
+  const base = syntheticSamples(2200, 160, 4), extra = options.legacyFit ? new Float64Array(0) : extraFitSamples();
   const P = new Float64Array(base.length + extra.length);
   P.set(base, 0); P.set(extra, base.length);
-  const refine = options.refine === true;
+  const refine = options.refine === true && !options.legacyFit;
   options.onProgress?.(0.05);
   const fit = fitSlot(P, applyCube(cube, P), {
     camera: GR3X_CAMERA, maxIterations: 250, post: options.post === true,

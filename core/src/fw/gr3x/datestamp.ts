@@ -61,10 +61,12 @@ import { assembleWords, branchWord, movWord } from '../aspect/arm';
 import { FirmwareError } from '../types';
 import { GR3X_DATESTAMP_CODE } from './picture-modules';
 import { GR3X_DATESTAMP_R6_CODE } from './picture-modules-r6';
+import { GR3X_DATESTAMP_R7_CODE } from './picture-modules-r7';
+import { lookNameGlyphs } from '../aspect/datestamp';
 import { GR3X_JPEG_EXECUTE } from './jpeg-stage';
 import { GR3X_PICTURE_MENU_ID, installGr3xEndScreenSetup, installGr3xPictureList, installGr3xPictureSetupLine } from './shutdown';
 import { GR3X_END_SCREEN_ID as END_SCREEN_ID, GR3X_PICTURE_LIST_ID, GR3X_PICTURE_MODE } from './endscreen';
-import { GR3X_GAP, GR3X_HEAP_BASE, GR3X_ZERO_FILL_END } from './look-addresses';
+import { GR3X_FRAME_LOOK, GR3X_GAP, GR3X_HEAP_BASE, GR3X_ORIENT_BYTE, GR3X_ZERO_FILL_END } from './look-addresses';
 import type { Gr3xPictureIds } from './shutdown';
 
 export const GR3X_DATE_SETTINGS_POINTER = 0x55063f34;
@@ -112,10 +114,29 @@ export interface Gr3xDateIds {
   name: number; short: number; long: number; iconShort: number; iconLong: number;
   /** 'submenu' form only: the line names On/Off and Style. */
   onOff?: number; style?: number;
+  /** Round 8 (as GR Mod 0.8.4): the third line "Follow Orientation" and the two styles with the look's name. */
+  orient?: number; shortName?: number; longName?: number; iconShortName?: number; iconLongName?: number;
 }
 export type Gr3xDateForm = 'list' | 'submenu';
 export const GR3X_DATE_SWITCH_ID = 0x020001a1;
 export const GR3X_DATE_STYLE_ID = 0x020001a2;
+/** Round 8: the "Follow Orientation" list (0x020001a3 / a4 are the power-off pictures', as on GR IV). */
+export const GR3X_DATE_ORIENT_ID = 0x020001a5;
+/** Bits of the setting byte from round 8 (GR IV's datestamp.ts): bit 2 "Follow Orientation" off, bit 3 the look's name. */
+export const GR3X_DATE_AS_STORED = 4, GR3X_DATE_NAME = 8;
+const INSTANT_REVIEW_RECORD = 10;
+/**
+ * Round 8 (GR IV test 052): the rows of SelectMenuController lists are widgets of class 0x5339e520
+ * (vtable 0x53c0ada8; as GR IV's 0x5357AB24): the value's text label (+0xfc, vtable 0x53c0a378) at
+ * x 100, 400 wide, whatever the row's width; the widest own widget (+0x100) spans x 40..680. The
+ * longest Style values ("2026.10.08 17:34 + ...") do not fit in 400 (GR IV test 051), so for the
+ * Style list only, after a value is drawn its label is made as wide as the row allows (to 20 px
+ * before the row's right edge, never beyond x 680), through the label's own SetRect (vtable +0x18,
+ * 0x533ab548). Nothing else changes; other lists are not touched.
+ */
+const ROW_VTABLE = 0x53c0ada8, ROW_VTABLE_LITERAL = 0x5339e734;
+const LABEL_VTABLE = 0x53c0a378, LABEL_VTABLE_LITERAL = 0x53396a28, LABEL_SET_RECT = 0x533ab548;
+const ROW_RIGHT_MARGIN = 20, ROW_CONTENT_RIGHT = 680;
 const D_RANGE_ID = 0x020000ba, D_RANGE_RECORD = 6;
 const SUB_SET_CURRENT = 0x531c5950, SUB_RECORD_BYTE = 0x174;
 const SUB_TABLE = 0x53b3fb10, SUB_RECORD = 0x64, SUB_RECORDS = 17, SUB_CONSTRUCTOR_START = 0x531c66ac;
@@ -141,9 +162,14 @@ const load = (n: string) => `movw r2,#${lo(GR3X_DATE_SETTINGS_POINTER)};movt r2,
 const load4 = (n: string) => `movw r2,#${lo(GR3X_DATE_SETTINGS_POINTER)};movt r2,#${hi(GR3X_DATE_SETTINGS_POINTER)};ldr r2,[r2];mov r3,#0;
   cmp r2,#0;beq ld${n};ldrb r3,[r2,#${GR3X_DATE_OFFSET}];cmp r3,#3;movhi r3,#0;strbhi r3,[r2,#${GR3X_DATE_OFFSET}];ld${n}:`;
 
-/** The module: round 7's (0.8.2 sources: with the look fields) or, for the files of rounds 4..6, theirs. */
-export function gr3xDateModule(round7 = true): Uint8Array {
-  const raw = Uint8Array.from(atob(round7 ? GR3X_DATESTAMP_CODE : GR3X_DATESTAMP_R6_CODE), c => c.charCodeAt(0));
+/** Round 8: 0..15 kept (bit 0 on, 1 long, 2 as stored, 3 with the name), anything above stored back as 0. */
+const load16 = (n: string) => `movw r2,#${lo(GR3X_DATE_SETTINGS_POINTER)};movt r2,#${hi(GR3X_DATE_SETTINGS_POINTER)};ldr r2,[r2];mov r3,#0;
+  cmp r2,#0;beq ld${n};ldrb r3,[r2,#${GR3X_DATE_OFFSET}];cmp r3,#15;movhi r3,#0;strbhi r3,[r2,#${GR3X_DATE_OFFSET}];ld${n}:`;
+
+/** The module: round 8's (0.8.4 sources: orientation and the look's name, -DGR3_PACKED), round 7's
+ * (0.8.2 sources: with the look fields) or, for the files of rounds 4..6, theirs. */
+export function gr3xDateModule(round: 6 | 7 | 8 = 8): Uint8Array {
+  const raw = Uint8Array.from(atob(round === 8 ? GR3X_DATESTAMP_CODE : round === 7 ? GR3X_DATESTAMP_R7_CODE : GR3X_DATESTAMP_R6_CODE), c => c.charCodeAt(0));
   if (raw.length % 4) fail('date imprint module length');
   return raw;
 }
@@ -156,7 +182,93 @@ export const GR3X_STASH_FILM = 32;
 /** Round 7 (as GR Mod 0.8.2): the imprint is light only exactly for black-and-white looks, from the
  * look word the development step leaves (the halation stash, jpeg-stage.ts): `stash` its address,
  * `monoFilms` which films are black and white (their presets give grey for every colour). */
-export interface Gr3xDateLook { stash: number; monoFilms: readonly boolean[] }
+export interface Gr3xDateLook {
+  stash: number; monoFilms: readonly boolean[];
+  /** Round 8 (as GR Mod 0.8.4): the look's name after the date and the imprint turned with the
+   * camera, per look of the stash word (11..22 the camera's own, 32 + k film k) its name. */
+  names?: Readonly<Record<number, string>>;
+}
+
+/** The camera's English names of its looks (GR III 2.10's texts 4, 268..278 through the name
+ * lookup 0x532a985c, checked by the build against the firmware's own English texts). */
+export const GR3X_FACTORY_LOOK_NAMES: Readonly<Record<number, string>> = {
+  11: 'Standard', 12: 'Vivid', 13: 'Monotone', 14: 'Soft Monotone', 15: 'Hard Monotone', 16: 'Hi-Contrast B&W',
+  17: 'Positive Film', 18: 'Bleach Bypass', 19: 'Retro', 20: 'HDR Tone', 21: 'Cross Processing', 22: 'Negative Film',
+};
+/** Their text numbers (the name lookup's table). */
+export const GR3X_FACTORY_LOOK_TEXTS: Readonly<Record<number, number>> = {
+  11: 4, 12: 268, 13: 269, 14: 270, 15: 271, 16: 272, 17: 274, 18: 275, 19: 276, 20: 277, 21: 278, 22: 273,
+};
+
+/** The module's table of names (GR IV's lookNameTable): 64 pointers by look to {u16 count, u16 glyphs...}, 0 for none. */
+function gr3xLookNameTable(p: Gr3xDateProgram, names: Readonly<Record<number, string>>): number {
+  const table = new Array<number>(64).fill(0);
+  for (const [key, name] of Object.entries(names)) {
+    const look = Number(key);
+    if (!(Number.isInteger(look) && look >= 0 && look < 64)) fail('IIIx date imprint: look name index');
+    const g = lookNameGlyphs(name);
+    if (!g.length) continue;
+    const b = new Uint8Array(2 + g.length * 2), v = new DataView(b.buffer);
+    v.setUint16(0, g.length, true); g.forEach((x, i) => v.setUint16(2 + i * 2, x, true));
+    table[look] = p.append(b);
+  }
+  return p.append(u32(table));
+}
+
+/**
+ * Round 8 (GR IV's installExposureOrientation, datestamp.ts): SetShootingInfoResultBeforeExpose
+ * (0x534322d8; it names itself in its assertion and writes the frame's date and time into the
+ * shooting record at +0x944..+0x94b, which the EXIF writer's setter (0x535f6368) reads back) runs
+ * at the start of each still exposure. Its hook leaves the camera's direction at that moment in
+ * GR3X_ORIENT_BYTE: byte 0xC8 of the live shooting record that the display rotation reads (the
+ * singleton 0x553458b0 (getter 0x53525d5c), its +0 -> +0x518 -> the record; 0x53547ff4 ->
+ * 0x53550e68 `ldrb r0,[r3,#0xc8]`), 1..3 kept and anything else 0, as the EXIF writer
+ * (0x535f673c: 1, 2, 3 -> Orientation 8, 3, 6 through 0x53d30188 / 0x53d30190; the fallback is
+ * the frame record's byte 0xC8, the setter's +0x14) maps it. Every pointer is checked (RAM, word
+ * aligned). It also leaves the look live view is being developed with (the stash's look) in
+ * GR3X_FRAME_LOOK, for the imprint's name. Nothing but those three bytes is written; every
+ * register is kept, and the hook runs `mov ip, sp` itself.
+ */
+export const GR3X_BEFORE_EXPOSE = 0x534322d8;
+const DIRECTION_SINGLETON = 0x553458b0;
+const ram = (r: string, label: string) => `cmp ${r},#0x40000000;blo ${label};cmp ${r},#0xc0000000;bhs ${label};tst ${r},#3;bne ${label};`;
+export function installGr3xExposureOrientation(p: Gr3xDateProgram, stash: number) {
+  const guards: readonly (readonly [number, number])[] = [
+    [GR3X_BEFORE_EXPOSE, 0xe1a0c00d], [GR3X_BEFORE_EXPOSE + 4, 0xe92dd830], // mov ip, sp; push {r4, r5, fp, ip, lr, pc}
+    [GR3X_BEFORE_EXPOSE + 0x88, 0xe5c41946], // strb r1, [r4, #0x946] (the frame's date)
+    [0x53550e68, 0xe5903000], [0x53550e6c, 0xe5d300c8], // the direction getter: ldr r3, [r0]; ldrb r0, [r3, #0xc8]
+    [0x5354801c, 0xe5950518], // ldr r0, [r5, #0x518]
+    [0x53525d7c, movWord(0, 0x58b0)], [0x53525d80, movWord(0, 0x5534, true)], // the singleton's address
+    [0x535f63d0, 0xe28320c8], // the EXIF setter's +0x14: the record + 0xc8
+  ];
+  for (const [at, w] of guards) if (p.word(at) !== w >>> 0) fail(`IIIx exposure orientation guard at ${at.toString(16)}`);
+  const stub = p.code(`push {r0,r1};
+    movw r0,#${lo(stash)};movt r0,#${hi(stash)};ldr r0,[r0];tst r0,#0x10000;and r0,r0,#0xff;orrne r0,r0,#0x8000;moveq r0,#0;
+    movw r1,#${lo(GR3X_FRAME_LOOK)};movt r1,#${hi(GR3X_FRAME_LOOK)};strh r0,[r1];
+    movw r0,#${lo(DIRECTION_SINGLETON)};movt r0,#${hi(DIRECTION_SINGLETON)};ldr r0,[r0];${ram('r0', 'done')}
+    ldr r0,[r0,#0x518];${ram('r0', 'done')}
+    ldr r0,[r0];${ram('r0', 'done')}
+    ldrb r0,[r0,#0xc8];cmp r0,#3;movhi r0,#0;orr r0,r0,#0x80;
+    movw r1,#${lo(GR3X_ORIENT_BYTE)};movt r1,#${hi(GR3X_ORIENT_BYTE)};strb r0,[r1];
+    done:pop {r0,r1};mov ip,sp;b #${GR3X_BEFORE_EXPOSE + 4};`);
+  p.patch(GR3X_BEFORE_EXPOSE, 0xe1a0c00d, branchWord(GR3X_BEFORE_EXPOSE, stub), 'date imprint: camera direction at the start of the exposure');
+  return { exposureOrientation: stub };
+}
+
+/**
+ * Round 8: in RAW development (the development step's flag, its argument + 0x82ac, is 0; r3 is the
+ * record of the RAW file, as the step itself chose), the orientation by the EXIF writer's rule
+ * (byte 0x71e04 when byte 0x71e03 is set, else byte 0xc8; 1..3 kept, else 0) and the look (`look`,
+ * a register holding the stash word) of the record, for the date imprint. Code for the development
+ * step's hooks (image-control.ts, adj.ts): `arg` holds the argument + 0x8000, `a` and `b` are free
+ * registers, r3 the record; the flags change.
+ */
+export function gr3xRawDevelopmentWords(arg: string, look: string, a: string, b: string): string {
+  return `ldrb ${a},[${arg},#0x2ac];cmp ${a},#0;bne rawdone;
+    tst ${look},#0x10000;and ${a},${look},#0xff;orrne ${a},${a},#0x8000;moveq ${a},#0;movw ${b},#${lo(GR3X_FRAME_LOOK)};movt ${b},#${hi(GR3X_FRAME_LOOK)};strh ${a},[${b}];
+    add ${b},r3,#0x71000;ldrb ${a},[${b},#0xe03];cmp ${a},#0;ldrbne ${a},[${b},#0xe04];ldrbeq ${a},[r3,#0xc8];cmp ${a},#3;movhi ${a},#0;orr ${a},${a},#0x80;
+    movw ${b},#${lo(GR3X_ORIENT_BYTE)};movt ${b},#${hi(GR3X_ORIENT_BYTE)};strb ${a},[${b}];rawdone:`;
+}
 
 /** The 64-byte table of black-and-white looks of the stash word (GR IV's monoTable). */
 export function gr3xMonoTable(monoFilms: readonly boolean[]): Uint8Array {
@@ -176,14 +288,17 @@ export function installGr3xDateImprintStage(p: Gr3xDateProgram, look?: Gr3xDateL
   for (const [at, w] of guards) if (p.word(at) !== w) fail(`IIIx date imprint guard at ${at.toString(16)}`);
   if (look && (look.monoFilms.length > 20)) fail('IIIx date imprint: films');
   // Round 7: the look word, the table of black-and-white looks and the model check (GR III has no
-  // Monochrome model: always 0).
+  // Monochrome model: always 0). Round 8: the orientation byte, the frame look and the names.
+  const round8 = !!look?.names;
   const lookWords = look ? [look.stash, p.append(gr3xMonoTable(look.monoFilms)), p.code('mov r0,#0;bx lr;')] : [];
-  const ctx = p.append(u32([CACHE, CACHE_FLUSH_FOR_READ, CACHE_CLEAN, PLATFORM, GET_TIME, GR3X_DATE_SETTINGS_POINTER, GR3X_DATE_OFFSET, ...lookWords]));
-  const module = p.append(gr3xDateModule(!!look));
+  const r8Words = round8 ? [GR3X_ORIENT_BYTE, GR3X_FRAME_LOOK, gr3xLookNameTable(p, look!.names!)] : [];
+  const ctx = p.append(u32([CACHE, CACHE_FLUSH_FOR_READ, CACHE_CLEAN, PLATFORM, GET_TIME, GR3X_DATE_SETTINGS_POINTER, GR3X_DATE_OFFSET, ...lookWords, ...r8Words]));
+  const exposure = round8 ? installGr3xExposureOrientation(p, look!.stash) : {};
+  const module = p.append(gr3xDateModule(round8 ? 8 : look ? 7 : 6));
   const stub = p.code(`push {r0-r3,ip,lr};ldr r1,[r1,#8];movw r0,#${lo(ctx)};movt r0,#${hi(ctx)};bl #${module};pop {r0-r3,ip,lr};
     mov ip,sp;b #${GR3X_JPEG_EXECUTE + 4};`);
   p.patch(GR3X_JPEG_EXECUTE, 0xe1a0c00d, branchWord(GR3X_JPEG_EXECUTE, stub), 'date imprint: JPEG encode step');
-  return { dateStage: stub, dateModule: module, dateContext: ctx };
+  return { dateStage: stub, dateModule: module, dateContext: ctx, ...exposure };
 }
 
 /** The menu line, its list and the controller plumbing (the date imprint alone). */
@@ -201,12 +316,18 @@ export interface Gr3xEndScreenMenu { typeText: number; pictureText: number; line
 
 export function installGr3xMenuAdditions(p: Gr3xDateProgram, o: { date?: Gr3xDateIds; dateForm?: Gr3xDateForm; picture?: Gr3xPictureIds; endScreen?: Gr3xEndScreenMenu;
   /** Round 7: the submenu's On / Off as the camera's boxed OFF / ON texts (round 6: Horizon's line icons). */
-  onOffText?: boolean }) {
+  onOffText?: boolean;
+  /** Round 8 (as GR Mod 0.8.4): the third line Follow Orientation, four styles (with the look's name),
+   * the Style values' labels as wide as the row allows. Needs `onOffText` and the submenu. */
+  round8?: boolean }) {
   const iconOff = o.onOffText ? TEXT_ICON_OFF : ICON_OFF, iconOn = o.onOffText ? TEXT_ICON_ON : ICON_ON;
   const ids = o.date;
   if (o.picture && o.endScreen) fail('IIIx pictures: list or submenu');
   const sub = !!ids && o.dateForm === 'submenu';
   if (sub && (ids!.onOff === undefined || ids!.style === undefined)) fail('IIIx date imprint submenu texts');
+  const r8 = o.round8 === true;
+  if (r8 && (!sub || !o.onOffText || [ids!.orient, ids!.shortName, ids!.longName, ids!.iconShortName, ids!.iconLongName].some(v => v === undefined)))
+    fail('IIIx round 8 date imprint: the submenu, OFF / ON texts and the texts and icons of the third line and the two styles');
   if (!ids && !o.picture && !o.endScreen) fail('no IIIx menu additions');
   // --- Checks of the official code and data this relies on.
   const guards: readonly (readonly [number, number])[] = [
@@ -219,6 +340,7 @@ export function installGr3xMenuAdditions(p: Gr3xDateProgram, o: { date?: Gr3xDat
     [APP, 0xe1a0c00d], [SPEC_MODEL, 0xe1a0c00d], [LINE_VALUE_ICON, 0xe1a0c00d], [TOP_SET_TITLE, 0xe1a0c00d], [LIST_SET_ITEM, 0xe1a0c00d],
     ...(sub || o.endScreen ? [[SUB_SET_CURRENT, 0xe28134fe], [SUB_SET_CURRENT + 4, 0xe1a0c00d], [SUB_CONSTRUCTOR_START, 0xe3a02011], // mov r2,#17
       [TOP_SET_TWO_ICONS, 0xe1a0c00d], [SUB_SET_ICON, 0xe1a0c00d]] as const : []),
+    ...(r8 ? [[ROW_VTABLE_LITERAL, ROW_VTABLE], [LABEL_VTABLE_LITERAL, LABEL_VTABLE], [LABEL_SET_RECT, 0xe1a0c00d], [LABEL_VTABLE + 0x18, LABEL_SET_RECT]] as const : []),
   ];
   for (const [at, w] of guards) if (p.word(at) !== w >>> 0) fail(`IIIx date imprint menu guard at ${at.toString(16)}`);
   const still = p.read(STILL_MENU, DESCRIPTOR), dv = new DataView(still.buffer);
@@ -249,7 +371,76 @@ export function installGr3xMenuAdditions(p: Gr3xDateProgram, o: { date?: Gr3xDat
   const entries: Record<string, number> = {};
   let line = 0;
   const submenus: { id: number; record: Uint8Array }[] = [];
-  if (ids && sub) {
+  if (ids && sub && r8) {
+    const I = ids as Required<Gr3xDateIds>;
+    /** rX = the icon of the style in the setting r3 (bits 1 and 3; ip changes). */
+    const styleIcon = (rX: string) => `and ip,r3,#${2 | GR3X_DATE_NAME};cmp ip,#0;movweq ${rX},#${I.iconShort};cmp ip,#2;movweq ${rX},#${I.iconLong};
+      cmp ip,#${GR3X_DATE_NAME};movweq ${rX},#${I.iconShortName};cmp ip,#${2 | GR3X_DATE_NAME};movweq ${rX},#${I.iconLongName};`;
+    // --- The line of the still menu: both values' icons (on/off, style) and the name.
+    line = p.code(`push {r4,lr};mov r4,r1;${load16('a')}
+      tst r3,#1;movweq r1,#${iconOff};movwne r1,#${iconOn};${styleIcon('r2')}
+      mov r0,r4;bl #${TOP_SET_TWO_ICONS};mov r0,r4;movw r1,#${I.name};mov r2,r1;pop {r4,lr};b #${TOP_SET_TITLE};`);
+    // --- Submenu lines: the icon of the current value (this = r0, line = r1).
+    const lineOnOff = p.code(`${load16('b')}mov r0,r1;tst r3,#1;movweq r1,#${iconOff};movwne r1,#${iconOn};b #${SUB_SET_ICON};`);
+    const lineStyle = p.code(`${load16('c')}mov r0,r1;${styleIcon('r1')}b #${SUB_SET_ICON};`);
+    // "Follow Orientation": On while bit 2 is clear.
+    const lineOrient = p.code(`${load16('h')}mov r0,r1;tst r3,#${GR3X_DATE_AS_STORED};movweq r1,#${iconOn};movwne r1,#${iconOff};b #${SUB_SET_ICON};`);
+    // --- The lists (this = r0; draw: item r1, value r2; set / is current: value r1).
+    const count = p.code('mov r0,#2;bx lr;');
+    const styleCount = p.code('mov r0,#4;bx lr;');
+    const drawOnOff = p.code(`mov r0,r1;cmp r2,#0;movweq r1,#${iconOff};moveq r2,#${TEXT_OFF};movwne r1,#${iconOn};movne r2,#${TEXT_ON};b #${LIST_SET_ITEM};`);
+    const setOnOff = p.code(`cmp r1,#1;bxhi lr;push {r4};mov r4,r1;${load16('d')}cmp r2,#0;beq so;bic r3,r3,#1;orr r3,r3,r4;strb r3,[r2,#${GR3X_DATE_OFFSET}];so:pop {r4};bx lr;`);
+    const isOnOff = p.code(`${load16('e')}and r3,r3,#1;cmp r3,r1;moveq r0,#1;movne r0,#0;bx lr;`);
+    // The value's label made as wide as the row allows (see ROW_VTABLE; GR IV's widenLabel): r0 = the
+    // row; every register but r0..r3, ip is kept. Only for a row and a label of the expected classes, only wider.
+    const widenLabel = p.code(`push {r4,r5,lr};sub sp,sp,#20;
+      ${ram('r0', 'wdone')}ldr r3,[r0];movw ip,#${lo(ROW_VTABLE)};movt ip,#${hi(ROW_VTABLE)};cmp r3,ip;bne wdone;
+      ldr r5,[r0,#0x28];cmp r5,#200;blt wdone;cmp r5,#720;bgt wdone;sub r5,r5,#${ROW_RIGHT_MARGIN};cmp r5,#${ROW_CONTENT_RIGHT};movgt r5,#${ROW_CONTENT_RIGHT};
+      ldr r4,[r0,#0xfc];${ram('r4', 'wdone')}ldr r3,[r4];movw ip,#${lo(LABEL_VTABLE)};movt ip,#${hi(LABEL_VTABLE)};cmp r3,ip;bne wdone;
+      ldr r0,[r4,#0x20];ldr r1,[r4,#0x24];ldr r2,[r4,#0x28];ldr r3,[r4,#0x2c];cmp r0,#0;blt wdone;
+      add ip,r0,r2;cmp ip,r5;bge wdone;sub r2,r5,r0;str r0,[sp];str r1,[sp,#4];str r2,[sp,#8];str r3,[sp,#12];
+      ldr r3,[r4];ldr r3,[r3,#0x18];mov r0,r4;mov r1,sp;mov lr,pc;bx r3;
+      wdone:add sp,sp,#20;pop {r4,r5,pc};`);
+    // Style values: 0 short, 1 long, 2 short + name, 3 long + name (bit 0: bit 1 of the byte, bit 1: bit 3).
+    const drawStyle = p.code(`cmp r2,#3;bxhi lr;push {r4,lr};mov r4,r1;mov r0,r1;mov ip,r2;
+      cmp ip,#0;movweq r1,#${I.iconShort};movweq r2,#${I.short};cmp ip,#1;movweq r1,#${I.iconLong};movweq r2,#${I.long};
+      cmp ip,#2;movweq r1,#${I.iconShortName};movweq r2,#${I.shortName};cmp ip,#3;movweq r1,#${I.iconLongName};movweq r2,#${I.longName};
+      bl #${LIST_SET_ITEM};mov r0,r4;bl #${widenLabel};pop {r4,pc};`);
+    const setStyle = p.code(`cmp r1,#3;bxhi lr;push {r4};mov r4,r1;${load16('f')}cmp r2,#0;beq ss;bic r3,r3,#${2 | GR3X_DATE_NAME};
+      tst r4,#1;orrne r3,r3,#2;tst r4,#2;orrne r3,r3,#${GR3X_DATE_NAME};strb r3,[r2,#${GR3X_DATE_OFFSET}];ss:pop {r4};bx lr;`);
+    const isStyle = p.code(`cmp r1,#3;movhi r0,#0;bxhi lr;${load16('g')}and ip,r3,#2;mov ip,ip,lsr #1;tst r3,#${GR3X_DATE_NAME};orrne ip,ip,#2;
+      cmp ip,r1;moveq r0,#1;movne r0,#0;bx lr;`);
+    // Values 0 Off, 1 On (as the On/Off list draws them); stored inverted in bit 2.
+    const setOrient = p.code(`cmp r1,#1;bxhi lr;push {r4};mov r4,r1;${load16('i')}cmp r2,#0;beq sr;bic r3,r3,#${GR3X_DATE_AS_STORED};
+      cmp r4,#0;orreq r3,r3,#${GR3X_DATE_AS_STORED};strb r3,[r2,#${GR3X_DATE_OFFSET}];sr:pop {r4};bx lr;`);
+    const isOrient = p.code(`${load16('j')}tst r3,#${GR3X_DATE_AS_STORED};moveq r3,#1;movne r3,#0;cmp r3,r1;moveq r0,#1;movne r0,#0;bx lr;`);
+    lists.push({ id: GR3X_DATE_SWITCH_ID, title: I.onOff, count, draw: drawOnOff, set: setOnOff, isCurrent: isOnOff });
+    lists.push({ id: GR3X_DATE_STYLE_ID, title: I.style, count: styleCount, draw: drawStyle, set: setStyle, isCurrent: isStyle });
+    lists.push({ id: GR3X_DATE_ORIENT_ID, title: I.orient, count, draw: drawOnOff, set: setOrient, isCurrent: isOrient });
+    // Three lines, laid out as Instant Review's record (10): D-Range's record (6) with a third line
+    // (text, controller id, its value icon at x 540, value-draw function), equal to record 10 but for
+    // the title, the texts, the ids and the functions (GR IV test 049: a third line without its x
+    // drew its icon over the name).
+    const tpl = p.read(SUB_TABLE + D_RANGE_RECORD * SUB_RECORD, SUB_RECORD), tv = new DataView(tpl.buffer);
+    if (tv.getUint16(2, true) !== 337 || tpl[6] !== 2 || tv.getUint32(0x14, true) !== 0x02000077 || tv.getUint32(0x18, true) !== 0x02000078 ||
+      tv.getUint32(0x1c, true) !== 0x10000000 || tv.getUint32(0x20, true) !== 0x10000000 || tv.getUint32(0x28, true) !== 540 || tv.getUint32(0x2c, true) !== 540 ||
+      tv.getUint32(0x30, true) !== 0 || [0x40, 0x48, 0x4c, 0x50, 0x54, 0x58, 0x5c, 0x60].some(o => tv.getUint32(o, true) !== 0))
+      fail('IIIx D-Range Correction submenu record');
+    const record = tpl.slice(), rv = new DataView(record.buffer);
+    record[6] = 3;
+    rv.setUint16(2, I.name, true); rv.setUint16(8, I.onOff, true); rv.setUint16(10, I.style, true); rv.setUint16(12, I.orient, true); rv.setUint16(14, 0, true);
+    rv.setUint32(0x14, GR3X_DATE_SWITCH_ID, true); rv.setUint32(0x18, GR3X_DATE_STYLE_ID, true); rv.setUint32(0x1c, GR3X_DATE_ORIENT_ID, true); rv.setUint32(0x20, 0x10000000, true);
+    rv.setUint32(0x30, rv.getUint32(0x28, true), true);
+    rv.setUint32(0x3c, lineOnOff, true); rv.setUint32(0x40, 0, true); rv.setUint32(0x44, lineStyle, true); rv.setUint32(0x48, 0, true);
+    rv.setUint32(0x4c, lineOrient, true); rv.setUint32(0x50, 0, true);
+    const ref = p.read(SUB_TABLE + INSTANT_REVIEW_RECORD * SUB_RECORD, SUB_RECORD);
+    const own = new Set([2, 3, 8, 9, 10, 11, 12, 13, ...Array.from({ length: 12 }, (_, k) => 0x14 + k), ...Array.from({ length: 12 }, (_, k) => 0x3c + k), 0x4c, 0x4d, 0x4e, 0x4f]);
+    if (ref[6] !== 3 || [...record].some((b, i) => !own.has(i) && b !== ref[i])) fail('IIIx Instant Review submenu record (the three-line layout)');
+    submenus.push({ id: GR3X_DATE_MENU_ID, record });
+    Object.assign(entries, { dateLine: line, dateLineOnOff: lineOnOff, dateLineStyle: lineStyle, dateLineOrient: lineOrient, dateCount: count, dateStyleCount: styleCount,
+      dateDrawOnOff: drawOnOff, dateSetOnOff: setOnOff, dateIsOnOff: isOnOff, dateDrawStyle: drawStyle, dateSetStyle: setStyle, dateIsStyle: isStyle,
+      dateSetOrient: setOrient, dateIsOrient: isOrient, dateWidenLabel: widenLabel });
+  } else if (ids && sub) {
     const I = ids;
     // --- The line of the still menu: both values' icons (on/off, style) and the name.
     line = p.code(`push {r4,lr};mov r4,r1;${load4('a')}
@@ -389,7 +580,7 @@ export function installGr3xMenuAdditions(p: Gr3xDateProgram, o: { date?: Gr3xDat
   // (asked for GR3X_PICTURE_LIST_ID) or the camera's own (asked for End Screen itself).
   const factory = o.endScreen ? p.code([...mapped.map(([id, to]) => [id, to, id === GR3X_PICTURE_LIST_ID ? 1 : -1] as const), [END_SCREEN_ID, END_SCREEN_ID, 0] as const]
     .map(([id, to, mode], k) => `movw ip,#${lo(id)};movt ip,#${hi(id)};cmp r1,ip;bne f${k};movw r1,#${lo(to)};movt r1,#${hi(to)};` +
-      (mode >= 0 ? `mov ip,#${mode};movw r3,#${lo(GR3X_PICTURE_MODE)};movt r3,#${hi(GR3X_PICTURE_MODE)};str ip,[r3];` : '') + `b done;f${k}:`).join('') +
+      (mode >= 0 ? `mov ip,#${mode};movw r3,#${lo(GR3X_PICTURE_MODE)};movt r3,#${hi(GR3X_PICTURE_MODE)};${r8 ? 'strb' : 'str'} ip,[r3];` : '') + `b done;f${k}:`).join('') +
     `done:movw r3,#0x13b;b #${FACTORY + 4};`)
     : p.code(mapped.map(([id, to]) => `movw ip,#${lo(id)};movt ip,#${hi(id)};cmp r1,ip;
     movweq r1,#${lo(to)};movteq r1,#${hi(to)};`).join('') + `movw r3,#0x13b;b #${FACTORY + 4};`);

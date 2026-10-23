@@ -48,7 +48,7 @@ async function buildContainer(raw: Uint8Array, purpose: 'research' | 'hardware-t
   const icon = sections.find(s => s.name === 'ICONBIN')!;
   if (!(rtos.offset < icon.offset)) throw new FirmwareError('unexpected-layout', 'IIIx section order');
   const addition = unhex(manifest.append.bytes), pixels = unhex(manifest.iconAddition.bytes);
-  const revision = features.round7 ? 'T7' : looks ? (looks.displayRevision === 3 ? 'T6' : looks.displayRevision === 1 ? 'T5' : 'T5-L1') : softFocus.length ? 'T4-SF1' : 'T4';
+  const revision = features.round8 ? 'T8' : features.round7 ? 'T7' : looks ? (looks.displayRevision === 3 ? 'T6' : looks.displayRevision === 1 ? 'T5' : 'T5-L1') : softFocus.length ? 'T4-SF1' : 'T4';
   const lookRecipe = looks ? encodeGr3xLookRecipe(looks) : new Uint8Array();
   const ratioRecipe = t4 && !features.adjSoftFocus && !features.dateImprint && !features.pictures?.length && !features.round7 ? new Uint8Array() : encodeGr3xRatioRecipe(menu, features);
   const recipe = new Uint8Array(lookRecipe.length + ratioRecipe.length);

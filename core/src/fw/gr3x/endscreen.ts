@@ -77,6 +77,9 @@ export interface Gr3xEndScreenOptions {
   factoryIcons: readonly number[]; icons: readonly number[];
   /** Stable identities and their numbers in the extended JPEG table. */
   choices: readonly number[]; resources: readonly number[];
+  /** Round 8: the mode is the word's low byte (its upper bytes hold the date imprint's orientation
+   * and frame look, look-addresses.ts): read and written as a byte. */
+  modeByte?: boolean;
 }
 
 const lo = (v: number) => v & 0xffff, hi = (v: number) => v >>> 16;
@@ -137,7 +140,7 @@ export function installGr3xEndScreen(p: Gr3xEndScreenProgram, o: Gr3xEndScreenOp
   for (let k = 0; k < MAX; k++, at += 4) v.setUint32(at, k < n ? o.resources[k] : 0, true);
   const ctx = p.append(ctxBytes);
   const ctxIn = (r: number) => `movw r${r},#${lo(ctx)};movt r${r},#${hi(ctx)};`;
-  const MODE = `movw ip,#${lo(GR3X_PICTURE_MODE)};movt ip,#${hi(GR3X_PICTURE_MODE)};ldr ip,[ip];cmp ip,#0;`;
+  const MODE = `movw ip,#${lo(GR3X_PICTURE_MODE)};movt ip,#${hi(GR3X_PICTURE_MODE)};${o.modeByte ? 'ldrb' : 'ldr'} ip,[ip];cmp ip,#0;`;
   const handler = (at: number, original: string, reg: number, name: keyof typeof GR3X_ENDSCREEN_NATIVE.exports, what: string) => {
     const target = p.code(`${MODE}beq native;${ctxIn(reg)}b #${fn(name)};native:${original};b #${at + 4};`);
     p.patch(at, p.word(at), branchWord(at, target), what);

@@ -457,13 +457,33 @@ static void draw(const struct ctx *k, void *cache, struct picture *p, s32 rx, s3
 }
 
 /* The orientation of the picture: left at the start of the exposure (the camera's direction) or,
- * in RAW development, by the development step (see lookstash.ts and datestamp.ts); O_NONE without. */
+ * in RAW development, by the development step (see lookstash.ts and datestamp.ts); O_NONE without.
+ * GR III builds (-DGR3_PACKED; GR III has no room for two more words): one byte, value | 0x80. */
 static u32 orientation(const struct ctx *k) {
   u32 v;
   if (!k->orient) return O_NONE;
+#ifdef GR3_PACKED
+  v = *(const volatile u8 *)k->orient;
+  if (!(v & 0x80u)) return O_NONE;
+#else
   v = *k->orient;
   if (!(v & ORIENT_VALID)) return O_NONE;
+#endif
   return v & 3u;
+}
+
+/* The look of the picture being made, as LOOK_STASH's word (only the look and LOOK_VALID are
+ * used); 0 without. GR III builds (-DGR3_PACKED): a halfword, look | 0x8000. */
+static u32 frame_look(const struct ctx *k) {
+  if (!k->frame_look) return 0;
+#ifdef GR3_PACKED
+  {
+    u32 h = *(const volatile u16 *)k->frame_look;
+    return (h & 0x8000u) ? ((h & 0xffu) | LOOK_VALID) : 0;
+  }
+#else
+  return *k->frame_look;
+#endif
 }
 
 #ifdef DIAG
@@ -625,7 +645,7 @@ void datestamp(const struct ctx *k, u32 *config) {
   /* The look's name: the look of the picture being made (left at the start of the exposure, or in
    * RAW development), else the look the development step last saw. */
   if ((setting & SETTING_NAME) && k->names) {
-    u32 v = k->frame_look ? *k->frame_look : 0;
+    u32 v = frame_look(k);
     if (!(v & LOOK_VALID) && k->look) v = *k->look;
     if ((v & LOOK_VALID) && (v & 0xffu) < 64u) {
       const u16 *name = k->names[v & 0xffu];

@@ -134,3 +134,13 @@ export const GR3X_SAVE_CALL = 0x5322b0a8;
 export const GR3X_ZERO_FILL_END = 0x53000460;
 export const GR3X_GAP = 0x55804374;
 export const GR3X_HEAP_BASE = 0x55804380;
+/**
+ * Round 8 (GR Mod 0.8.4): GR IV's ORIENT_WORD and FRAME_LOOK for the date imprint. The gap has no
+ * room for two more words (0x55804374 the films' table pointer, 0x55804378 the look stash,
+ * 0x5580437c the End Screen list's mode), so they are the three upper bytes of the mode word, whose
+ * readers read its low byte only from round 8 on: the orientation of the picture being made
+ * (value 0..3 | 0x80, GR IV's ORIENT_WORD value) and the look of that picture (the stash's look |
+ * 0x8000, GR IV's FRAME_LOOK). Cleared at start (the zero fill reaches the heap base).
+ */
+export const GR3X_ORIENT_BYTE = 0x5580437d;
+export const GR3X_FRAME_LOOK = 0x5580437e;

@@ -7,9 +7,9 @@ import { assembleWords, branchWord, movWord, wordsToBytes } from '../aspect/arm'
 import { drawRatioIcon } from '../aspect/icon';
 import { drawSoftFocusIcon, SOFT_FOCUS_NAMES } from '../aspect/softfocus';
 import { installGr3xAdjSoftFocus } from './adj-softfocus';
-import { DATESTAMP_LONG_TEXT, DATESTAMP_NAMES, DATESTAMP_ON_OFF_NAMES, DATESTAMP_SHORT_TEXT, DATESTAMP_STYLE_NAMES, drawStyleIcon } from '../aspect/datestamp-menu';
+import { DATESTAMP_LONG_TEXT, DATESTAMP_NAMES, DATESTAMP_ON_OFF_NAMES, DATESTAMP_ORIENT_NAMES, DATESTAMP_SHORT_TEXT, DATESTAMP_STYLE_NAMES, datestampNameTexts, drawStyleIcon } from '../aspect/datestamp-menu';
 import type { Gr3xDateForm } from './datestamp';
-import { installGr3xDateImprintStage, installGr3xMenuAdditions } from './datestamp';
+import { GR3X_FACTORY_LOOK_NAMES, GR3X_FACTORY_LOOK_TEXTS, gr3xRawDevelopmentWords, installGr3xDateImprintStage, installGr3xMenuAdditions } from './datestamp';
 import { GR3X_MAX_PICTURES, checkGr3xPictures, gr3xPictureIcon, GR3X_PICTURE_LINE_NAMES, GR3X_PICTURE_ORIGINAL, installGr3xPictureStage, GR3X_JPEG_TABLE_COUNT } from './shutdown';
 import { GR3X_FACTORY_PICTURES, GR3X_PICTURE_NAMES, GR3X_PREVIEW_H, GR3X_PREVIEW_W, GR3X_TYPE_NAMES, gr3xPreview, installGr3xEndScreen } from './endscreen';
 import { readRes, resFile } from '../aspect/res';
@@ -20,6 +20,9 @@ import { buildGr3xExperiment } from './experimental';
 import { GR3X_T4_MENU, gr3xCustoms, gr3xMaxId } from './geometry';
 import { installGr3xGuard } from './guard';
 import { GR3X_DEVELOP_LOOK_READ, GR3X_HALATION_STASH } from './jpeg-stage';
+import { GR3X_STASH_FILM } from './datestamp';
+import { installGr3xLookLayout, isGr3xFactoryLayout, validateGr3xLookLayout } from './look-layout';
+import type { Gr3xLookLayout } from './look-layout';
 import { GR3X_GAP, GR3X_HEAP_BASE, GR3X_ZERO_FILL_END } from './look-addresses';
 import type { Gr3xMenuRatio } from './geometry';
 import { GR3X_160, openGr3xOfficial } from './profile';
@@ -79,6 +82,14 @@ export interface Gr3xAdjFeatures {
    * (halation-rows.ts, native/slots3.c) and 0.8.2's halation. Absent: the files of rounds 4..6,
    * byte for byte as before. */
   round7?: boolean;
+  /** Round 8 (as GR Mod 0.8.4; needs round 7): the date imprint follows the camera's orientation
+   * (third submenu line, default on), two more styles with the look's name (and their labels as
+   * wide as the row allows), and with films the Image Control order and hidden looks
+   * (image-control.ts). Absent: the files of round 7, byte for byte as before. */
+  round8?: boolean;
+  /** Round 8: the Image Control order and hidden looks (look-layout.ts; the camera's order with
+   * nothing hidden is the same as none). */
+  lookLayout?: Gr3xLookLayout;
 }
 /** How the image-control layer builds on this one (not recorded: it follows from the films). */
 export interface Gr3xAdjLayer {
@@ -86,14 +97,22 @@ export interface Gr3xAdjLayer {
   looksFollow?: boolean;
   /** Round 7: which films are black and white (the date imprint's table of looks). */
   monoFilms?: readonly boolean[];
+  /** Round 8: the films' names for the date imprint (English, as the camera's English menu shows them). */
+  filmNames?: readonly string[];
 }
 
 export async function buildGr3xAdjResearch(raw: Uint8Array, ratioMenu: readonly Gr3xMenuRatio[] = GR3X_T4_MENU, features: Gr3xAdjFeatures = {}, layer: Gr3xAdjLayer = {}) {
   const softFocus = features.adjSoftFocus === true, dateImprint = features.dateImprint === true, round7 = features.round7 === true;
+  const round8 = features.round8 === true;
+  if (round8 && !round7) fail('IIIx round 8 builds on round 7');
+  if (features.lookLayout && !round8) fail('IIIx look layout: round 8');
   if (round7 && dateImprint && features.dateMenu !== 'submenu') fail('IIIx round 7: the date imprint submenu');
   const dateForm: Gr3xDateForm = features.dateMenu === 'submenu' ? 'submenu' : 'list';
-  // Texts of the date imprint: name, short, long (both forms), then On/Off and Style (submenu).
-  const dateTexts = dateImprint ? (dateForm === 'submenu' ? 5 : 3) : 0;
+  // Texts of the date imprint: name, short, long (both forms), then On/Off and Style (submenu),
+  // then (round 8) Follow Orientation and the two styles with the look's name.
+  const date8 = round8 && dateImprint;
+  const dateTexts = dateImprint ? (dateForm === 'submenu' ? (date8 ? 8 : 5) : 3) : 0;
+  const dateIconCount = dateImprint ? (date8 ? 4 : 2) : 0;
   const pictures = features.pictures ?? [];
   if (pictures.length) checkGr3xPictures(pictures);
   const pictureCount = pictures.length;
@@ -171,9 +190,10 @@ export async function buildGr3xAdjResearch(raw: Uint8Array, ratioMenu: readonly 
   // Date imprint: name, the two style names; two style icons (after the soft-focus ones).
   const dateText = softText + (softFocus ? 1 : 0), dateIcon = softIcon + (softFocus ? 1 : 0);
   const dateIds = { name: dateText, short: dateText + 1, long: dateText + 2, iconShort: dateIcon, iconLong: dateIcon + 1,
-    ...(dateForm === 'submenu' ? { onOff: dateText + 3, style: dateText + 4 } : {}) };
+    ...(dateForm === 'submenu' ? { onOff: dateText + 3, style: dateText + 4 } : {}),
+    ...(date8 ? { orient: dateText + 5, shortName: dateText + 6, longName: dateText + 7, iconShortName: dateIcon + 2, iconLongName: dateIcon + 3 } : {}) };
   // Power-off pictures: the line name, the original's name, the pictures' names; a thumbnail each.
-  const pictureText = dateText + dateTexts, pictureIcon = dateIcon + (dateImprint ? 2 : 0);
+  const pictureText = dateText + dateTexts, pictureIcon = dateIcon + dateIconCount;
   const pictureIds = { title: pictureText, original: pictureText + 1, names: pictures.map((_, k) => pictureText + 2 + k), icons: pictures.map((_, k) => pictureIcon + k) };
   // Round 6: thumbnails 520 x 200, the five factory pictures (by camera variant) first.
   const endIds = { typeText: pictureText, pictureText: pictureText + 1, factoryText: pictureText + 2,
@@ -198,7 +218,8 @@ export async function buildGr3xAdjResearch(raw: Uint8Array, ratioMenu: readonly 
   });
   if (dateImprint) GR3X_SOFT_FOCUS_ROWS.forEach((lang, row) => {
     [DATESTAMP_NAMES[lang], DATESTAMP_SHORT_TEXT, DATESTAMP_LONG_TEXT,
-      ...(dateForm === 'submenu' ? [DATESTAMP_ON_OFF_NAMES[lang], DATESTAMP_STYLE_NAMES[lang]] : [])].forEach((name, k) => {
+      ...(dateForm === 'submenu' ? [DATESTAMP_ON_OFF_NAMES[lang], DATESTAMP_STYLE_NAMES[lang]] : []),
+      ...(date8 ? [DATESTAMP_ORIENT_NAMES[lang], datestampNameTexts(DATESTAMP_SHORT_TEXT)[lang], datestampNameTexts(DATESTAMP_LONG_TEXT)[lang]] : [])].forEach((name, k) => {
       const text = append(utf16z(name));
       const record = append(Uint8Array.from([name.length + 1, 1, 0, 0, ...words([text])]));
       new DataView(rows[row].buffer).setUint32((dateText + k) * 4, record, true);
@@ -220,7 +241,7 @@ export async function buildGr3xAdjResearch(raw: Uint8Array, ratioMenu: readonly 
   for (const [low, high] of m.textRootSites) pair(low, high, 3, m.textRoots, textRoots, 'extended IIIx language directory');
   for (const at of m.textBounds) patch(at, movWord(3, m.textCount - 1), movWord(3, columns - 1), 'extended IIIx text bound');
 
-  const iconCount = m.iconCount + additions.length + (softFocus ? 1 : 0) + (dateImprint ? 2 : 0) + pictureCount + (pictureSub ? GR3X_FACTORY_PICTURES.length : 0);
+  const iconCount = m.iconCount + additions.length + (softFocus ? 1 : 0) + dateIconCount + pictureCount + (pictureSub ? GR3X_FACTORY_PICTURES.length : 0);
   const iconCatalog = new Uint8Array(iconCount * 4);
   iconCatalog.set(read(m.iconRoot, m.iconCount * 4));
   const pixels = additions.map(r => drawRatioIcon(r.ratio));
@@ -239,8 +260,8 @@ export async function buildGr3xAdjResearch(raw: Uint8Array, ratioMenu: readonly 
     new DataView(iconCatalog.buffer).setUint32(softIcon * 4, descriptor, true);
     pixels.push(icon); iconOffset += icon.length;
   }
-  if (dateImprint) [false, true].forEach((long, k) => {
-    const icon = drawStyleIcon(long);
+  if (dateImprint) [[false, false], [true, false], ...(date8 ? [[false, true], [true, true]] : [])].forEach(([long, name], k) => {
+    const icon = drawStyleIcon(long, name);
     if (iconOffset % 4) fail('IIIx ICONBIN alignment');
     const descriptor = append(Uint8Array.from([40, 0, 40, 0, ...words([iconOffset / 4])]));
     new DataView(iconCatalog.buffer).setUint32((dateIcon + k) * 4, descriptor, true);
@@ -287,15 +308,29 @@ export async function buildGr3xAdjResearch(raw: Uint8Array, ratioMenu: readonly 
   const softEntries = softFocus ? installGr3xAdjSoftFocus({ code, append, patch, word }, softText, softIcon) : {};
   const fullRawEntries = installGr3xFullFrameRaw(program);
   const endScreen = pictureSub ? installGr3xEndScreen({ code, append, patch, word }, { ...endIds,
-    choices: pictures.map(x => x.id!), resources: pictures.map((_, k) => GR3X_JPEG_TABLE_COUNT + k) }) : undefined;
+    choices: pictures.map(x => x.id!), resources: pictures.map((_, k) => GR3X_JPEG_TABLE_COUNT + k), ...(date8 ? { modeByte: true } : {}) }) : undefined;
+  // Round 8: the names for the date imprint, per look of the stash word: the camera's own (checked
+  // against its English texts), films (32 + k) by the names the image-control layer gives.
+  const lookNames = date8 ? (() => {
+    const en = word(m.textRoots + 1 * 4);
+    const cameraText = (index: number) => {
+      const desc = word(en + index * 4), n = read(desc, 1)[0], t = read(word(desc + 4), Math.max(0, n - 1) * 2);
+      let out = ''; for (let i = 0; i + 1 < n; i++) out += String.fromCharCode(t[2 * i] | (t[2 * i + 1] << 8));
+      return out;
+    };
+    for (const [look, text] of Object.entries(GR3X_FACTORY_LOOK_TEXTS)) if (cameraText(text) !== GR3X_FACTORY_LOOK_NAMES[Number(look)]) fail(`IIIx English name of look ${look}`);
+    const films = layer.filmNames ?? [];
+    if (films.length > 20) fail('IIIx film names');
+    return { ...GR3X_FACTORY_LOOK_NAMES, ...Object.fromEntries(films.map((n, k) => [GR3X_STASH_FILM + k, n])) } as Record<number, string>;
+  })() : undefined;
   const dateEntries = dateImprint || pictureCount ? {
     ...(endScreen ?? {}),
     ...installGr3xMenuAdditions({ code, append, patch, word, read }, { ...(dateImprint ? { date: dateIds, dateForm } : {}),
       ...(pictureCount && !pictureSub ? { picture: pictureIds } : {}),
       ...(endScreen ? { endScreen: { typeText: endIds.typeText, pictureText: endIds.pictureText, lineType: endScreen.endScreenLineType, linePicture: endScreen.endScreenLinePicture } } : {}),
-      ...(round7 ? { onOffText: true } : {}) }),
+      ...(round7 ? { onOffText: true } : {}), ...(date8 ? { round8: true } : {}) }),
     ...(dateImprint ? installGr3xDateImprintStage({ code, append, patch, word, read },
-      round7 ? { stash: GR3X_HALATION_STASH, monoFilms: layer.monoFilms ?? [] } : undefined) : {}),
+      round7 ? { stash: GR3X_HALATION_STASH, monoFilms: layer.monoFilms ?? [], ...(lookNames ? { names: lookNames } : {}) } : undefined) : {}),
     ...(pictureCount ? installGr3xPictureStage({ code, append, patch, word, read }, pictureCount, { pick: !pictureSub }) : {}) } : {};
   // Round 7 without films: the look word for the date imprint (the image-control layer's
   // development adapter writes it when there are films), and the settings guard.
@@ -303,14 +338,23 @@ export async function buildGr3xAdjResearch(raw: Uint8Array, ratioMenu: readonly 
     const out: Record<string, number> = {};
     if (dateImprint) {
       // ldrb r2,[r3,#0x77c] (the frame's look): also store look | 0x10000 (level 0: no halation).
-      const stash = code(`push {r0,r1};mrs r0,cpsr;ldrb r2,[r3,#0x77c];orr r1,r2,#0x10000;push {r2};
+      // Round 8: in RAW development also the orientation and the look of the picture (datestamp.ts).
+      const stash = date8 ? code(`push {r0,r1,r4,r5,ip,lr};mrs r0,cpsr;ldrb r2,[r3,#0x77c];orr r4,r2,#0x10000;
+        movw r5,#${GR3X_HALATION_STASH & 0xffff};movt r5,#${GR3X_HALATION_STASH >>> 16};str r4,[r5];${gr3xRawDevelopmentWords('r1', 'r4', 'r5', 'ip')}
+        msr cpsr_f,r0;pop {r0,r1,r4,r5,ip,lr};b #${GR3X_DEVELOP_LOOK_READ + 4};`)
+        : code(`push {r0,r1};mrs r0,cpsr;ldrb r2,[r3,#0x77c];orr r1,r2,#0x10000;push {r2};
         movw r2,#${GR3X_HALATION_STASH & 0xffff};movt r2,#${GR3X_HALATION_STASH >>> 16};str r1,[r2];pop {r2};msr cpsr_f,r0;pop {r0,r1};b #${GR3X_DEVELOP_LOOK_READ + 4};`);
       patch(GR3X_DEVELOP_LOOK_READ, 0xe5d3277c, branchWord(GR3X_DEVELOP_LOOK_READ, stash), 'date imprint: the look of the picture, for the steps after development');
       if (!sites.some(s => s.address === GR3X_ZERO_FILL_END))
         patch(GR3X_ZERO_FILL_END, GR3X_GAP, GR3X_HEAP_BASE, 'start-up zero fill reaches the heap base (clears the added RAM words)');
       out.lookStash = stash;
     }
-    return { ...out, ...installGr3xGuard({ code, patch, u32: word }, { films: 0, maxRatio: gr3xMaxId(menu) }) };
+    // Round 8: the Image Control order and hidden looks of the camera's own looks (with films the
+    // image-control layer installs them).
+    const layout = features.lookLayout && !isGr3xFactoryLayout(features.lookLayout, 0) ? features.lookLayout : undefined;
+    if (features.lookLayout) validateGr3xLookLayout(features.lookLayout, 0);
+    const layoutEntries = layout ? installGr3xLookLayout({ code, append, patch, u32: word, read }, layout, 0) : {};
+    return { ...out, ...layoutEntries, ...installGr3xGuard({ code, patch, u32: word }, { films: 0, maxRatio: gr3xMaxId(menu), ...(layout ? { hidden: layout.hidden } : {}) }) };
   })() : {};
   const payload = new Uint8Array((length + 3) & ~3);
   let at = 0; for (const part of parts) { payload.set(part, at); at += part.length; }
@@ -323,8 +367,9 @@ export async function buildGr3xAdjResearch(raw: Uint8Array, ratioMenu: readonly 
     entries: { ...geometry.entries, ratioText, ratioIcon, fnCycle, ...imageEntries, ...developEntries, ...afEntries, ...mapEntries, ...liveEntries, ...rawEntries, ...shadingEntries, ...fullRawEntries, ...softEntries, ...dateEntries, ...lookEntries },
     catalogs: { order, textRoots, textColumns: columns, iconRoot, iconCount },
     adjSoftFocus: softFocus,
-    dateImprint: dateImprint ? { ...dateIds, form: dateForm, ...(round7 ? { iconOff: 296, iconOn: 297 } : {}) } : undefined,
+    dateImprint: dateImprint ? { ...dateIds, form: dateForm, ...(round7 ? { iconOff: 296, iconOn: 297 } : {}), ...(lookNames ? { names: lookNames } : {}) } : undefined,
     round7,
+    ...(round8 ? { round8 } : {}),
     pictures: pictureCount ? (pictureSub ? { form: 'submenu' as const, count: pictureCount, ...endIds, names: pictures.map((_, k) => endIds.factoryText + 1 + k),
       factoryIcons: [...endIds.factoryIcons], icons: [...endIds.icons], choices: pictures.map(x => x.id!) }
       : { ...pictureIds, count: pictureCount, names: [...pictureIds.names], icons: [...pictureIds.icons] }) : undefined,

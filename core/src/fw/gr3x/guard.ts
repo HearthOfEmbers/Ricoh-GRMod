@@ -14,6 +14,11 @@
  *    64 + k (k below the build's count). Anything else becomes Standard (11);
  *  - the aspect ratio at +0x4c2 (getter 0x53245260): 0..3 are the camera's own (3:2 = 0, 1:1 = 3),
  *    added ratios 4..3 + n. Anything above becomes 3:2 (0).
+ *  - round 8 (as GR Mod 0.8.4), looks hidden from the Image Control lists (look-layout.ts): the look
+ *    of the standard photo set (0x1c2) and of the standard movie set (0x57e), the ones picked from
+ *    the lists, becomes Standard when it is hidden (the lists are built without hidden looks, so a
+ *    hidden look could only be selected by settings an earlier firmware left). The custom sets'
+ *    looks (Custom 1 / 2: +0x1c4, +0x1c6, +0x580, +0x582) are kept: they are entries of their own.
  * Soft focus, the date imprint and the End Screen picture live in padding bytes (0x9a1..0x9ab)
  * that only those additions read; each reader already treats an unknown value as off / factory.
  *
@@ -46,7 +51,11 @@ export interface Gr3xGuardOptions {
   films: number;
   /** The largest ratio identity of the build's menu (3 + added ratios). */
   maxRatio: number;
+  /** Round 8: looks hidden from the lists (never Standard). */
+  hidden?: readonly number[];
 }
+/** The standard photo and movie sets' looks (the others are the custom sets'). */
+const CURRENT_LOOKS = [0x1c2, 0x57e];
 
 const fail = (m: string): never => { throw new FirmwareError('unexpected-instruction', `IIIx settings guard: ${m}`); };
 const bl = (at: number, target: number) => (0xeb000000 | (((target - (at + 8)) >> 2) & 0xffffff)) >>> 0;
@@ -60,6 +69,13 @@ export function installGr3xGuardCode(p: Gr3xGuardProgram, o: Gr3xGuardOptions) {
     lines.push(`ldrb r2,[r0,#${off}]`, `sub r3,r2,#${OWN_LOOKS[0]}`, `cmp r3,#${OWN_LOOKS[1] - OWN_LOOKS[0]}`, `bls look${i}`);
     if (o.films > 0) lines.push(`sub r3,r2,#${FIRST_FILM}`, `cmp r3,#${o.films}`, `blo look${i}`);
     lines.push(`mov r2,#${GR3X_STANDARD_LOOK}`, `strb r2,[r0,#${off}]`, `look${i}:`);
+    if (CURRENT_LOOKS.includes(off) && o.hidden?.length) {
+      lines.push(`ldrb r2,[r0,#${off}]`, `mov r3,#${GR3X_STANDARD_LOOK}`);
+      for (const h of o.hidden) {
+        if (h === GR3X_STANDARD_LOOK || !Number.isInteger(h) || h < 0 || h > 255) fail('a hidden look');
+        lines.push(`cmp r2,#${h}`, `strbeq r3,[r0,#${off}]`);
+      }
+    }
   });
   lines.push(`ldrb r2,[r0,#${RATIO}]`, `cmp r2,#${o.maxRatio}`, 'movhi r2,#0', `strbhi r2,[r0,#${RATIO}]`, 'bx lr');
   const fix = p.code(lines.join(';'));
