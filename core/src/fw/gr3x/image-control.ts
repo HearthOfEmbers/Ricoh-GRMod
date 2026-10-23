@@ -144,7 +144,7 @@ export function gr3xHalationNames(round7: boolean): string[] {
  * (GR IV's pictures; the scale drawn on GR III's own three-position scale 211, 400 x 60).
  * Round 7: the Halation and Colour rows' names (GR IV's), the halation icon, the colour scale
  * (GR IV's red and white lights drawn on scale 211) and the red and white light icons. */
-function halationResources(decoded: Uint8Array, round7: boolean) {
+function halationResources(decoded: Uint8Array, round7: boolean, round8 = false) {
   const view = new DataView(decoded.buffer, decoded.byteOffset, decoded.byteLength);
   const icons = sectionsOf(decoded).find(s => s.name === 'ICONBIN');
   if (!icons) throw new FirmwareError('unexpected-layout', 'IIIx icon section missing');
@@ -153,7 +153,8 @@ function halationResources(decoded: Uint8Array, round7: boolean) {
   const at = view.getUint32(d + 4, true) * 4;
   if (at + 400 * 60 * 4 > icons.size) throw new FirmwareError('unexpected-layout', 'IIIx Toning scale pointer');
   const scale = decoded.slice(icons.offset + at, icons.offset + at + 400 * 60 * 4);
-  const names = gr3xHalationNames(round7);
+  // Round 8: GR IV's names (光晕 / 光暈 too: GR III's fonts are GR IV's, byte for byte).
+  const names = round8 ? [...HALATION_NAMES] : gr3xHalationNames(round7);
   if (round7) return { texts: [names, [...HALATION_COLOUR_NAMES]], icons: [{ w: 40, h: 40, pixels: halationIcon() },
     { w: 400, h: 60, pixels: halationColourScale(scale) }, { w: 40, h: 40, pixels: halationColourIcon('red') }, { w: 40, h: 40, pixels: halationColourIcon('white') }] };
   return { texts: [names], icons: [{ w: 40, h: 40, pixels: halationIcon() }, { w: 400, h: 60, pixels: halationScaleR6(scale) }] };
@@ -201,7 +202,7 @@ export async function buildGr3xImageControls(raw: Uint8Array, options: Gr3xLookO
   // Round 8: the films' names for the date imprint, as the camera's English menu shows them.
   const filmNames = round8Date ? films.map(f => f.names?.en || f.name) : undefined;
   const menu = await buildGr3xLookMenuResearch(raw, specs as Gr3xResearchLook[], displayIcons, ratioMenu, features,
-    round6 ? halationResources(decoded, round7) : undefined, monoFilms, filmNames);
+    round6 ? halationResources(decoded, round7, round8) : undefined, monoFilms, filmNames);
   const p = GR3X_160;
   const rtos = decoded.subarray(p.rtosOffset, p.rtosOffset + p.rtosLength);
   const originalRead = (va: number, size: number) => {

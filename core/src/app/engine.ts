@@ -109,7 +109,9 @@ export interface FirmwareInfo {
   models: CameraModel[];
   factoryRatios: string[];
   /** `menuPictures`: power-off pictures chosen in the camera's menu (End Screen submenu on both; GR III builds of round 5 had a Setup line after End Screen). */
-  capabilities: { build: boolean; presets: boolean; wallpaper: boolean; factoryEntry: boolean; bridge: boolean; menuPictures: boolean };
+  capabilities: { build: boolean; presets: boolean; wallpaper: boolean; factoryEntry: boolean; bridge: boolean; menuPictures: boolean;
+    /** The Image Control menu order and hidden looks (GR IV; the experimental GR III build from round 8). */
+    lookLayout?: boolean };
   features: { softFocus: 'clarity' | 'adj'; dateStamp: boolean; monoUnlock: boolean;
     /** GR III / IIIx: the most films a build can have (9; 20 on the experimental GR III build, where
      * the number is chosen with BuildOptions.filmCount and Halation is set in the camera). */
@@ -399,7 +401,7 @@ export class Engine {
         // Power-off images and the factory-menu entry reached the camera through a start-up script.
         // GR Mod 0.8 dropped that route, and it was never tested on these cameras: not offered.
         // Power-off pictures: the experimental GR III build only (tested there first).
-        capabilities: { build: true, presets: true, wallpaper: false, factoryEntry: false, bridge: false, menuPictures: profile.experimental === true },
+        capabilities: { build: true, presets: true, wallpaper: false, factoryEntry: false, bridge: false, menuPictures: profile.experimental === true, lookLayout: profile.experimental === true },
         // The date imprint is offered in the experimental GR III build only (tested there first).
         features: { softFocus: 'adj', dateStamp: profile.experimental === true, monoUnlock: false, maxFilms: profile.experimental === true ? GR3X_MAX_FILMS : 9 },
         version: profile.version, sha256: profile.sha256, bridge: false,
@@ -449,7 +451,7 @@ export class Engine {
     const info: FirmwareInfo = {
       family: 'gr4', filename: 'fwdc248b.bin', models: ['STANDARD', 'HDF', 'MONO'],
       factoryRatios: ['3:2', '4:3', '16:9', '1:1'],
-      capabilities: { build: true, presets: true, wallpaper: true, factoryEntry: true, bridge: !bridge, menuPictures: true },
+      capabilities: { build: true, presets: true, wallpaper: true, factoryEntry: true, bridge: !bridge, menuPictures: true, lookLayout: true },
       features: { softFocus: 'adj', dateStamp: true, monoUnlock: true },
       version: FIRMWARE_VERSION,
       sha256: await sha256Hex(raw),

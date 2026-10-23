@@ -59,7 +59,7 @@ describe.skipIf(!input)('GR III round 7: as GR IV 0.8.2', () => {
     expect(r6.dateImprint).not.toHaveProperty('iconOff');
     expect(r6.entries).not.toHaveProperty('guardFixAll');
     // The engine: a build without films (date imprint only) has the guard and is recognised.
-    const built = await engine.buildFirmware([], ratios, [], { filmCount: 0, dateStamp: true });
+    const built = await engine.buildFirmware([], ratios, [], { filmCount: 0, dateStamp: true, gr3Round: 7 });
     expect(await (await Engine.open(raw)).inspect(built.file)).toMatchObject({ verified: true, dateStamp: true });
     const t = await buildGr3xTestFirmware(raw, [], undefined, undefined, { dateImprint: true, dateMenu: 'submenu', round7: true });
     expect(t.report.outputSha256).toBe(built.sha256);

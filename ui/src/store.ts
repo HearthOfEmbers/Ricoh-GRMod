@@ -71,6 +71,9 @@ export interface State {
   /** Image Control menu order (`f11`..`f30`, or an added slot's key) and hidden keys. Empty = factory order, nothing hidden. */
   lookOrder: string[];
   lookHidden: string[];
+  /** GR III (experimental, round 8): its order (`g11`..`g22`, films `g64`..) and hidden keys, kept apart from GR IV's. */
+  lookOrder3: string[];
+  lookHidden3: string[];
   volumes: Volume[]; showAll: boolean; volumeId?: string; role?: card.CardRole;
   copySource: CopySource; parked: ParkedEntry[]; backups: ParkedEntry[]; copySel: string[]; copyInfo: Record<string, CopyInfo>; builds: BuildRecord[];
   busy?: string; toasts: Toast[]; confirm?: Confirm; cropId?: string; onlineOpen: boolean;
@@ -93,7 +96,7 @@ const emptySlot = (): SlotState => ({ names: {}, icon: { mode: 'keep', text: '',
 const emptySlots = (): Record<SlotId, SlotState> => Object.fromEntries(SLOT_IDS.map(id => [id, emptySlot()])) as Record<SlotId, SlotState>;
 let state: State = {
   ready: false, page: 'ic', fwBusy: false, model: 'HDF', lang: 'zh-CN',
-  slots: emptySlots(), extras: [], lookOrder: [], lookHidden: [], wall: [], ratios: [], ratioBackdrop: 'photo', soft: false, dateStamp: false, monoUnlock: false, filmCount: 9, previewMode: 'photo', photoRev: 0, activeSlot: 'CY', volumes: [], bridgeOpen: false,
+  slots: emptySlots(), extras: [], lookOrder: [], lookHidden: [], lookOrder3: [], lookHidden3: [], wall: [], ratios: [], ratioBackdrop: 'photo', soft: false, dateStamp: false, monoUnlock: false, filmCount: 9, previewMode: 'photo', photoRev: 0, activeSlot: 'CY', volumes: [], bridgeOpen: false,
   copySource: 'card', parked: [], backups: [], copySel: [], copyInfo: {}, builds: [], showAll: false, toasts: [], onlineOpen: false, toursSeen: [],
 };
 const listeners = new Set<() => void>();
@@ -167,7 +170,7 @@ async function saveProject(): Promise<void> {
       ...(s.slots[id].halation ? { halation: s.slots[id].halation } : {}),
     }])),
     extras: s.extras.map((x) => ({ key: x.key, name: x.name, preset: x.preset ? { fileName: x.preset.fileName, kind: x.preset.kind } : null, icon: { mode: x.icon.mode, text: x.icon.text, style: x.icon.style, image: x.icon.image }, ...(x.halation ? { halation: x.halation } : {}) })),
-    lookOrder: s.lookOrder, lookHidden: s.lookHidden,
+    lookOrder: s.lookOrder, lookHidden: s.lookHidden, lookOrder3: s.lookOrder3, lookHidden3: s.lookHidden3,
     wall: s.wall.map((w) => ({ id: w.id, name: w.name, kind: 'image', width: w.width, height: w.height, crop: w.crop, ...(w.menuName !== undefined ? { menuName: w.menuName } : {}), ...(w.menuId ? { menuId: w.menuId } : {}) })),
     ratios: s.ratios.map((r) => ({ id: r.id, ratio: r.ratio, name: r.name })),
     soft: s.soft, dateStamp: s.dateStamp, monoUnlock: s.monoUnlock, filmCount: s.filmCount,
@@ -201,10 +204,11 @@ export async function init(): Promise<void> {
         .map((x: ExtraSlot) => ({ key: x.key, name: String(x.name || '').slice(0, 40), icon: { mode: x.icon?.mode === 'image' ? 'image' : 'text', text: String(x.icon?.text ?? ''), style: x.icon?.style === 'plain' ? 'plain' : 'film', image: x.icon?.image }, ...(validHalation(x.halation) ? { halation: validHalation(x.halation)! } : {}) }));
       const lookOrder = normalizeLookOrder(Array.isArray(doc.lookOrder) ? doc.lookOrder : [], extras);
       const lookHidden = normalizeLookHidden(Array.isArray(doc.lookHidden) ? doc.lookHidden : [], extras);
+      const lookOrder3 = gr3SavedKeys(doc.lookOrder3), lookHidden3 = gr3SavedKeys(doc.lookHidden3).filter((k) => k !== 'g11');
       const ratios: RatioItem[] = (Array.isArray(doc.ratios) ? doc.ratios : []).slice(0, MAX_CUSTOM_RATIOS)
         .filter((r: RatioItem) => r && typeof r.id === 'string' && typeof r.ratio === 'string')
         .map((r: RatioItem) => ({ id: r.id, ratio: r.ratio.slice(0, 24), name: String(r.name || '').slice(0, 80) }));
-      set({ ratios, activeRatio: ratios[0]?.id, page: doc.page === 'wall' || doc.page === 'copies' || doc.page === 'ratio' || doc.page === 'ic' ? doc.page : doc.page === 'script' ? 'wall' : 'ic', model: ['GR3_HDF', 'GR3X_HDF', 'HDF', 'STANDARD', 'MONO'].includes(doc.model) ? doc.model : 'HDF', lang: (LANGS as readonly string[]).includes(doc.lang) ? doc.lang : 'zh-CN', fwName: doc.fwName, showAll: !!doc.showAll, slots, extras, lookOrder, lookHidden, previewMode: doc.previewMode === 'swatch' ? 'swatch' : 'photo', ratioBackdrop: doc.ratioBackdrop === 'gray' ? 'gray' : 'photo',
+      set({ ratios, activeRatio: ratios[0]?.id, page: doc.page === 'wall' || doc.page === 'copies' || doc.page === 'ratio' || doc.page === 'ic' ? doc.page : doc.page === 'script' ? 'wall' : 'ic', model: ['GR3_HDF', 'GR3X_HDF', 'HDF', 'STANDARD', 'MONO'].includes(doc.model) ? doc.model : 'HDF', lang: (LANGS as readonly string[]).includes(doc.lang) ? doc.lang : 'zh-CN', fwName: doc.fwName, showAll: !!doc.showAll, slots, extras, lookOrder, lookHidden, lookOrder3, lookHidden3, previewMode: doc.previewMode === 'swatch' ? 'swatch' : 'photo', ratioBackdrop: doc.ratioBackdrop === 'gray' ? 'gray' : 'photo',
         soft: doc.soft === true || (!!doc.softFocus && typeof doc.softFocus === 'object' && Object.keys(doc.softFocus).length > 0),
         dateStamp: doc.dateStamp === true, monoUnlock: doc.monoUnlock === true,
         filmCount: Number.isInteger(doc.filmCount) && doc.filmCount >= 0 && doc.filmCount <= GR3X_FILM_IDS.length ? doc.filmCount : 9,
@@ -416,21 +420,58 @@ const FACTORY_LOOK_NAMES: Record<number, { zh: string; en: string }> = {
   26: { zh: '柔和（单色）', en: 'Soft (mono)' }, 27: { zh: '高对比度（单色）', en: 'High Contrast (mono)' }, 28: { zh: '颗粒感（单色）', en: 'Grainy (mono)' },
   29: { zh: '无颗粒感（单色）', en: 'Solid (mono)' }, 30: { zh: 'HDR色调（单色）', en: 'HDR Tone (mono)' },
 };
+/** GR III (experimental, round 8): its twelve looks in the camera's menu order, their numbers and names (the camera's texts). */
+const GR3_LOOK_IDS: readonly number[] = [11, 12, 13, 14, 15, 16, 22, 17, 18, 19, 20, 21];
+const GR3_LOOK_NAMES: Record<number, { zh: string; en: string }> = {
+  11: { zh: '标准', en: 'Standard' }, 12: { zh: '鲜艳', en: 'Vivid' }, 13: { zh: '单色', en: 'Monotone' },
+  14: { zh: '软单色', en: 'Soft Monotone' }, 15: { zh: '硬单色', en: 'Hard Monotone' }, 16: { zh: '高对比度黑白', en: 'Hi-Contrast B&W' },
+  17: { zh: '正片', en: 'Positive Film' }, 18: { zh: '留银冲洗', en: 'Bleach Bypass' }, 19: { zh: '怀旧', en: 'Retro' },
+  20: { zh: 'HDR色调', en: 'HDR Tone' }, 21: { zh: '正负逆冲', en: 'Cross Processing' }, 22: { zh: '负片', en: 'Negative Film' },
+};
 const factoryLookKey = (id: number): string => `f${id}`;
+/** GR III's keys: g<look> for its own looks and its films (64..). */
+const gr3LookKey = (id: number): string => `g${id}`;
 /** Standard and the monochrome looks' Standard: what the camera falls back to for a hidden look that is selected (see guard.ts). */
-export const KEEP_VISIBLE = ['f11', 'f25'];
+export const KEEP_VISIBLE = ['f11', 'f25', 'g11'];
 /** Added slots are not built on the Monochrome camera (it has no colour looks), so they are not in the order either. */
 function lookExtras(s: State): ExtraSlot[] { return s.model === 'MONO' ? [] : s.extras; }
-/** Every key the order can contain: the 20 factory looks, then the added slots. */
-export function lookKeys(s: State = state): string[] { return [...FACTORY_LOOK_IDS.map(factoryLookKey), ...lookExtras(s).map((x) => x.key)]; }
-/** The style number the firmware uses for a key (11..30, or 34.. for added slots). */
+/** The order and hidden looks of the open camera family: GR III (experimental) keeps its own. */
+const gr3Order = (s: State): boolean => (s.info ? s.info.family === 'gr3x' : isGr3(s.model));
+/** GR III: the films of the build (looks 64..), when they are built. */
+function gr3Films(s: State): number { return filmCountChoosable(s) ? s.filmCount : 0; }
+/** The menu order can be set: GR IV, and the experimental GR III build (round 8). */
+export function lookOrderAvailable(s: State = state): boolean {
+  return !gr3Order(s) || (s.info?.family === 'gr3x' && s.info.capabilities.lookLayout === true);
+}
+/** Every key the order can contain, in the camera's order: GR IV's 20 looks and the added slots; GR III's twelve and its films. */
+export function lookKeys(s: State = state): string[] {
+  if (gr3Order(s)) return [...GR3_LOOK_IDS.map(gr3LookKey), ...Array.from({ length: gr3Films(s) }, (_, k) => gr3LookKey(64 + k))];
+  return [...FACTORY_LOOK_IDS.map(factoryLookKey), ...lookExtras(s).map((x) => x.key)];
+}
+/** The style number the firmware uses for a key (GR IV 11..30, or 34.. for added slots; GR III 11..22, films 64..). */
 export function lookStyleOf(key: string, s: State = state): number | null {
+  if (key.startsWith('g')) { const n = Number(key.slice(1)); return gr3Order(s) && lookKeys(s).includes(key) ? n : null; }
   if (key.startsWith('f')) { const n = Number(key.slice(1)); return FACTORY_LOOK_IDS.includes(n) ? n : null; }
   const i = lookExtras(s).findIndex((x) => x.key === key);
   return i < 0 ? null : 34 + i;
 }
-/** A display name for the UI: the camera's Chinese/English name, or an added slot's name. */
+/** Only on the GR IV Monochrome (its six black-and-white looks). */
+export function lookMonoOnly(key: string, s: State = state): boolean {
+  const n = lookStyleOf(key, s);
+  return !gr3Order(s) && n !== null && n >= 25 && n <= 30;
+}
+/** A display name for the UI: the camera's Chinese/English name, or an added slot's / a film's name. */
 export function lookName(key: string, s: State = state): string {
+  if (key.startsWith('g')) {
+    const n = Number(key.slice(1));
+    if (n >= 64) {
+      const id = GR3X_FILM_IDS[n - 64];
+      const slot = s.info?.slots.find((x) => x.id === id);
+      return (id && s.slots[id]?.names[s.lang]) || slot?.defaultName || `GR Mod ${n - 63}`;
+    }
+    const x = GR3_LOOK_NAMES[n]; if (x) return s.lang.startsWith('zh') ? x.zh : x.en;
+    return key;
+  }
   if (key.startsWith('f')) {
     const n = Number(key.slice(1));
     // Cinema Yellow / Green carry the name given to their slot (e.g. a preset's), when there is one.
@@ -441,40 +482,56 @@ export function lookName(key: string, s: State = state): string {
   const x = lookExtras(s).find((e) => e.key === key);
   return x ? extraName(x, s) : key;
 }
-/** Keep the saved order valid for the current extras: drop unknown keys, append new ones in factory order. */
-export function normalizeLookOrder(order: readonly string[], extras: readonly ExtraSlot[]): string[] {
-  const valid = new Set<string>([...FACTORY_LOOK_IDS.map(factoryLookKey), ...extras.map((x) => x.key)]);
+/** Keep a saved order valid for the keys there are: drop unknown keys, append the missing ones in the camera's order. */
+function normalizeOrder(order: readonly string[], keys: readonly string[]): string[] {
+  const valid = new Set(keys);
   const out: string[] = [];
   for (const k of order) if (typeof k === 'string' && valid.has(k) && !out.includes(k)) out.push(k);
-  for (const id of FACTORY_LOOK_IDS) if (!out.includes(factoryLookKey(id))) out.push(factoryLookKey(id));
-  for (const x of extras) if (!out.includes(x.key)) out.push(x.key);
+  for (const k of keys) if (!out.includes(k)) out.push(k);
   return out;
 }
-export function normalizeLookHidden(hidden: readonly string[], extras: readonly ExtraSlot[]): string[] {
-  const valid = new Set<string>([...FACTORY_LOOK_IDS.map(factoryLookKey), ...extras.map((x) => x.key)]);
+function normalizeHidden(hidden: readonly string[], keys: readonly string[]): string[] {
+  const valid = new Set(keys);
   return [...new Set(hidden.filter((k) => typeof k === 'string' && valid.has(k) && !KEEP_VISIBLE.includes(k)))];
 }
-export function lookOrderNow(s: State = state): string[] { return normalizeLookOrder(s.lookOrder, lookExtras(s)); }
-export function lookHiddenNow(s: State = state): string[] { return normalizeLookHidden(s.lookHidden, lookExtras(s)); }
-/** The layout to build, or undefined when it is the factory order with nothing hidden. */
+/** GR IV's order for the current extras (projects keep it as saved; see `lookOrderNow`). */
+export function normalizeLookOrder(order: readonly string[], extras: readonly ExtraSlot[]): string[] {
+  return normalizeOrder(order, [...FACTORY_LOOK_IDS.map(factoryLookKey), ...extras.map((x) => x.key)]);
+}
+export function normalizeLookHidden(hidden: readonly string[], extras: readonly ExtraSlot[]): string[] {
+  return normalizeHidden(hidden, [...FACTORY_LOOK_IDS.map(factoryLookKey), ...extras.map((x) => x.key)]);
+}
+/** GR III's saved order and hidden keys (kept apart from GR IV's), checked like GR IV's when a project opens. */
+function gr3SavedKeys(list: unknown): string[] {
+  return (Array.isArray(list) ? list : []).filter((k): k is string => typeof k === 'string' && /^g(1[1-9]|2[0-2]|6[4-9]|7\d|8[0-3])$/.test(k));
+}
+export function lookOrderNow(s: State = state): string[] { return normalizeOrder(gr3Order(s) ? s.lookOrder3 : s.lookOrder, lookKeys(s)); }
+export function lookHiddenNow(s: State = state): string[] { return normalizeHidden(gr3Order(s) ? s.lookHidden3 : s.lookHidden, lookKeys(s)); }
+/** The layout to build, or undefined when it is the camera's order with nothing hidden. */
 export function lookLayoutSpec(s: State = state): LookLayout | undefined {
+  if (!lookOrderAvailable(s)) return undefined;
   const order = lookOrderNow(s);
   const hidden = lookHiddenNow(s);
-  const factory = [...FACTORY_LOOK_IDS.map(factoryLookKey), ...lookExtras(s).map((x) => x.key)];
+  const factory = lookKeys(s);
   if (hidden.length === 0 && order.every((k, i) => k === factory[i])) return undefined;
   return { order: order.map((k) => lookStyleOf(k, s)!), hidden: hidden.map((k) => lookStyleOf(k, s)!) };
 }
 export function hasLookLayout(s: State = state): boolean { return !!lookLayoutSpec(s); }
+/** Put the family's order / hidden keys. */
+function orderPatch(s: State, patch: { order?: string[]; hidden?: string[] }): Partial<State> {
+  if (gr3Order(s)) return { ...(patch.order ? { lookOrder3: patch.order } : {}), ...(patch.hidden ? { lookHidden3: patch.hidden } : {}) };
+  return { ...(patch.order ? { lookOrder: patch.order } : {}), ...(patch.hidden ? { lookHidden: patch.hidden } : {}) };
+}
 export function moveLookTo(key: string, toIndex: number): void {
   set((s) => {
     const order = lookOrderNow(s);
     const from = order.indexOf(key);
-    if (from < 0) return { lookOrder: order };
+    if (from < 0) return orderPatch(s, { order });
     const to = Math.max(0, Math.min(order.length - 1, toIndex));
-    if (from === to) return { lookOrder: order };
+    if (from === to) return orderPatch(s, { order });
     order.splice(from, 1);
     order.splice(to, 0, key);
-    return { lookOrder: order };
+    return orderPatch(s, { order });
   });
   scheduleSave();
 }
@@ -483,24 +540,24 @@ export function moveLook(key: string, delta: number): void {
     const order = lookOrderNow(s);
     const from = order.indexOf(key);
     const to = from + delta;
-    if (from < 0 || to < 0 || to >= order.length) return { lookOrder: order };
+    if (from < 0 || to < 0 || to >= order.length) return orderPatch(s, { order });
     order.splice(from, 1);
     order.splice(to, 0, key);
-    return { lookOrder: order };
+    return orderPatch(s, { order });
   });
   scheduleSave();
 }
 export function setLookHidden(key: string, hidden: boolean): void {
-  if (KEEP_VISIBLE.includes(key)) { toast(t('lookOrderKeepStandard'), 'info'); return; }
+  if (KEEP_VISIBLE.includes(key)) { toast(t(gr3Order(state) ? 'lookOrderKeepStandardGr3' : 'lookOrderKeepStandard'), 'info'); return; }
   set((s) => {
     const list = lookHiddenNow(s).filter((k) => k !== key);
     if (hidden) list.push(key);
-    return { lookHidden: list };
+    return orderPatch(s, { hidden: list });
   });
   scheduleSave();
 }
 export function resetLookLayout(): void {
-  set((s) => ({ lookOrder: [...FACTORY_LOOK_IDS.map(factoryLookKey), ...s.extras.map((x) => x.key)], lookHidden: [] }));
+  set((s) => orderPatch(s, { order: lookKeys(s), hidden: [] }));
   scheduleSave();
 }
 /** The name an added slot gets in the camera: what was typed, else `GR Mod <place>`. */

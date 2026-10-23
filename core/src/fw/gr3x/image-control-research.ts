@@ -11,7 +11,7 @@ import { buildGr3xAdjResearch, GR3X_ADJ } from './adj';
 import type { Gr3xAdjFeatures } from './adj';
 import type { Gr3xMenuRatio } from './geometry';
 import { GR3X_160, openGr3xOfficial } from './profile';
-import { GR3X_TEXT_ROWS, gr3xAllowedChars, validateGr3xLookNameFor } from './look-resources';
+import { GR3X_FONT_VERIFIED_CHARS, GR3X_TEXT_ROWS, gr3xAllowedChars, validateGr3xLookNameFor } from './look-resources';
 import { installGr3xLookLayout, isGr3xFactoryLayout, validateGr3xLookLayout } from './look-layout';
 
 export const GR3X_LOOK_RESEARCH = {
@@ -157,7 +157,7 @@ export async function buildGr3xLookMenuResearch(raw: Uint8Array, looks: readonly
     const id = base.catalogs.textColumns + looks.length + k;
     rows.forEach((row, language) => {
       const text = names[language];
-      if (language > 0) validateGr3xLookNameFor(text, gr3xAllowedChars(decoded, GR3X_TEXT_ROWS[language]));
+      if (language > 0) validateGr3xLookNameFor(text, gr3xAllowedChars(decoded, GR3X_TEXT_ROWS[language]) + GR3X_FONT_VERIFIED_CHARS);
       const string = new Uint8Array((text.length + 1) * 2), view = new DataView(string.buffer);
       for (let i = 0; i < text.length; i++) view.setUint16(i * 2, text.charCodeAt(i), true);
       new DataView(row.buffer).setUint32(id * 4, append(Uint8Array.of(text.length + 1, 1, 0, 0, ...wordsToBytes([append(string)]))), true);

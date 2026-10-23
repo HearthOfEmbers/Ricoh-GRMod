@@ -17,7 +17,7 @@ import {
   setMonoUnlock,
   extraName, extraNameProblem, extraProblem, halationOf, removeExtraSlot, setExtraCount, setExtraName, setHalation, slotOf,
   filmCountChoosable, setFilmCount,
-  hasLookLayout, KEEP_VISIBLE, lookName, lookOrderNow, lookStyleOf, moveLook, moveLookTo, normalizeLookHidden, normalizeLookOrder, resetLookLayout, setLookHidden,
+  hasLookLayout, isGr3, KEEP_VISIBLE, lookHiddenNow, lookMonoOnly, lookName, lookOrderAvailable, lookOrderNow, moveLook, moveLookTo, resetLookLayout, setLookHidden,
   setWallName, wallMax, wallMenuProblem,
 } from './store';
 import type { ExtraSlot, RatioItem, SlotKey, WallItem } from './store';
@@ -317,16 +317,18 @@ function keepInView(list: HTMLElement, row: HTMLElement): void {
  * list (Standard and the monochrome Standard cannot be hidden); those moves glide too (FLIP).
  */
 function LookOrderView() {
-  const rawOrder = useStore((s) => s.lookOrder);
-  const rawHidden = useStore((s) => s.lookHidden);
-  const extras = useStore((s) => s.extras);
-  const model = useStore((s) => s.model);
   const changed = useStore((s) => hasLookLayout(s));
-  // names follow the language and the slots' own names (a primitive, so the store hook stays stable)
+  // names follow the language and the slots' own names (a primitive, so the store hook stays stable);
+  // the order and the hidden keys of the open camera family (GR III keeps its own), as primitives too
   const nameList = useStore((s) => lookOrderNow(s).map((k) => `${k}\u0001${lookName(k, s)}`).join('\u0000'));
   const names = useMemo(() => new Map(nameList.split('\u0000').map((x) => x.split('\u0001') as [string, string])), [nameList]);
-  const order = useMemo(() => normalizeLookOrder(rawOrder, model === 'MONO' ? [] : extras), [rawOrder, extras, model]);
-  const hidden = useMemo(() => new Set(normalizeLookHidden(rawHidden, model === 'MONO' ? [] : extras)), [rawHidden, extras, model]);
+  const orderList = useStore((s) => lookOrderNow(s).join(','));
+  const hiddenList = useStore((s) => lookHiddenNow(s).join(','));
+  const monoList = useStore((s) => lookOrderNow(s).filter((k) => lookMonoOnly(k, s)).join(','));
+  const gr3 = useStore((s) => (s.info ? s.info.family === 'gr3x' : isGr3(s.model)));
+  const order = useMemo(() => (orderList ? orderList.split(',') : []), [orderList]);
+  const hidden = useMemo(() => new Set(hiddenList ? hiddenList.split(',') : []), [hiddenList]);
+  const monoOnly = useMemo(() => new Set(monoList ? monoList.split(',') : []), [monoList]);
   const nameOf = (k: string): string => names.get(k) ?? lookName(k);
 
   const listRef = useRef<HTMLOListElement>(null);
@@ -505,9 +507,8 @@ function LookOrderView() {
       <div className="card look-card" data-tour="ic-order">
         <ol className="look-list" ref={listRef} aria-label={t('lookOrderTitle')}>
           {order.map((k, i) => {
-            const style = lookStyleOf(k);
             const isHidden = hidden.has(k);
-            const mono = style !== null && style >= 25 && style <= 30;
+            const mono = monoOnly.has(k);
             const keep = KEEP_VISIBLE.includes(k);
             return (
               <li key={k} data-key={k} className={`look-slot ${lifted === k ? 'lifted' : ''}`} onPointerDown={(e) => onDown(e, k)}>
@@ -519,7 +520,7 @@ function LookOrderView() {
                     <button className="btn ghost icon-only" title={t('lookOrderUp')} aria-label={`${t('lookOrderUp')} · ${nameOf(k)}`} disabled={i === 0} onClick={() => step(k, i, -1)}>{Ico.up}</button>
                     <button className="btn ghost icon-only" title={t('lookOrderDown')} aria-label={`${t('lookOrderDown')} · ${nameOf(k)}`} disabled={i === order.length - 1} onClick={() => step(k, i, 1)}>{Ico.down}</button>
                     <button
-                      className={`btn ghost icon-only look-eye ${isHidden ? 'on' : ''}`} title={keep ? t('lookOrderKeepStandard') : isHidden ? t('lookOrderShow') : t('lookOrderHide')}
+                      className={`btn ghost icon-only look-eye ${isHidden ? 'on' : ''}`} title={keep ? t(gr3 ? 'lookOrderKeepStandardGr3' : 'lookOrderKeepStandard') : isHidden ? t('lookOrderShow') : t('lookOrderHide')}
                       aria-label={`${isHidden ? t('lookOrderShow') : t('lookOrderHide')} · ${nameOf(k)}`} aria-pressed={isHidden} disabled={keep} onClick={() => setLookHidden(k, !isHidden)}
                     >{isHidden ? Ico.eyeOff : Ico.eye}</button>
                   </span>
@@ -542,6 +543,7 @@ function LookOrderView() {
           <span className={`chip ${hidden.size ? 'warn' : 'muted'}`}>{t('lookOrderCount', { n: hidden.size })}</span>
         </div>
         <p className="muted small look-order-hint">{t('lookOrderHint')}</p>
+        {gr3 && <p className="muted small look-order-hint">{t('lookOrderGr3Note')}</p>}
         <button className="btn small look-order-reset" disabled={!changed} onClick={() => { snapshot(); resetLookLayout(); }}>{Ico.refresh}<span>{t('lookOrderReset')}</span></button>
       </aside>
       <span className="sr-only" aria-live="polite">{said}</span>
@@ -685,7 +687,7 @@ function FeatureSwitches({ mono, boxRef, from }: { mono: boolean; boxRef?: (el: 
   return (
     <div className="card extras" data-tour="ic-soft" ref={(el) => { own.current = el; boxRef?.(el); }}>
       <FeatureRow icon={Ico.soft} title={t('navSoft')} sub={t(gr3x ? 'gr3xSoftSub' : 'softAdjSub')} on={soft} onChange={setSoft} />
-      {(!gr3x || dateOk) && <FeatureRow icon={Ico.date} title={t('navDate')} sub={t(gr3x ? 'gr3xDateSub' : 'dateSub')} on={date} onChange={setDateStamp} />}
+      {(!gr3x || dateOk) && <FeatureRow icon={Ico.date} title={t('navDate')} sub={t('dateSub')} on={date} onChange={setDateStamp} />}
       {gr3x && <p className="small muted">{t('gr3xFilmHint')}<br />{t('gr3xFixedLooks')}</p>}
       {!mono && !gr3x && <FeatureRow icon={Ico.mono} title={t(gr3x ? 'gr3xReplicaTitle' : 'navMono')} sub={t(gr3x ? 'gr3xReplicaSub' : 'monoSub')} on={looks} onChange={setMonoUnlock} />}
     </div>
@@ -849,12 +851,14 @@ export function ImageControlPage() {
   const touring = useStore((s) => s.tour?.id === 'ic');
   useEffect(() => { if (touring) setView('slots'); }, [touring]);
   const views = !!info && info.capabilities.presets && model !== 'MONO';
+  // The menu order is a view of its own where the firmware has it (GR IV; the experimental GR III build).
+  const orderView = useStore((s) => lookOrderAvailable(s));
   return (
     <DropZone className="page" accept={isFirmware} onFiles={(f) => { void loadFirmwareFile(f[0]); }}>
       <header className="page-head">
         <span className="page-icon">{Ico.aperture}</span>
         <h1>{t('navIC')}</h1>
-        {views && <ViewTabs value={view} onChange={setView} />}
+        {views && orderView && <ViewTabs value={view} onChange={setView} />}
         {info && (
           <div className="head-right" data-tour="ic-stock">
             {info.bridge
@@ -868,7 +872,7 @@ export function ImageControlPage() {
         )}
       </header>
       {!info && <FirmwareHero />}
-      {views && <IcViews view={view} />}
+      {views && (orderView ? <IcViews view={view} /> : <IcBody />)}
       {info && model === 'MONO' && <div className="mono-ic" data-tour-page="ic"><p className="muted">{t('monoNoSlots')}</p><FeatureSwitches mono /></div>}
     </DropZone>
   );

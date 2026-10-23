@@ -33,6 +33,12 @@ export function gr3xAllowedChars(decoded: Uint8Array, lang: Gr3xTextLang): strin
   }
   return String.fromCharCode(...[...set].sort((a, b) => a - b));
 }
+/**
+ * Characters GR III's own texts do not use but its fonts have: GR III 2.10's RT_CN_S and RT_CN_T are
+ * GR IV 1.11's, byte for byte (SHA-256 equal), and GR IV shows 光晕 / 光暈 (GR Mod's Halation row)
+ * with them. Round 8 names the Halation row as GR IV does.
+ */
+export const GR3X_FONT_VERIFIED_CHARS = '晕暈';
 /** Per-language name check against that language's characters (24 UTF-16 units, one line). */
 export function validateGr3xLookNameFor(name: string, allowed: string) {
   if (!name.trim() || name !== name.trim()) throw new FirmwareError('bad-name', 'IIIx look name is empty or padded');

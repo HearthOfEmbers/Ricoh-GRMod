@@ -88,7 +88,9 @@ def verify(data,manifest):
         if slot or not manifest.get('addedLooks'):assert p.call(0x531a31ac,VIEW)==n.call(0x531a31ac,VIEW),slot
     # The ADJ list is as long as the longest function list: 32 (official); round 6 with more than
     # eighteen films, Image Control's 12 + n + 2 (the list is allocated for it, 0x531a1ebc).
-    M=max_count(p);assert max_count(n)==32 and M==max(32,14+(manifest.get('filmCount') or 0));calls+=2
+    # Round 8: the Image Control list without the hidden looks (look-layout.ts).
+    shown=12+(manifest.get('filmCount') or 0)-len((manifest.get('lookLayout') or {}).get('hidden',[]))
+    M=max_count(p);assert max_count(n)==32 and M==max(32,2+shown),(M,shown);calls+=2
     # Exactly one current value for every stored byte, a damaged byte reads (and is reset) as off.
     for b in list(range(4))+[4,0x13,0xaa,0xff]:
         p.state(byte=b);hits=[i for i in range(M) if p.call(0x531a3d94,VIEW,i)];calls+=M

@@ -2,7 +2,7 @@
 
 A small desktop tool for the Ricoh GR IV / GR IV HDF (firmware 1.11). Not a Ricoh product.
 
-**Experimental branch (`gr3-hdf-210-exp`, version 0.8.2-gr3expN): GR III HDF 2.10 and GR IIIx HDF 1.60.**
+**Experimental branch (`gr3-hdf-210-exp`, version 0.8.4-gr3expN): GR III HDF 2.10 and GR IIIx HDF 1.60.**
 Not a release: it keeps its own data folder (`GRMod-GR3-Experimental`) and never updates itself.
 
 GR III 2.10 (`fwdc239b.bin`) and GR IIIx 1.60 (`fwdc243b.bin`) are the same build of one program:
@@ -22,7 +22,19 @@ halation with three strengths and red / white set in the camera (GR III's parame
 Fn submenu, so a film gets two rows: Halation built as GR III's own Grain Effect, Off / 1 / 2 / 3,
 and Colour), preset fingerprints (a film whose preset changed starts again from neutral), and the
 date imprint light only for black-and-white looks. Files of earlier rounds are still rebuilt byte
-for byte (`guard: false`, the recipe has no `round`). Added ratios narrower than 1:1 stay allowed
+for byte (`guard: false`, the recipe has no `round`).
+Round 8 (the default; `gr3Round: 7` builds round 7) follows GR IV 0.8.4: the date imprint follows the
+camera's orientation at the start of the exposure (the direction GR III writes to EXIF, read at
+SetShootingInfoResultBeforeExpose; a third submenu line Follow Orientation, default On), Style has the
+four values with the look's English name (the camera's own names for looks 11..22, the build's for
+films), the Style labels as wide as the row allows (GR IV test 052), and the Image Control order and
+hidden looks (`core/src/fw/gr3x/look-layout.ts`: ImageControlModel's count, entry and reverse lookup
+answer from the layout for the still / ADJ, movie and RAW development lists; a hidden look in use becomes
+Standard, a hidden film keeps its parameters, `native/slots3.c -DHIDDEN_FILMS`). Halation is 光晕 in
+Chinese again (GR III's fonts are GR IV's and have the glyph). The orientation byte and the frame's
+look share the End Screen mode word's upper bytes (0x5580437d, 0x5580437e). #7's fitting is used for
+films. Round 8 probes: `look_layout_probe.py`, `datestamp8_probe.py` (orientation, names, RAW
+development, and every picture case against GR IV's 0.8.4 module), `list_width_probe.py`. Added ratios narrower than 1:1 stay allowed
 on GR III (3:4 was tested there); GR IV refuses them from 0.8.2. The GR IV Monochrome looks are
 not ported.
 Camera test procedure: [docs/GR3_HDF_210_TEST.txt](docs/GR3_HDF_210_TEST.txt); IIIx details: [docs/GR3X_HDF.md](docs/GR3X_HDF.md).
