@@ -370,6 +370,8 @@ const FACTORY_LOOK_NAMES: Record<number, { zh: string; en: string }> = {
   29: { zh: '无颗粒感（单色）', en: 'Solid (mono)' }, 30: { zh: 'HDR色调（单色）', en: 'HDR Tone (mono)' },
 };
 const factoryLookKey = (id: number): string => `f${id}`;
+/** Standard and the monochrome looks' Standard: what the camera falls back to for a hidden look that is selected (see guard.ts). */
+export const KEEP_VISIBLE = ['f11', 'f25'];
 /** Added slots are not built on the Monochrome camera (it has no colour looks), so they are not in the order either. */
 function lookExtras(s: State): ExtraSlot[] { return s.model === 'MONO' ? [] : s.extras; }
 /** Every key the order can contain: the 20 factory looks, then the added slots. */
@@ -382,7 +384,13 @@ export function lookStyleOf(key: string, s: State = state): number | null {
 }
 /** A display name for the UI: the camera's Chinese/English name, or an added slot's name. */
 export function lookName(key: string, s: State = state): string {
-  if (key.startsWith('f')) { const n = Number(key.slice(1)); const x = FACTORY_LOOK_NAMES[n]; if (x) return s.lang.startsWith('zh') ? x.zh : x.en; }
+  if (key.startsWith('f')) {
+    const n = Number(key.slice(1));
+    // Cinema Yellow / Green carry the name given to their slot (e.g. a preset's), when there is one.
+    const own = n === 18 ? s.slots.CY.names[s.lang] : n === 19 ? s.slots.CG.names[s.lang] : undefined;
+    if (own) return own;
+    const x = FACTORY_LOOK_NAMES[n]; if (x) return s.lang.startsWith('zh') ? x.zh : x.en;
+  }
   const x = lookExtras(s).find((e) => e.key === key);
   return x ? extraName(x, s) : key;
 }
@@ -397,7 +405,7 @@ export function normalizeLookOrder(order: readonly string[], extras: readonly Ex
 }
 export function normalizeLookHidden(hidden: readonly string[], extras: readonly ExtraSlot[]): string[] {
   const valid = new Set<string>([...FACTORY_LOOK_IDS.map(factoryLookKey), ...extras.map((x) => x.key)]);
-  return [...new Set(hidden.filter((k) => typeof k === 'string' && valid.has(k) && k !== factoryLookKey(11)))];
+  return [...new Set(hidden.filter((k) => typeof k === 'string' && valid.has(k) && !KEEP_VISIBLE.includes(k)))];
 }
 export function lookOrderNow(s: State = state): string[] { return normalizeLookOrder(s.lookOrder, lookExtras(s)); }
 export function lookHiddenNow(s: State = state): string[] { return normalizeLookHidden(s.lookHidden, lookExtras(s)); }
@@ -436,7 +444,7 @@ export function moveLook(key: string, delta: number): void {
   scheduleSave();
 }
 export function setLookHidden(key: string, hidden: boolean): void {
-  if (key === factoryLookKey(11)) { toast(t('lookOrderKeepStandard'), 'info'); return; }
+  if (KEEP_VISIBLE.includes(key)) { toast(t('lookOrderKeepStandard'), 'info'); return; }
   set((s) => {
     const list = lookHiddenNow(s).filter((k) => k !== key);
     if (hidden) list.push(key);
@@ -1108,6 +1116,7 @@ export function describeCopy(summary: FirmwareSummary, s: State = state): string
   if (summary.dateStamp) lines.push(t('dateLine'));
   if (summary.monoUnlock) lines.push(t('monoLine'));
   if (summary.extraSlots?.length) lines.push(t('extraLine', { n: summary.extraSlots.length, l: summary.extraSlots.map((x) => x.name).join(' / ') }));
+  if (summary.lookLayout) lines.push(t('lookOrderLine', { n: summary.lookLayout.hidden.length }));
   if (summary.shutdownPictures?.length) lines.push(t('wallMenuLine', { n: summary.shutdownPictures.length, l: summary.shutdownPictures.map((p) => p.name).join(' / ') }));
   if (summary.softFocus?.length) lines.push(t('softLine', { l: softText(summary.softFocus) }));
   return lines;

@@ -16,7 +16,7 @@ import {
   setDateStamp,
   setMonoUnlock,
   extraName, extraNameProblem, extraProblem, halationOf, removeExtraSlot, setExtraCount, setExtraName, setHalation, slotOf,
-  lookName, lookStyleOf, moveLook, moveLookTo, normalizeLookHidden, normalizeLookOrder, resetLookLayout, setLookHidden,
+  KEEP_VISIBLE, lookName, lookStyleOf, moveLook, moveLookTo, normalizeLookHidden, normalizeLookOrder, resetLookLayout, setLookHidden,
   setWallName, wallMax, wallMenuProblem,
 } from './store';
 import type { ExtraSlot, RatioItem, SlotKey, WallItem } from './store';
@@ -290,7 +290,7 @@ function LookOrderCard() {
               <span className="look-btns">
                 <button className="btn ghost icon-only" title={t('lookOrderUp')} aria-label={t('lookOrderUp')} disabled={i === 0} onClick={() => moveLook(k, -1)}>↑</button>
                 <button className="btn ghost icon-only" title={t('lookOrderDown')} aria-label={t('lookOrderDown')} disabled={i === order.length - 1} onClick={() => moveLook(k, 1)}>↓</button>
-                <button className={`btn small ghost ${isHidden ? 'on' : ''}`} title={isHidden ? t('lookOrderShow') : t('lookOrderHide')} aria-label={isHidden ? t('lookOrderShow') : t('lookOrderHide')} disabled={k === 'f11'} onClick={() => setLookHidden(k, !isHidden)}>{isHidden ? t('lookOrderShow') : t('lookOrderHide')}</button>
+                <button className={`btn small ghost ${isHidden ? 'on' : ''}`} title={isHidden ? t('lookOrderShow') : t('lookOrderHide')} aria-label={isHidden ? t('lookOrderShow') : t('lookOrderHide')} disabled={KEEP_VISIBLE.includes(k)} onClick={() => setLookHidden(k, !isHidden)}>{isHidden ? t('lookOrderShow') : t('lookOrderHide')}</button>
               </span>
             </li>
           );

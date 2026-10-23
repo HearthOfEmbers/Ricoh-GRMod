@@ -21,7 +21,7 @@ import { foff } from '../profile';
 export const FACTORY_LOOK_IDS: readonly number[] = [
   11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30,
 ];
-/** First style number of an added Image Control slot (34..39). */
+/** First style number of an added Image Control slot (34..53). */
 export const EXTRA_LOOK_FIRST = 34;
 export const ORDER_TABLE = 0x53DBE388;
 export const ORDER_COUNT = 20;
@@ -66,6 +66,9 @@ export function validateLookLayout(layout: LookLayout, extraCount: number): void
   if (new Set(layout.hidden).size !== layout.hidden.length) fail('bad-look-layout', 'hidden list contains a style twice');
   if (layout.hidden.length >= expected.length) fail('bad-look-layout', 'at least one look must stay visible');
   if (layout.hidden.includes(11)) fail('bad-look-layout', 'Standard (style 11) must stay visible');
+  // The settings guard turns a hidden look selected in the settings into Standard: 11, or 25 (the
+  // GR IV Monochrome's Standard) for its looks 25..30 (`guard.ts`).
+  if (layout.hidden.includes(25)) fail('bad-look-layout', 'Standard of the monochrome looks (style 25) must stay visible');
 }
 
 /** Write the order table through `setWord`, so a grown build records the changed words. */

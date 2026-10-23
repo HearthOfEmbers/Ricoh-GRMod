@@ -185,6 +185,8 @@ export interface FirmwareSummary {
   extraSlots: { name: string; icon: Uint8Array }[];
   /** Power-off pictures chosen in the camera's End Screen menu (absent when none, or when they cannot be read). */
   shutdownPictures?: ShutdownPictureSpec[];
+  /** Image Control menu order and hidden looks (0.8.4), as recorded in the file. */
+  lookLayout?: LookLayout;
 }
 
 /** Additions besides the slots and the ratios. */
@@ -474,6 +476,7 @@ export class Engine {
       monoUnlock: !!features.monoUnlock,
       extraSlots: (features.extraSlots ?? []).map((x) => ({ name: x.name, icon: x.icon })),
       ...(features.shutdown ? { shutdownPictures: [...features.shutdown.pictures] } : {}),
+      ...(features.lookLayout ? { lookLayout: features.lookLayout } : {}),
     });
     if (!specs) return modified(false, [], aligned);
     let ratios: BuiltRatio[] = [];

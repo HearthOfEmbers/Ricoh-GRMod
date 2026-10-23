@@ -4,7 +4,7 @@ import { ORDER_COUNT, buildFirmware, foff, openOfficial } from '../src/fw';
 import { Engine } from '../src/app';
 import { COLOR_HIDDEN, COLOR_VIS_TABLE, MONO_HIDDEN, MONO_VIS_TABLE, ORDER_TABLE } from '../src/fw/aspect';
 
-const OFFICIAL = process.env.GRMOD_OFFICIAL ?? '/tmp/fwdc248b.bin';
+const OFFICIAL = process.env.GRMOD_OFFICIAL ?? new URL('../testdata/private/official.bin', import.meta.url).pathname;
 const have = existsSync(OFFICIAL);
 const read = (): Uint8Array => new Uint8Array(readFileSync(OFFICIAL));
 const FACTORY = [11, 12, 13, 14, 15, 16, 24, 17, 18, 19, 23, 20, 21, 22, 25, 29, 26, 27, 28, 30];
@@ -82,3 +82,37 @@ describe.skipIf(!have)('Engine.buildFirmware', () => {
   });
 });
 
+
+describe.skipIf(!have)('0.8.4: read back, Standard of the monochrome looks, the settings guard', () => {
+  it('a file with a look layout (and added slots, the guard) is recognised and verified; the layout is read back', async () => {
+    const eng = await Engine.open(read());
+    const curves = [0, 1, 2].map(() => Uint16Array.from({ length: 256 }, (_, i) => Math.round((i / 255) * 16383)));
+    const icon = new Uint8Array(40 * 40 * 4);
+    for (let i = 0; i < 40 * 40; i++) icon[i * 4 + 3] = 255;
+    const slot = { matrixQ13: [8192, 0, 0, 0, 8192, 0, 0, 0, 8192], curves: curves as never, icon };
+    const order = [35, 18, 11, 12, ...FACTORY.slice(2).filter((s) => s !== 18), 34];
+    const layout = { order, hidden: [20, 34] };
+    const b = await eng.buildFirmware([], [], [], { dateStamp: true, extraSlots: [{ ...slot, name: 'A' }, { ...slot, name: 'B' }], lookLayout: layout });
+    expect(Object.values(b.checks).every((v) => v === true)).toBe(true);
+    const s = await eng.inspect(b.file);
+    expect(s.kind).toBe('modified');
+    expect(s.verified).toBe(true);
+    expect(s.lookLayout).toEqual(layout);
+    // Another layout gives another file, also verified.
+    const c = await eng.buildFirmware([], [], [], { dateStamp: true, extraSlots: [{ ...slot, name: 'A' }, { ...slot, name: 'B' }], lookLayout: { order, hidden: [20] } });
+    expect(c.sha256).not.toBe(b.sha256);
+    expect((await eng.inspect(c.file)).verified).toBe(true);
+  });
+  it('rejects hiding the monochrome looks\' Standard (25)', async () => {
+    const eng = await Engine.open(read());
+    await expect(eng.buildFirmware([], [], [], { lookLayout: { order: FACTORY, hidden: [25] } })).rejects.toThrow();
+  });
+  it('with the monochrome looks unlocked, one of them can be hidden (the guard turns it into 25); the file verifies', async () => {
+    const eng = await Engine.open(read());
+    const b = await eng.buildFirmware([], [], [], { dateStamp: true, monoUnlock: true, lookLayout: { order: FACTORY, hidden: [12, 26] } });
+    const s = await eng.inspect(b.file);
+    expect(s.verified).toBe(true);
+    expect(s.lookLayout).toEqual({ order: FACTORY, hidden: [12, 26] });
+    // (What the guard and the lists do with it is run in tools/looks/looks_check.py.)
+  });
+});
