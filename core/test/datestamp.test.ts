@@ -3,7 +3,8 @@
  * Date imprint and its camera-menu entry (`src/fw/aspect/datestamp.ts`, `datestamp-menu.ts`).
  * Needs the official firmware in testdata/private for the build tests (skipped without it). What
  * the new code does when it runs is checked in an emulator by `tools/datestamp/menu_check.py`
- * (menu) and `tools/datestamp/render_check.py` (imprint).
+ * (menu), `tools/datestamp/render_check.py` (imprint) and `tools/datestamp/orient_check.py` (imprint
+ * on photos taken with the camera held upright or upside down; unchanged for level shots).
  */
 import { describe, expect, it } from 'vitest';
 import { existsSync, readFileSync } from 'node:fs';
@@ -50,6 +51,15 @@ describe.skipIf(!have)('date imprint: firmware files', () => {
     const word = (va: number): number => new DataView(data.buffer, data.byteOffset).getUint32(va - 0x53000000, true);
     // The hooks: still-menu builder, controller factory, the two SetCurrentMenu.
     for (const at of [0x531b3ecc, 0x53185f7c, 0x531e1bd0, 0x531d5e8c, 0x537034b4]) expect(word(at) >>> 24).toBe(0xea);
+    // 0.8.3: the development step's hook also leaves the orientation the EXIF writer records
+    // (shooting record at r1 + 0x2D0: byte 0x71E84 if 0x71E83 is set, else 0xD8) in bits 24..25.
+    const hook = word(0x539113f8);
+    expect(hook >>> 24).toBe(0xea);
+    const stub = 0x539113f8 + 8 + (((hook & 0xffffff) << 8) >> 6);
+    const code = Array.from({ length: 32 }, (_, i) => word(stub + 4 * i));
+    expect(code.slice(0, 9)).toEqual([0xe59122d0, 0xe92d0003, 0xe2820a71, 0xe5d01e83, 0xe3510000, 0x15d02e84, 0x05d220d8, 0xe3520003, 0x83a02000]);
+    expect(code).toContain(0xe1800c02); // orr r0, r0, r2, lsl #24
+    expect(aspect.STASH_ORIENT_SHIFT).toBe(24);
   });
   it('a test build with a fixed setting has no menu entry', async () => {
     const eng = await Engine.open(new Uint8Array(readFileSync(P + 'official.bin')));

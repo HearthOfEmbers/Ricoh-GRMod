@@ -4,9 +4,16 @@
  *
  * The development step reads the frame's record at 0x539113F8 (`ldrb r2,[r3,#0x79C]`: the look,
  * then a dispatch on it for every look); its Toning setting is at +0x7A6. A hook there leaves
- * `look | toning << 8 | 0x10000` in one word, LOOK_STASH, before the JPEG step of the same picture
- * runs. The word is in the 44 bytes between the end of the start-up zero fill and the heap; the
- * zero fill is extended over them (see slots.ts).
+ * `look | toning << 8 | 0x10000 | orientation << 24` in one word, LOOK_STASH, before the JPEG step
+ * of the same picture runs. The word is in the 44 bytes between the end of the start-up zero fill
+ * and the heap; the zero fill is extended over them (see slots.ts).
+ *
+ * Orientation (0.8.3, for the date imprint): what the EXIF writer records as the Orientation tag
+ * (ExifJpegTiffEntryDataSetter, 0x537FEBC4). It reads the shooting record (`shootingInfo`, the
+ * step's r1 + 0x82D0; r3 is that record, or its development copy at +0x71280 in RAW development):
+ * byte 0x71E84 when byte 0x71E83 is set, else byte 0xD8; 1, 2, 3 become Orientation 8, 3, 6
+ * (table 0x53FA6478), anything else 1. The hook leaves that byte (0..3, anything else 0) in bits
+ * 24..25. (The writer also gives 1 for its writer types 2 and 3, which are not the still JPEG.)
  *
  * Black-and-white looks: Monotone, Soft Monotone, Hard Monotone, Hi-Contrast B&W (13..16; their
  * names through 0x5337F824) and the GR IV Monochrome's six (25..30), plus any slot whose preset
@@ -30,19 +37,24 @@ export const MONO_MODEL = 0x533ef000;
 export const MONO_LOOKS = [13, 14, 15, 16, 25, 26, 27, 28, 29, 30];
 
 /**
- * Store the look: keeps every register but the flags. r3 is the frame's record. Its Toning byte is
+ * Store the look: keeps every register but r2 (which the site's own instruction loads next) and the
+ * flags. r1 is the step's argument + 0x8000, r3 the frame's record. Its Toning byte is
  * a halation look's encoded setting (halation-ui.ts, 0..11): it is left as the level (0 off,
  * 1 Weak, 2 Medium, 3 Strong) and STASH_WHITE for the white glow. 0, 1, 2 (Off, Weak and Strong red,
  * as up to test 042) stay Off, Weak, Strong.
  */
-export const STASH_ASM = `push {r0,r1};ldrb r0,[r3,#0x79c];ldrb r1,[r3,#0x7a6];
+export const STASH_ASM = `ldr r2,[r1,#0x2d0];push {r0,r1};
+  add r0,r2,#0x71000;ldrb r1,[r0,#0xe83];cmp r1,#0;ldrbne r2,[r0,#0xe84];ldrbeq r2,[r2,#0xd8];cmp r2,#3;movhi r2,#0;
+  ldrb r0,[r3,#0x79c];ldrb r1,[r3,#0x7a6];
   cmp r1,#7;movhs r1,#0;
   cmp r1,#4;subhs r1,r1,#3;orrhs r0,r0,#0x20000;bhs stashlevel;
   cmp r1,#3;moveq r1,#2;beq stashlevel;
   cmp r1,#2;moveq r1,#3;
-  stashlevel:orr r0,r0,r1,lsl #8;orr r0,r0,#0x10000;movw r1,#${LOOK_STASH & 65535};movt r1,#${LOOK_STASH >>> 16};str r0,[r1];pop {r0,r1};`;
+  stashlevel:orr r0,r0,r1,lsl #8;orr r0,r0,r2,lsl #24;orr r0,r0,#0x10000;movw r1,#${LOOK_STASH & 65535};movt r1,#${LOOK_STASH >>> 16};str r0,[r1];pop {r0,r1};`;
 /** The white glow's bit in the stash word. */
 export const STASH_WHITE = 0x20000;
+/** The orientation's place in the stash word (2 bits: 0 as stored, 1 / 2 / 3 = EXIF Orientation 8 / 3 / 6). */
+export const STASH_ORIENT_SHIFT = 24;
 
 export function extendZeroFill(p: Patch): void {
   const w = p.word(ZERO_FILL_END);

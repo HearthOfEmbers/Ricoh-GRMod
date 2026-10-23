@@ -21,3 +21,4 @@ export { Patch } from './build';
 export { HALATION, HALATION_COLOUR_NAMES, HALATION_NAMES, halateRgba, halateYcc, halationColourIcon, halationColourScale, halationGains, halationIcon, halationLight, halationLut, paramBytes, PLAIN_LIGHT, readHalation, readHalationLight } from './halation';
 export type { HalationColour, HalationLevel } from './halation';
 export type { HalationLight, HalationLook } from './halation';
+export { LOOK_STASH, STASH_ORIENT_SHIFT, STASH_WHITE } from './lookstash';

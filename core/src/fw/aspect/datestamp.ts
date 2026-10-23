@@ -20,6 +20,13 @@
  * `setting` is the address of one byte: bit 0 on, bit 1 the long style ("2026.10.08 17:34"
  * instead of "'26 10 08"); a value above 3 counts as off. The imprint is orange (light only on a
  * black-and-white photo). The camera menu entry that sets the byte is in `datestamp-menu.ts`.
+ *
+ * Orientation (0.8.3): a photo taken with the camera held upright or upside down is stored as the
+ * sensor sees it, with an EXIF Orientation that the camera's playback and other viewers apply. The
+ * development step leaves the orientation the EXIF writer will record with the look (see
+ * `lookstash.ts`), and the module draws the imprint bottom right of the picture as it is shown,
+ * turned to read normally there, on the main picture, the screennail and the thumbnail alike.
+ * Without the look word (builds before 0.8.2) it draws as stored.
  */
 import { FirmwareError } from '../types';
 import { assembleWords } from './arm';
