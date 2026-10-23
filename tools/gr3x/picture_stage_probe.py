@@ -9,6 +9,12 @@ With every patch of the manifest installed:
     every register and the stack as on entry; the halation module changes a synthetic 4:2:2
     picture exactly as GR Mod's reference (halateYcc, written by the build script) for films with
     halation and leaves it alone otherwise; the diagnostic date module prints on the picture.
+    The configuration and the picture descriptors lie below 0x5d000000, as on the camera (part of a
+    process object; the first diagnostic build refused them there and printed nothing).
+  - diagnostic builds: the halation module's status word for every look (film with halation:
+    done, one picture; others: why it stopped; format byte and refusal of the first picture), the
+    stash and status printed in row 0 of a 720-wide picture, and nothing written into planes below
+    0x5d000000.
 Synthetic objects only; JPEG encoding, the ISP and the camera's real pictures are not executed.
 """
 import argparse,hashlib,json,struct
@@ -23,8 +29,11 @@ if not __debug__:raise RuntimeError('Validation requires Python assertions')
 STASH=0x55804378;EXECUTE=0x535047d4;WRAP=0x536df3d4;PROCESS=0x536deecc;RESET,INIT=0x536dece8,0x536ded70
 CACHE,INVALIDATE,CLEAN,ALLOC,FREE=0x536bbc30,0x536bbcc0,0x536bbcac,0x536af2a8,0x536af2e4
 PLATFORM,GET_TIME=0x536bd838,0x536b6510
-MOBJ,REGS=0x62c00000,0x62c10000;CFG,ARG,PIC=0x62d00000,0x62d00100,0x62d00200
-IMG,HEAP=0x63000000,0x64000000
+MOBJ,REGS=0x62c00000,0x62c10000
+# Configuration, request and descriptors in RTOS-heap-like memory (below 0x5d000000), as on the camera.
+CFG,ARG,PIC=0x558c0000,0x558c0100,0x558c0200
+IMG,HEAP,LOWIMG=0x63000000,0x64000000,0x5c000000
+STATUS=0x5580437c
 IDENTITY=[512,0,0,0,512,0,0,0,512]
 
 def u32(uc,a):return struct.unpack('<I',uc.mem_read(a,4))[0]
@@ -32,7 +41,7 @@ def u32(uc,a):return struct.unpack('<I',uc.mem_read(a,4))[0]
 class StageProbe(LookProbe):
     def __init__(self,data,manifest):
         super().__init__(data,manifest)
-        for base,size in ((0x55800000,0x100000),(0x62c00000,0x200000),(IMG,0x200000),(HEAP,0x800000)):
+        for base,size in ((0x55800000,0x100000),(0x62c00000,0x200000),(IMG,0x200000),(HEAP,0x800000),(LOWIMG,0x200000)):
             try:self.uc.mem_map(base,size)
             except Exception:pass
         self.log={'invalidate':0,'clean':0,'alloc':[],'free':0,'time':0};self.heap=HEAP
@@ -54,13 +63,13 @@ class StageProbe(LookProbe):
 
 def picture(Y,C,w,h):return struct.pack('<B3xIII4H2H4x',1,Y,C,w*h,w,h,w,h,0,0)
 
-def run_execute(n,film,w,h,y,c):
+def run_execute(n,film,w,h,y,c,img=IMG):
     """Enter the patched Execute and stop where the chain hands over to the original body."""
-    uc=n.uc;uc.mem_write(IMG,y);uc.mem_write(IMG+0x100000,c)
-    uc.mem_write(PIC,picture(IMG,IMG+0x100000,w,h));uc.mem_write(PIC+0x40,picture(IMG,IMG+0x100000,w,h))
+    uc=n.uc;uc.mem_write(img,y);uc.mem_write(img+0x100000,c)
+    uc.mem_write(PIC,picture(img,img+0x100000,w,h));uc.mem_write(PIC+0x40,picture(img,img+0x100000,w,h))
     cfg=bytearray(0x60);struct.pack_into('<4I',cfg,0x3c,PIC,PIC+0x40,0,0);uc.mem_write(CFG,bytes(cfg))
     uc.mem_write(ARG,struct.pack('<3I',0,0,CFG));uc.mem_write(0x62d00f00,struct.pack('<2I',0,0x62d00f80))
-    uc.mem_write(STASH,struct.pack('<I',film))
+    uc.mem_write(STASH,struct.pack('<2I',film,0xa5a5a5a5))
     n.log={'invalidate':0,'clean':0,'alloc':[],'free':0,'time':0};n.heap=HEAP
     values=[0x62e00000+i*0x100 for i in range(13)];values[0]=0x62d00800;values[1]=ARG
     for i,v in enumerate(values):uc.reg_write(getattr(reg,'UC_ARM_REG_R'+str(i)),v)
@@ -71,7 +80,7 @@ def run_execute(n,film,w,h,y,c):
     # `mov ip,sp` has just been re-executed: ip = sp, as the original first instruction leaves it.
     assert got==values[:12] and uc.reg_read(reg.UC_ARM_REG_SP)==STACK and uc.reg_read(reg.UC_ARM_REG_R12)==STACK
     assert uc.reg_read(reg.UC_ARM_REG_LR)==STOP
-    return bytes(uc.mem_read(IMG,w*h)),bytes(uc.mem_read(IMG+0x100000,w*h))
+    return bytes(uc.mem_read(img,w*h)),bytes(uc.mem_read(img+0x100000,w*h))
 
 def verify(data,manifest,reference=None):
     films=manifest['addedLooks'];entries=manifest['lookEntries'];calls=0;report={}
@@ -125,7 +134,27 @@ def verify(data,manifest,reference=None):
             results[tone]=dict(level=level,changed_luma=sum(a!=b for a,b in zip(Y,y)),allocs=len(n.log['alloc']),frees=n.log['free'],
                                invalidate=n.log['invalidate'],clean=n.log['clean'],clock_reads=n.log['time'])
             assert len(n.log['alloc'])==n.log['free']
+            if diag and 'halation' in entries['jpeg']:
+                # Status: format 1 accepted; film with halation: done (8), one picture (the second
+                # descriptor shares its planes); film without: 4; native look: 3.
+                st=u32(n.uc,STATUS);want=0x10000|(0x108 if level else (4 if film else 3))
+                assert st==want,(tone,hex(st),hex(want));results[tone]['status']=hex(st)
+            if diag:
+                # Row 0 of the diagnostics on this 320-wide picture: no stash/status (wide pictures only).
+                assert any(Y[r*w+x]!=y[r*w+x] for r in range(4,20) for x in range(4,60)),tone
         report['jpeg_stage']=results
+        if 'dateDiagnostics' in entries['jpeg']:
+            # 720 x 480: row 0 carries the stash and the status; the dump rows follow.
+            w2,h2=720,480
+            y2=bytes(((x+r)%200+20) for r in range(h2) for x in range(w2));c2=bytes([128])*(w2*h2)
+            Y2,C2=run_execute(n,11|0x10000,w2,h2,y2,c2);calls+=1
+            short=max(x for r in range(4,20) for x in range(w2) if Y2[r*w2+x]!=y2[r*w2+x])
+            assert short>300,short   # 'A ' + 4 refusals + slot is ~110 px; with the two words ~360 px
+            assert any(Y2[r*w2+x]!=y2[r*w2+x] for r in range(30,330) for x in range(4,200))
+            # Planes below 0x5d000000 are never written by the diagnostics (native look: no halation).
+            Y3,C3=run_execute(n,11|0x10000,w2,h2,y2,c2,img=LOWIMG);calls+=1
+            assert (Y3,C3)==(y2,c2)
+            report['diagnostics']=dict(row0_right_edge=short,low_planes_untouched=True)
         report['halation_matches_reference']=bool(expected) and 'dateDiagnostics' not in entries['jpeg']
     return dict(schema=1,rtos_sha256=hashlib.sha256(data).hexdigest(),calls=calls,**report,hardware_tested=False,
         scope='Patched descriptor builder, matrix module wrapper and JPEG entry with synthetic objects; no ISP, encoder or camera picture.')

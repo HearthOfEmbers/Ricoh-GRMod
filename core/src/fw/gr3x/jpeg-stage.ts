@@ -20,12 +20,19 @@
  * JPEG and, if it accepts the pictures, the date). Pictures it or the halation do not recognise
  * (another format, odd sizes) are left alone, so a wrong guess about GR III's pictures costs the
  * effect, not the photo.
+ *
+ * Diagnostic builds (second form, after the first diagnostic build showed nothing: its strict
+ * address check also refused the configuration itself, which lives in a process object below
+ * 0x5d000000) use GR III's own builds of both modules (compile_diag.py): the date module reads the
+ * configuration and descriptors wherever they are and writes only planes above 0x5d000000, and
+ * prints the halation stash and a status word the halation module leaves in the third word of the
+ * gap (0x5580437c, kept for the power-off picture setting; only diagnostic builds use it).
  */
 import { FirmwareError } from '../types';
 import { branchWord, wordsToBytes } from '../aspect/arm';
 import { halationLut, halationModule, paramBytes } from '../aspect/halation';
 import type { HalationLight } from '../aspect/halation';
-import { GR3X_DATESTAMP_DIAG_CODE } from './datestamp-diag';
+import { GR3X_DATESTAMP_DIAG_CODE, GR3X_HALATION_STATUS_CODE } from './datestamp-diag';
 
 export const GR3X_JPEG_EXECUTE = 0x535047d4;
 export const GR3X_DEVELOP_LOOK_READ = 0x536db7f8;
@@ -33,6 +40,8 @@ export const GR3X_FIRST_FILM = 64;
 /** Second word of the 12 bytes between the zero-filled data and the heap (the first is the
  * own-parameters table pointer, the third is kept for the power-off picture setting). */
 export const GR3X_HALATION_STASH = 0x55804378;
+/** Diagnostic builds only: the halation module's status word, right after the stash. */
+export const GR3X_HALATION_STATUS = 0x5580437c;
 export const GR3X_MATRIX_CALL = 0x536df3e8;
 export const GR3X_MATRIX_PROCESS = 0x536deecc;
 
@@ -74,7 +83,8 @@ export function installGr3xJpegStage(p: Gr3xJpegProgram, o: Gr3xJpegOptions) {
   const entries: Record<string, number> = {};
   if (o.diagnostics) {
     const on = p.append(Uint8Array.of(1, 0, 0, 0));
-    const ctx = p.append(u32le([CACHE, CACHE_FLUSH_FOR_READ, CACHE_CLEAN, PLATFORM, GET_TIME, on]));
+    // Seventh word (GR3_WORDS): the stash, followed by the halation status.
+    const ctx = p.append(u32le([CACHE, CACHE_FLUSH_FOR_READ, CACHE_CLEAN, PLATFORM, GET_TIME, on, GR3X_HALATION_STASH]));
     // GR III's own diagnostic build: it only draws into planes above the RTOS data and heaps
     // whose CbCr plane has the rows it draws (tools/gr3x/compile_diag.py).
     const module = p.append(Uint8Array.from(atob(GR3X_DATESTAMP_DIAG_CODE), c => c.charCodeAt(0)));
@@ -93,11 +103,13 @@ export function installGr3xJpegStage(p: Gr3xJpegProgram, o: Gr3xJpegOptions) {
     const ctx = p.append(new Uint8Array([
       ...u32le([CACHE, CACHE_FLUSH_FOR_READ, CACHE_CLEAN, HEAP_ALLOC, HEAP_FREE, GR3X_HALATION_STASH, GR3X_FIRST_FILM, 9, mask, lut]),
       ...paramBytes(),
-      ...u32le([HALATION_MAGIC, ...light.map(l => (l.threshold | (l.escale << 16)) >>> 0)]),
+      // Diagnostic builds: the status word's address after the magic (halation.c, STATUS).
+      ...u32le([HALATION_MAGIC, ...(o.diagnostics ? [GR3X_HALATION_STATUS] : []), ...light.map(l => (l.threshold | (l.escale << 16)) >>> 0)]),
     ]));
-    const module = p.append(halationModule());
+    const module = p.append(o.diagnostics ? Uint8Array.from(atob(GR3X_HALATION_STATUS_CODE), c => c.charCodeAt(0)) : halationModule());
     const stub = p.code(`push {r0-r3,ip,lr};ldr r1,[r1,#8];${addr('r0', ctx)}bl #${module};pop {r0-r3,ip,lr};${tail}`);
     entries.halation = stub; entries.halationModule = module; entries.halationContext = ctx;
+    if (o.diagnostics) entries.halationStatus = GR3X_HALATION_STATUS;
     tail = `b #${stub};`; first = stub;
   }
   p.patch(GR3X_JPEG_EXECUTE, 0xe1a0c00d, branchWord(GR3X_JPEG_EXECUTE, first), 'JPEG encode step: GR Mod picture modules');

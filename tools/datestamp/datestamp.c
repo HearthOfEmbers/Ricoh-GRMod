@@ -34,6 +34,9 @@ struct ctx {
   void *(*platform)(void);                           /* 0x538f21a0 */
   void (*get_time)(void *clock, u8 *time);           /* 0x538ea9b0 */
   const u8 *setting;                                 /* bit 0: on, bit 1: with year and time */
+#ifdef GR3_WORDS
+  const volatile u32 *words;                         /* GR III test builds: halation stash, halation status */
+#endif
 };
 
 /* The setting byte (see `datestamp.ts`): anything above 3 counts as off. */
@@ -118,16 +121,24 @@ static u32 digit_hit(u32 seg, s32 qx, s32 qy, s32 w, s32 h, s32 t) {
 /* Plausible RAM address (the camera's DDR, 0x40000000..0xBFFFFFFF); anything else is not
  * dereferenced. With RAW+JPEG the scaled-down main picture of the smaller sizes lives above
  * 0xA0000000 (seen at 0xB1069CC0, test firmware 015). */
-#ifdef STRICT_PLANES
-/* GR III test builds: picture buffers only above the RTOS data and heaps (0x55..-0x5c8..). */
-#define RAM_LOW 0x5d000000u
-#else
 #define RAM_LOW 0x40000000u
-#endif
 static int ram(const void *p) {
   u32 a = (u32)p;
   return a >= RAM_LOW && a < 0xc0000000u && (a & 3) == 0;
 }
+#ifdef STRICT_PLANES
+/* GR III test builds: the configuration and the picture descriptors are read wherever they are
+ * (the configuration is part of a process object, below 0x5d000000), but only picture planes above
+ * the RTOS data and heaps (0x55..-0x5c8..) are written. */
+#define PLANE_LOW 0x5d000000u
+static int plane(const void *p) {
+  u32 a = (u32)p;
+  return a >= PLANE_LOW && a < 0xc0000000u && (a & 3) == 0;
+}
+#else
+#define plane(p) ram(p)
+#define PLANE_LOW RAM_LOW
+#endif
 
 static void sync(const struct ctx *k, void *cache, struct picture *p, u32 y0, u32 y1, int clean) {
   u32 a, b;
@@ -208,7 +219,7 @@ static s32 text_width(const u8 *glyphs, u32 count, s32 H) {
  * and `c_height` are those of the buffer (on the camera, 6208 and 4128: the whole sensor). */
 static int picture_ok(const struct picture *p) {
   u32 w = p->width, h = p->height;
-  if (p->format != 1 || !ram(p->y) || !ram(p->c) || w < 120 || h < 80 || p->stride < w || p->c_height < h) return 0;
+  if (p->format != 1 || !plane(p->y) || !plane(p->c) || w < 120 || h < 80 || p->stride < w || p->c_height < h) return 0;
   return w <= 12000 && h <= 12000;
 }
 
@@ -265,14 +276,14 @@ static void hex_word_le(u32 v, u8 *out) {
 }
 static int wide_ram(const void *p) {
   u32 a = (u32)p;
-  return a >= RAM_LOW && a < 0xc0000000u;
+  return a >= PLANE_LOW && a < 0xc0000000u;
 }
 /* Why picture_ok refuses a picture, as a hex digit: 1 format, 2 planes outside 0x40000000..0xc0000000,
  * 4 size, 8 stride / CbCr height. 0 = accepted. */
 static u32 refusal(const struct picture *p) {
   u32 r = 0, w = p->width, h = p->height;
   if (p->format != 1) r |= 1;
-  if (!ram(p->y) || !ram(p->c)) r |= 2;
+  if (!plane(p->y) || !plane(p->c)) r |= 2;
   if (w < 120 || h < 80 || w > 12000 || h > 12000) r |= 4;
   if (p->stride < w || p->c_height < h) r |= 8;
   return r;
@@ -309,6 +320,13 @@ static void diag(const struct ctx *k, void *cache, u32 *config) {
       line[n++] = ram(q) ? (u8)refusal(q) : 15;
     }
     line[n++] = 17; line[n++] = (u8)s;
+#ifdef GR3_WORDS
+    /* then the halation stash and the halation module's status (wide pictures only) */
+    if (p->width >= 640 && ram((const void *)k->words)) {
+      line[n++] = 17; hex_word_le(k->words[0], line + n); n += 8;
+      line[n++] = 17; hex_word_le(k->words[1], line + n); n += 8;
+    }
+#endif
     text_at(p, line, n, 4, 4, Hm, white, 1); row++;
     sync(k, cache, p, 0, (u32)(Hm + 8), 1);
     if (p->width != 720 || p->height < 400) continue;

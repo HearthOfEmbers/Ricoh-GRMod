@@ -66,6 +66,9 @@ struct ctx {
   const u8 *lut;
   struct params p;
   u32 magic;
+#ifdef STATUS
+  volatile u32 *status; /* GR III test builds: how far the last call got (see `report`) */
+#endif
   u32 light[];        /* per added slot: threshold (0..254 of 255) | escale << 16 (16384 / range to the slot's white) */
 };
 
@@ -77,6 +80,17 @@ static int ram(const void *p) {
   u32 a = (u32)p;
   return a >= 0x40000000u && a < 0xc0000000u && (a & 3) == 0;
 }
+
+#ifdef STATUS
+/* Status word of GR III's diagnostic build, printed on the photo by the date module's diagnostics:
+ * bits 0..7 how far the call got (1 entered, 2 no valid stash, 3 look not a film, 4 film without
+ * halation, 5 level, 6 light, 7 no picture accepted, 8 done), 8..11 pictures processed, 12..15
+ * pictures whose buffers could not be allocated, 16..23 format byte of the first picture, 24..27
+ * why the first picture was refused (1 format, 2 planes, 4 size, 8 stride / CbCr height). */
+#define REPORT(k, v) (*(k)->status = (v))
+#else
+#define REPORT(k, v) ((void)0)
+#endif
 
 static int picture_ok(const struct picture *p) {
   u32 w = p->width, h = p->height;
@@ -152,7 +166,15 @@ static void halate(const struct ctx *k, void *cache, const struct picture *p, u3
   tmp = (u16 *)k->alloc((sw > sh ? sw : sh) * 2 + 8);
   acc = (u32 *)k->alloc(sw * 4 + 8);
   row = (u16 *)k->alloc(sw * 2 + 8);
-  if (!small || !wide || !tmp || !acc || !row) goto out;
+  if (!small || !wide || !tmp || !acc || !row) {
+#ifdef STATUS
+    *k->status += 0x1000u;
+#endif
+    goto out;
+  }
+#ifdef STATUS
+  *k->status += 0x100u;
+#endif
   sync(k, cache, p, 0);
 
   /* 1. light above the threshold (0..16384), of the brighter of Y and red, averaged over F x F
@@ -240,6 +262,31 @@ void halation(const struct ctx *k, u32 *config) {
   u32 st = *k->stash, style, level, i, j, gain, light, threshold, escale;
   struct picture *seen[4];
   void *cache;
+#ifdef STATUS
+  {
+    u32 f = 0;
+    if (ram(config) && ram((const void *)config[0x3c >> 2])) {
+      const struct picture *p = (const struct picture *)config[0x3c >> 2];
+      u32 w = p->width, h = p->height;
+      f = (u32)p->format << 16;
+      if (p->format != 1) f |= 1u << 24;
+      if (!ram(p->y) || !ram(p->c)) f |= 2u << 24;
+      if (w < 64 || h < 48 || w > 12000 || h > 12000) f |= 4u << 24;
+      if (p->stride < w || p->c_height < h) f |= 8u << 24;
+    }
+    REPORT(k, f | 1);
+    if (!(st & STASH_VALID) || !ram(config) || !ram(k->lut)) { REPORT(k, f | 2); return; }
+    style = st & 0xff; level = (st >> 8) & 0xff;
+    if (style < k->first_style || style >= k->first_style + k->count || style - k->first_style >= 32) { REPORT(k, f | 3); return; }
+    if (!((k->enabled >> (style - k->first_style)) & 1)) { REPORT(k, f | 4); return; }
+    if (level < 1 || level > 2) { REPORT(k, f | 5); return; }
+    gain = k->p.gain[level - 1];
+    light = k->light[style - k->first_style];
+    threshold = light & 0xffff; escale = light >> 16;
+    if (!gain || threshold > 254 || !escale || escale > E_MAX || k->p.mix > 256) { REPORT(k, f | 6); return; }
+    REPORT(k, f | 7);
+  }
+#else
   if (!(st & STASH_VALID) || !ram(config) || !ram(k->lut)) return;
   style = st & 0xff; level = (st >> 8) & 0xff;
   if (style < k->first_style || style >= k->first_style + k->count || style - k->first_style >= 32) return;
@@ -249,6 +296,7 @@ void halation(const struct ctx *k, u32 *config) {
   light = k->light[style - k->first_style];
   threshold = light & 0xffff; escale = light >> 16;
   if (!gain || threshold > 254 || !escale || escale > E_MAX || k->p.mix > 256) return;
+#endif
   cache = k->cache();
   /* One picture per buffer (another entry with the same planes describes the whole sensor). */
   for (i = 0; i < 4; i++) {
@@ -259,4 +307,7 @@ void halation(const struct ctx *k, u32 *config) {
     if (j == i) seen[i] = p;
   }
   for (i = 0; i < 4; i++) if (seen[i]) halate(k, cache, seen[i], gain, (s32)threshold, escale);
+#ifdef STATUS
+  if (seen[0] || seen[1] || seen[2] || seen[3]) *k->status = (*k->status & ~0xffu) | 8;
+#endif
 }
