@@ -112,23 +112,27 @@ def verify(original,new,manifest,build,reference):
     assert struct.unpack_from('<I',old,part['start']+16+4+4*16)[0]==0x1800000
     assert icon_new['end']-(icon_new['start']+16)<=0x1800000-0x40000
     revision=build.get('revision','T4-SF1' if soft else 'T4')
-    assert revision in ('research','T4','T4-SF1','T5','T5-L1','T6')
-    if revision.startswith('T5') or revision=='T6':assert manifest['kind']=='gr3x-image-control-patchset'
+    assert revision in ('research','T4','T4-SF1','T5','T5-L1','T6','T7')
+    # Round 7 (T7): with films (an image-control build, T6's film recipe) or without (ADJ layer only).
+    r7=revision=='T7';assert r7==bool(manifest.get('round7'))
+    looks=revision.startswith('T5') or revision=='T6' or (r7 and manifest['kind']=='gr3x-image-control-patchset')
+    if looks:assert manifest['kind']=='gr3x-image-control-patchset'
+    if r7 and looks:assert manifest.get('filmCount')
     from ratio_menu import menu as menu_of, is_t4
     m=menu_of(manifest);entries=len(m.order)
     marker=(f"{profile['tag']}-ADJ{entries}-{revision}-HARDWARE-UNTESTED\0".encode()
             if build.get('cameraUpdateCandidate') else f'GR3X-ADJ{entries}-RESEARCH-NOT-FOR-CAMERA\0'.encode())
     assert dec[rt['end']-4-len(marker):rt['end']-4]==marker
     padding=app+len(payload)
-    if revision.startswith('T5') or revision=='T6':
+    if looks:
         magic=b'GR3X-T5-RECIPE\0'
         assert dec[padding:padding+len(magic)]==magic
         length=struct.unpack_from('<I',dec,padding+len(magic))[0]
         films=manifest.get('filmCount')   # round 6: 1..20 films (recipe up to 1.5 MB)
-        assert length<=((1500000 if films else 512000) if revision=='T6' else 256000)
+        assert length<=((1500000 if films else 512000) if revision in ('T6','T7') else 256000)
         start=padding+len(magic)+4
         recipe=json.loads(dec[start:start+length])
-        if revision=='T6':
+        if revision in ('T6','T7'):
             assert recipe['schema']==3 and len(recipe['films'])<=(films or 9) and recipe['monoReplicas'] is False
             assert recipe.get('filmCount')==films and (films is None or 1<=films<=20 and recipe.get('ownParameters') is True)
             assert len(manifest['addedLooks'])==(films or 9)
@@ -139,7 +143,7 @@ def verify(original,new,manifest,build,reference):
             assert recipe['schema']==(1 if revision=='T5' else 2) and len(recipe['films'])<=2
             assert len(manifest['addedLooks'])==2+6*recipe['monoReplicas']
         padding=start+length
-    if not is_t4(m) or manifest.get('adjSoftFocus') or manifest.get('dateImprint') or manifest.get('pictures'):
+    if not is_t4(m) or manifest.get('adjSoftFocus') or manifest.get('dateImprint') or manifest.get('pictures') or r7:
         # The ratio list follows the film recipe; it must name exactly the manifest's added ratios.
         magic=b'GR3X-RATIO-RECIPE\0'
         assert dec[padding:padding+len(magic)]==magic
@@ -152,6 +156,7 @@ def verify(original,new,manifest,build,reference):
         if manifest.get('dateImprint') and manifest['dateImprint'].get('form')=='submenu':expected['dateMenu']='submenu'
         if manifest.get('pictures'):expected['pictures']=build['pictures']
         if manifest.get('pictures') and manifest['pictures'].get('form')=='submenu':expected.update(pictureMenu='submenu',pictureIds=manifest['pictures']['choices'])
+        if r7:expected['round']=7
         assert recipe==expected,recipe
         padding=start+length
     assert not any(dec[padding:rt['end']-4-len(marker)])

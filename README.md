@@ -2,21 +2,29 @@
 
 A small desktop tool for the Ricoh GR IV / GR IV HDF (firmware 1.11). Not a Ricoh product.
 
-**Experimental branch (`gr3-hdf-210-exp`, version 0.8.0-gr3expN): GR III HDF 2.10 and GR IIIx HDF 1.60.**
+**Experimental branch (`gr3-hdf-210-exp`, version 0.8.2-gr3expN): GR III HDF 2.10 and GR IIIx HDF 1.60.**
 Not a release: it keeps its own data folder (`GRMod-GR3-Experimental`) and never updates itself.
 
 GR III 2.10 (`fwdc239b.bin`) and GR IIIx 1.60 (`fwdc243b.bin`) are the same build of one program:
 every address is shared and the images differ only in identity bytes (name, project/product,
-version, build time, RTC epoch year). The IIIx port (nine-ratio ADJ list, full-frame RAW with
-cropped JPEG/previews, wide live-view alignment, clarity-table soft focus, nine CUBE film slots)
-is therefore applied unchanged to GR III; `core/test/gr3-equivalence.test.ts` checks that every
-GR III build is the IIIx build of the same recipe with only the identity bytes swapped, and the
-native probes in `tools/gr3x` run on either RTOS. Newer releases (GR III 2.20, GR IIIx 1.70) are a
-different program and are not supported; the shell downloads the pinned 2.10 / 1.60 archives.
+version, build time, RTC epoch year). The IIIx port is therefore applied unchanged to GR III;
+`core/test/gr3-equivalence.test.ts` checks that every GR III build is the IIIx build of the same
+recipe with only the identity bytes swapped, and the native probes in `tools/gr3x` run on either
+RTOS. Newer releases (GR III 2.20, GR IIIx 1.70) are a different program and are not supported;
+the shell downloads the pinned 2.10 / 1.60 archives.
 
-On GR IIIx HDF the owner has tested the T4 capture/RAW paths, SF1 soft focus and T5-L1 looks/icons;
-**nothing has been tested on a GR III yet, and T6's nine films are untested on either camera.**
-Power-off images, XMP import, date imprint and a separate ADJ soft-focus control are not offered.
+On a GR III (rounds 1..6, by the owner): custom ratio lists with full-frame RAW, up to 20 films
+(looks 64..83) with their own parameters and a second matrix, soft focus on the ADJ lever, the
+date imprint (GR IV's submenu), End Screen pictures (GR IV's Type / Picture submenu) and halation.
+Round 7 follows GR IV 0.8.2 (`core/src/fw/gr3x/guard.ts`, `halation-rows.ts`, `tools/gr3x/native/slots3.c`):
+a settings guard (unknown looks and ratios back to factory at load, save and mode recall), 0.8.2's
+halation with three strengths and red / white set in the camera (GR III's parameter screen has no
+Fn submenu, so a film gets two rows: Halation built as GR III's own Grain Effect, Off / 1 / 2 / 3,
+and Colour), preset fingerprints (a film whose preset changed starts again from neutral), and the
+date imprint light only for black-and-white looks. Files of earlier rounds are still rebuilt byte
+for byte (`guard: false`, the recipe has no `round`). Added ratios narrower than 1:1 stay allowed
+on GR III (3:4 was tested there); GR IV refuses them from 0.8.2. The GR IV Monochrome looks are
+not ported.
 Camera test procedure: [docs/GR3_HDF_210_TEST.txt](docs/GR3_HDF_210_TEST.txt); IIIx details: [docs/GR3X_HDF.md](docs/GR3X_HDF.md).
 
 - `core/`  platform-independent TypeScript: firmware container codec and patcher with built-in self-check (`src/fw`), added aspect ratios (`src/fw/aspect`), preset conversion from .xmp Look profiles and .cube LUTs (`src/color`), exact-length baseline JPEG encoder (`src/jpeg`), start-up script generator and simulator (`src/wallpaper`; used by GR Mod 0.7 and earlier, whose power-off images rotated through a start-up script on the card; 0.8 builds them into the firmware and the UI no longer offers the script), memory-card layout planning (`src/card`), and the `Engine` facade (`src/app`).
