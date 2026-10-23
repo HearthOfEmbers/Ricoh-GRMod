@@ -22,6 +22,8 @@
  *   - a stored record (modes, U1..U3) whose set has a film this build does not have gets
  *     Standard there, with Standard's values (the settings guard, guard.ts, would give it
  *     Standard anyway; this also gives the fields back);
+ *   - before a mode recall copies a stored record into use, the owners' values go to the table
+ *     (sp_before_recall; up to round 6 a recall lost what was adjusted since the last look change);
  *   - version-2 (round 6) and version-1 records are taken over, as made with this build's
  *     presets: version 2's levels 0 / 1 / 2 (off, weak, strong) become off / weak / strong red.
  * Built position independent: tools/gr3x/compile_slots.py slots3. Addresses: GR III 2.10 = IIIx 1.60.
@@ -294,6 +296,23 @@ void sp_after_load(uint8_t *ud, uint32_t films, const uint32_t *prints) {
     s->loaded = 1;
     s->magic = STATE_MAGIC;
     GAP[0] = (uint32_t)s;
+}
+
+/* A mode recall (U1..U3, guard.ts) is about to copy a stored record over the record in use without
+ * the look setters: the values of each set's owner go to the table first, so that what was adjusted
+ * there is kept (the copied record's fields then belong to its own owners). */
+void sp_before_recall(uint8_t *ud) {
+    State *s = state();
+    uint8_t *rec = record_of(ud);
+    volatile uint8_t *f = rec;
+    if (!s || !s->loaded || !rec) return;
+    for (uint32_t set = 0; set < SETS; set++) {
+        int o = owner(s, rec, set);
+        for (uint32_t j = 0; j < NP; j++) {
+            uint8_t v = f[field(j, set)];
+            if (s->t[o][set][j] != v) { s->t[o][set][j] = v; s->dirty = 1; }
+        }
+    }
 }
 
 /* After the firmware's settings save (at power off): the table, if it changed. */

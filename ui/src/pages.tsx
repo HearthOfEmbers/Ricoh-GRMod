@@ -54,7 +54,7 @@ function PhotoCompare({ params }: { params?: color.SlotParams }) {
   const gr3x = useStore(s => s.info?.family === 'gr3x');
   // (primitive selections: the store hook needs a stable value)
   const haloLevel = useStore((s) => { const h = halationOf(s.activeSlot, s); return h.on ? h.preview : 0; });
-  const haloColour = useStore((s) => halationOf(s.activeSlot, s).colour ?? 'red');
+  const haloColour = useStore((s) => (s.info?.family === 'gr3x' && !filmCountChoosable(s) ? 'red' : halationOf(s.activeSlot, s).colour ?? 'red'));
   const halo = haloLevel ? { preview: haloLevel } : undefined;
   // where the slot's light starts: its own look decides how bright the highlights end up
   const result = useStore((s) => slotOf(s.activeSlot, s)?.preset?.result);
@@ -361,8 +361,11 @@ function HalationProp({ k }: { k: SlotKey }) {
         {on && (
           <div className="chips">
             <span className="muted small">{t('haloPreview')}</span>
-            <Segmented value={String(preview)} onChange={(v) => setHalation(k, { preview: Number(v) as 0 | 1 | 2 | 3 })} options={[{ value: '0', label: t('haloOff') }, { value: '1', label: t('haloWeak') }, { value: '2', label: t('haloMedium') }, { value: '3', label: t('haloStrong') }]} />
-            {preview > 0 && <Segmented value={colour} onChange={(v) => setHalation(k, { colour: v as 'red' | 'white' })} options={[{ value: 'red', label: t('haloRed') }, { value: 'white', label: t('haloWhite') }]} />}
+            {/* GR III / IIIx legacy builds (no film count) fix Weak or Strong red in the build: those only. */}
+            <Segmented value={String(fixed && preview === 2 ? 3 : preview)} onChange={(v) => setHalation(k, { preview: Number(v) as 0 | 1 | 2 | 3 })} options={fixed
+              ? [{ value: '0', label: t('haloOff') }, { value: '1', label: t('haloWeak') }, { value: '3', label: t('haloStrong') }]
+              : [{ value: '0', label: t('haloOff') }, { value: '1', label: t('haloWeak') }, { value: '2', label: t('haloMedium') }, { value: '3', label: t('haloStrong') }]} />
+            {preview > 0 && !fixed && <Segmented value={colour} onChange={(v) => setHalation(k, { colour: v as 'red' | 'white' })} options={[{ value: 'red', label: t('haloRed') }, { value: 'white', label: t('haloWhite') }]} />}
           </div>
         )}
         <span className="muted small halo-note">{t(cinema ? 'halationCinemaSub' : fixed ? 'gr3xHalationSub' : gr3x ? 'gr3xHalationRowsSub' : 'halationSub')}</span>

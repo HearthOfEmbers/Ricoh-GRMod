@@ -374,7 +374,7 @@ export async function buildGr3xImageControls(raw: Uint8Array, options: Gr3xLookO
   const own = adjustable && options.ownParameters === true ? (() => {
     const native = own2 ?? GR3X_SLOTS_NATIVE;
     const origin = own2 ? own2Origin : append(unhex(native.code));
-    const entry = (name: 'sp_style' | 'sp_after_load' | 'sp_after_save') => origin + native.exports[name];
+    const entry = (name: 'sp_style' | 'sp_after_load' | 'sp_after_save' | 'sp_before_recall') => origin + (native.exports as Record<string, number>)[name];
     const styles = GR3X_PHOTO_STYLE_SETTERS.map((at, set) => {
       const stub = code(`push {r0-r3,ip,lr};mov r2,#${set};bl #${entry('sp_style')};pop {r0-r3,ip,lr};` +
         `ldr r3,[r0,#4];b #${at + 4};`);
@@ -394,7 +394,7 @@ export async function buildGr3xImageControls(raw: Uint8Array, options: Gr3xLookO
       const save = code(`push {r4,lr};mov r4,r0;bl #${guard.fixAll};mov r0,r4;bl #${GR3X_SAVE_DATA};mov r4,r0;bl #${entry('sp_after_save')};mov r0,r4;pop {r4,pc};`);
       patch(GR3X_SAVE_CALL, branchWord(GR3X_SAVE_CALL, GR3X_SAVE_DATA), branchWord(GR3X_SAVE_CALL, save),
         'settings guard and own film parameters: the settings save, then the table');
-      const recall = installGr3xGuardRecall({ code, patch, u32 }, guard.fix);
+      const recall = installGr3xGuardRecall({ code, patch, u32 }, guard.fix, entry('sp_before_recall'));
       return { module: origin, moduleSha256: native.sourceSha256, styles, load, save, prints, guardFix: guard.fix, guardFixAll: guard.fixAll, guardRecall: recall, exports: { ...native.exports } };
     }
     // Round 6: the build's number of films goes with the load (slots2.c checks the sets' looks).

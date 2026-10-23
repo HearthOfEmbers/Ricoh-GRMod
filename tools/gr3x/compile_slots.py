@@ -21,7 +21,7 @@ assert NAME in ('slots','slots2','slots3','endscreen'),NAME
 source=Path(__file__).with_name('native')/(NAME+'.c')
 EXPORTS=(('es_get','es_pick','es_refresh','es_confirm','es_up','es_down','es_footer','es_line') if NAME=='endscreen' else
          ('sp_style','sp_after_load','sp_after_save')+(('sp_hal','sp_hal_put','sp_hal_text','sp_hal_level','sp_hal_backup','sp_hal_restore') if NAME in ('slots2','slots3') else ())+
-         (('sp_col','sp_col_put') if NAME=='slots3' else ()))
+         (('sp_col','sp_col_put','sp_before_recall') if NAME=='slots3' else ()))
 flags=['-target','armv7-none-eabi','-mcpu=cortex-a9','-marm','-mfloat-abi=soft','-Os','-fropi',
        '-fno-jump-tables','-ffreestanding','-fno-builtin','-fno-unwind-tables','-fno-asynchronous-unwind-tables',
        '-fno-stack-protector','-c']

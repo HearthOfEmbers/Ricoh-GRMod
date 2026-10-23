@@ -70,10 +70,12 @@ export function installGr3xGuardCode(p: Gr3xGuardProgram, o: Gr3xGuardOptions) {
 }
 
 /** The mode recall: the record just copied into use. */
-export function installGr3xGuardRecall(p: Gr3xGuardProgram, fix: number) {
-  if (p.u32(GR3X_RECALL_COPY) !== bl(GR3X_RECALL_COPY, MEMCPY) || p.u32(GR3X_RECALL_COPY - 0x18) !== 0xe5950004 ||
+export function installGr3xGuardRecall(p: Gr3xGuardProgram, fix: number, before?: number) {
+  if (p.u32(GR3X_RECALL_COPY) !== bl(GR3X_RECALL_COPY, MEMCPY) || p.u32(GR3X_RECALL_COPY - 0x18) !== 0xe5950004 || p.u32(GR3X_RECALL_COPY - 0x50) !== 0xe1a05000 ||
       p.u32(GR3X_RECALL_COPY + 0x14) !== bl(GR3X_RECALL_COPY + 0x14, 0x532750f8)) fail('mode recall');
-  const recall = p.code(`push {r4,lr};mov r4,r0;bl #${MEMCPY};mov r0,r4;bl #${fix};mov r0,r4;pop {r4,pc};`);
+  // `before(settings object)` (the films' own parameters, slots3.c): r5 holds the object here.
+  const pre = before ? `push {r0,r1,r2,r3,r4,lr};mov r0,r5;bl #${before};pop {r0,r1,r2,r3,r4,lr};` : '';
+  const recall = p.code(`${pre}push {r4,lr};mov r4,r0;bl #${MEMCPY};mov r0,r4;bl #${fix};mov r0,r4;pop {r4,pc};`);
   p.patch(GR3X_RECALL_COPY, bl(GR3X_RECALL_COPY, MEMCPY), bl(GR3X_RECALL_COPY, recall), 'settings guard: a recalled mode');
   return recall;
 }

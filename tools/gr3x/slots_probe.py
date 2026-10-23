@@ -352,7 +352,7 @@ def verify_v3(data,manifest,seed=1107,steps=6000):
     guard runs after the load and before the save (guard_probe.py checks it on its own)."""
     films=manifest['filmCount'];n=SlotsProbe(data,manifest);rng=random.Random(seed+films);cpu=n.uc;calls=0
     own=manifest['lookEntries']['ownParameters'];fn=lambda name:own['module']+own['exports'][name]
-    assert set(own['exports'])=={'sp_style','sp_after_load','sp_after_save','sp_hal','sp_hal_put','sp_hal_text','sp_hal_level','sp_hal_backup','sp_hal_restore','sp_col','sp_col_put'}
+    assert set(own['exports'])=={'sp_style','sp_after_load','sp_after_save','sp_hal','sp_hal_put','sp_hal_text','sp_hal_level','sp_hal_backup','sp_hal_restore','sp_col','sp_col_put','sp_before_recall'}
     prints=list(struct.unpack('<%dI'%films,cpu.mem_read(own['prints'],4*films)))
     assert all(prints) and len(set(prints))>=1
     looks=list(range(11,23))+list(range(64,64+films))
@@ -404,6 +404,17 @@ def verify_v3(data,manifest,seed=1107,steps=6000):
                     if 64<=look<64+films:hal[look-64][s]=(hal[look-64][s]&3)|(4*v)
                 calls+=1
             if rng.random()<0.5:n.call(fn('sp_hal_restore'));hal=kept;calls+=1
+        elif op<0.8:
+            # A mode recall: the owners' values go to the table, then a stored record (other looks,
+            # other values) is copied over the record in use, as 0x5327a004 does.
+            n.call(fn('sp_before_recall'),UD);calls+=1;counts['recalls']=counts.get('recalls',0)+1
+            new=bytearray(n.rec())
+            for s in range(3):
+                look=rng.choice(looks);new[0x1c2+2*s]=look;selected[s]=look
+                vals=[rng.randrange(9) for j in range(9)]
+                for j in range(9):new[field(j,s)]=vals[j]
+                model[owners()[s]][s]=vals
+            cpu.mem_write(REC,bytes(new))
         elif op<0.94:
             look=rng.choice(looks+[64+films,83,0]);s=rng.randrange(4)
             want=hal[look-64][s] if 64<=look<64+films and s<3 else 0

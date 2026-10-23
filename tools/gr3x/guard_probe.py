@@ -31,6 +31,9 @@ def guarded(rec,films,max_ratio):
 class GuardProbe(AdjProbe):
     def __init__(self,data,manifest):
         super().__init__(data,manifest);self.uc.mem_map(REGION,0x40000);self.loads=0;self.saves=[]
+        # The films' table pointer (0x55804374, 0 here: slots3.c stays out of the way at a recall).
+        try:self.uc.mem_map(0x55800000,0x100000)
+        except Exception:pass
     def _hook(self,cpu,at,size,user):
         r=lambda n:cpu.reg_read(getattr(reg,'UC_ARM_REG_R'+str(n)))
         if at==LOAD_DATA:
