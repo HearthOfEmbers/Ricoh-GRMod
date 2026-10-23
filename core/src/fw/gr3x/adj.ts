@@ -7,7 +7,8 @@ import { assembleWords, branchWord, movWord, wordsToBytes } from '../aspect/arm'
 import { drawRatioIcon } from '../aspect/icon';
 import { drawSoftFocusIcon, SOFT_FOCUS_NAMES } from '../aspect/softfocus';
 import { installGr3xAdjSoftFocus } from './adj-softfocus';
-import { DATESTAMP_LONG_TEXT, DATESTAMP_NAMES, DATESTAMP_SHORT_TEXT, drawStyleIcon } from '../aspect/datestamp-menu';
+import { DATESTAMP_LONG_TEXT, DATESTAMP_NAMES, DATESTAMP_ON_OFF_NAMES, DATESTAMP_SHORT_TEXT, DATESTAMP_STYLE_NAMES, drawStyleIcon } from '../aspect/datestamp-menu';
+import type { Gr3xDateForm } from './datestamp';
 import { installGr3xDateImprintStage, installGr3xMenuAdditions } from './datestamp';
 import { checkGr3xPictures, gr3xPictureIcon, GR3X_PICTURE_LINE_NAMES, GR3X_PICTURE_ORIGINAL, installGr3xPictureStage } from './shutdown';
 import type { Gr3xPictureSpec } from './shutdown';
@@ -60,12 +61,17 @@ export interface Gr3xAdjFeatures {
   adjSoftFocus?: boolean;
   /** Date imprint: a still-menu line and the JPEG module (datestamp.ts). */
   dateImprint?: boolean;
+  /** Its menu: 'submenu' (as GR IV) or 'list' (round 4; the default, so older recipes rebuild). */
+  dateMenu?: Gr3xDateForm;
   /** Power-off pictures: a Setup line after End Screen, the files in RES (shutdown.ts). */
   pictures?: readonly Gr3xPictureSpec[];
 }
 
 export async function buildGr3xAdjResearch(raw: Uint8Array, ratioMenu: readonly Gr3xMenuRatio[] = GR3X_T4_MENU, features: Gr3xAdjFeatures = {}) {
   const softFocus = features.adjSoftFocus === true, dateImprint = features.dateImprint === true;
+  const dateForm: Gr3xDateForm = features.dateMenu === 'submenu' ? 'submenu' : 'list';
+  // Texts of the date imprint: name, short, long (both forms), then On/Off and Style (submenu).
+  const dateTexts = dateImprint ? (dateForm === 'submenu' ? 5 : 3) : 0;
   const pictures = features.pictures ?? [];
   if (pictures.length) checkGr3xPictures(pictures);
   const pictureCount = pictures.length;
@@ -131,13 +137,14 @@ export async function buildGr3xAdjResearch(raw: Uint8Array, ratioMenu: readonly 
   const additions = gr3xCustoms(menu);
   const textIds = new Map([[0, 241], [3, 243]]);
   const iconIds = new Map([[0, 257], [3, 256]]);
-  const columns = m.textCount + additions.length + (softFocus ? 1 : 0) + (dateImprint ? 3 : 0) + (pictureCount ? 2 + pictureCount : 0);
+  const columns = m.textCount + additions.length + (softFocus ? 1 : 0) + dateTexts + (pictureCount ? 2 + pictureCount : 0);
   const softText = m.textCount + additions.length, softIcon = m.iconCount + additions.length;
   // Date imprint: name, the two style names; two style icons (after the soft-focus ones).
   const dateText = softText + (softFocus ? 1 : 0), dateIcon = softIcon + (softFocus ? 1 : 0);
-  const dateIds = { name: dateText, short: dateText + 1, long: dateText + 2, iconShort: dateIcon, iconLong: dateIcon + 1 };
+  const dateIds = { name: dateText, short: dateText + 1, long: dateText + 2, iconShort: dateIcon, iconLong: dateIcon + 1,
+    ...(dateForm === 'submenu' ? { onOff: dateText + 3, style: dateText + 4 } : {}) };
   // Power-off pictures: the line name, the original's name, the pictures' names; a thumbnail each.
-  const pictureText = dateText + (dateImprint ? 3 : 0), pictureIcon = dateIcon + (dateImprint ? 2 : 0);
+  const pictureText = dateText + dateTexts, pictureIcon = dateIcon + (dateImprint ? 2 : 0);
   const pictureIds = { title: pictureText, original: pictureText + 1, names: pictures.map((_, k) => pictureText + 2 + k), icons: pictures.map((_, k) => pictureIcon + k) };
   const rows = Array.from({ length: m.languages }, (_, l) => {
     const row = new Uint8Array(columns * 4);
@@ -158,7 +165,8 @@ export async function buildGr3xAdjResearch(raw: Uint8Array, ratioMenu: readonly 
     new DataView(rows[row].buffer).setUint32(softText * 4, record, true);
   });
   if (dateImprint) GR3X_SOFT_FOCUS_ROWS.forEach((lang, row) => {
-    [DATESTAMP_NAMES[lang], DATESTAMP_SHORT_TEXT, DATESTAMP_LONG_TEXT].forEach((name, k) => {
+    [DATESTAMP_NAMES[lang], DATESTAMP_SHORT_TEXT, DATESTAMP_LONG_TEXT,
+      ...(dateForm === 'submenu' ? [DATESTAMP_ON_OFF_NAMES[lang], DATESTAMP_STYLE_NAMES[lang]] : [])].forEach((name, k) => {
       const text = append(utf16z(name));
       const record = append(Uint8Array.from([name.length + 1, 1, 0, 0, ...words([text])]));
       new DataView(rows[row].buffer).setUint32((dateText + k) * 4, record, true);
@@ -236,7 +244,7 @@ export async function buildGr3xAdjResearch(raw: Uint8Array, ratioMenu: readonly 
   const softEntries = softFocus ? installGr3xAdjSoftFocus({ code, append, patch, word }, softText, softIcon) : {};
   const fullRawEntries = installGr3xFullFrameRaw(program);
   const dateEntries = dateImprint || pictureCount ? {
-    ...installGr3xMenuAdditions({ code, append, patch, word, read }, { ...(dateImprint ? { date: dateIds } : {}), ...(pictureCount ? { picture: pictureIds } : {}) }),
+    ...installGr3xMenuAdditions({ code, append, patch, word, read }, { ...(dateImprint ? { date: dateIds, dateForm } : {}), ...(pictureCount ? { picture: pictureIds } : {}) }),
     ...(dateImprint ? installGr3xDateImprintStage({ code, append, patch, word, read }) : {}),
     ...(pictureCount ? installGr3xPictureStage({ code, append, patch, word, read }, pictureCount) : {}) } : {};
   const payload = new Uint8Array((length + 3) & ~3);
@@ -250,7 +258,7 @@ export async function buildGr3xAdjResearch(raw: Uint8Array, ratioMenu: readonly 
     entries: { ...geometry.entries, ratioText, ratioIcon, fnCycle, ...imageEntries, ...developEntries, ...afEntries, ...mapEntries, ...liveEntries, ...rawEntries, ...shadingEntries, ...fullRawEntries, ...softEntries, ...dateEntries },
     catalogs: { order, textRoots, textColumns: columns, iconRoot, iconCount },
     adjSoftFocus: softFocus,
-    dateImprint: dateImprint ? { ...dateIds } : undefined,
+    dateImprint: dateImprint ? { ...dateIds, form: dateForm } : undefined,
     pictures: pictureCount ? { ...pictureIds, count: pictureCount, names: [...pictureIds.names], icons: [...pictureIds.icons] } : undefined,
     iconAddition: { originalLength: originalIcons.length, originalSha256: await sha256Hex(originalIcons), bytes: hex(iconAddition) },
     ratios: geometry.ratios.map(r => ({ ...r, textId: textIds.get(r.id)!, iconId: iconIds.get(r.id)! })),

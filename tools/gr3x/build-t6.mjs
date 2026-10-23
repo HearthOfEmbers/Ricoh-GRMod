@@ -46,7 +46,10 @@ if (dateImprint && diagnostics) throw new Error('GR3X_DATE and GR3X_DIAG are not
 // GR3X_PICTURES='[{"name":"Sunset","rgb":"/path/720x480.rgb"},…]' (round 5): power-off pictures (shutdown.ts).
 const { encodeGr3xPicture } = await import('../../core/src/fw/gr3x/shutdown.ts');
 const pictures = process.env.GR3X_PICTURES ? await Promise.all(JSON.parse(process.env.GR3X_PICTURES).map(async p => ({ name: p.name, jpeg: encodeGr3xPicture(new Uint8Array(await readFile(p.rgb))) }))) : [];
-const features = { adjSoftFocus: round >= 3, ...(dateImprint ? { dateImprint } : {}), ...(pictures.length ? { pictures } : {}) };
+// GR3X_DATE_MENU=list rebuilds round 4's single list; the default is round 6's submenu (as GR IV).
+const dateMenu = process.env.GR3X_DATE_MENU ?? 'submenu';
+if (!['list', 'submenu'].includes(dateMenu)) throw new Error('GR3X_DATE_MENU is list or submenu');
+const features = { adjSoftFocus: round >= 3, ...(dateImprint ? { dateImprint, dateMenu } : {}), ...(pictures.length ? { pictures } : {}) };
 const provenance = JSON.parse(await readFile(join(root, 'examples/gr3x/T6/SOURCES.json'), 'utf8'));
 for (const [index, name] of T6_FILM_NAMES.entries()) {
   const source = provenance[index];

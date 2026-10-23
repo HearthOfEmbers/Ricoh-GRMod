@@ -315,12 +315,12 @@ export class Engine {
   private monoWords: { offset: number; bytes: Uint8Array }[] | null = null;
   private gr3xCandidates = new Map<string, Promise<FirmwareBuild>>();
 
-  private fixedGr3x(softFocus: readonly SoftFocusRequest[] = [], looks?: Gr3xLookOptions, menu: readonly Gr3xMenuRatio[] = GR3X_T4_MENU, adjSoftFocus = false, dateImprint = false, pictures: readonly Gr3xPictureSpec[] = []): Promise<FirmwareBuild> {
+  private fixedGr3x(softFocus: readonly SoftFocusRequest[] = [], looks?: Gr3xLookOptions, menu: readonly Gr3xMenuRatio[] = GR3X_T4_MENU, adjSoftFocus = false, dateImprint = false, pictures: readonly Gr3xPictureSpec[] = [], dateMenu: 'list' | 'submenu' = 'submenu'): Promise<FirmwareBuild> {
     const requests = [...softFocus].sort((a, b) => a.level - b.level);
-    const key = JSON.stringify({ requests, looks, menu, adjSoftFocus, dateImprint, pictures: pictures.map(p => ({ name: p.name, jpeg: Array.from(p.jpeg) })) });
+    const key = JSON.stringify({ requests, looks, menu, adjSoftFocus, dateImprint, dateMenu, pictures: pictures.map(p => ({ name: p.name, jpeg: Array.from(p.jpeg) })) });
     let candidate = this.gr3xCandidates.get(key);
     if (candidate) return candidate;
-    candidate = buildGr3xTestFirmware(this.raw, requests, looks, menu, { adjSoftFocus, ...(dateImprint ? { dateImprint } : {}), ...(pictures.length ? { pictures } : {}) }).then(r => ({
+    candidate = buildGr3xTestFirmware(this.raw, requests, looks, menu, { adjSoftFocus, ...(dateImprint ? { dateImprint, dateMenu } : {}), ...(pictures.length ? { pictures } : {}) }).then(r => ({
       file: r.bytes, sha256: r.report.outputSha256, decodedSha256: r.decodedSha256,
       changedFrames: r.changedFrames, changedBytes: r.changedBytes,
       ranges: r.report.ranges, checks: r.report.checks, features: { ...(looks?.monoReplicas ? { monoUnlock: true } : {}), ...(adjSoftFocus ? { adjSoftFocus: true } : {}), ...(dateImprint ? { dateStamp: true } : {}),
@@ -452,6 +452,7 @@ export class Engine {
       let looks: Gr3xLookOptions | null = null;
       let adjSoftFocus = false, dateImprint = false;
       let pictures: Gr3xPictureSpec[] = [];
+      let dateMenu: 'list' | 'submenu' = 'list';
       if (!official) try {
         // Read only recognized negative gain rows, rebuild from the verified
         // original, and compare the entire file. A valid container or metadata
@@ -464,7 +465,7 @@ export class Engine {
           looks = readGr3xLookRecipe(appended);
           const build = readGr3xBuildRecipe(appended);
           if (build) {
-            menu = planGr3xMenu(build.ratios); adjSoftFocus = build.adjSoftFocus; dateImprint = build.dateImprint;
+            menu = planGr3xMenu(build.ratios); adjSoftFocus = build.adjSoftFocus; dateImprint = build.dateImprint; dateMenu = build.dateMenu;
             // Power-off pictures: the names from the recipe, the JPEGs from the file's own RES section.
             if (build.pictures.length) {
               if (build.pictures.length > GR3X_MAX_PICTURES) throw new FirmwareError('bad-edit', 'IIIx picture recipe');
@@ -479,7 +480,7 @@ export class Engine {
         }
         const changes = clarityChanges(decoded, GR3X_CLARITY_OFFSET);
         if (changes.every(c => SOFT_FOCUS_LEVELS.includes(c.level as SoftFocusLevel) && c.strength !== 'custom')) {
-          candidate = await this.fixedGr3x(changes as SoftFocusRequest[], looks ?? undefined, menu, adjSoftFocus, dateImprint, pictures);
+          candidate = await this.fixedGr3x(changes as SoftFocusRequest[], looks ?? undefined, menu, adjSoftFocus, dateImprint, pictures, dateMenu);
           softFocus = changes;
         }
       } catch { /* unrecognized input remains non-writable */ }

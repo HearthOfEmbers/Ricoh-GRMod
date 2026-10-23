@@ -6,7 +6,12 @@ manifest installed:
   - still menu: TopMenuController's builder stores, for each model (0 ND filter, 1 HDF), a
     descriptor that is the official one without the other model's item, plus the new line at the
     end of the last page; registers and the rest of the builder as before;
-  - controller plumbing: the factory gets Horizon Correction's id for the new id and every other
+  - 'submenu' form (round 6, as GR IV): the line draws both values' icons; the submenu record 18
+    (a copy of D-Range Correction's record 6 with the two lines On/Off and Style) in a copy of the
+    submenu table, all 5 sites moved; SubMenuController::SetCurrentMenu selects 18 for the new id;
+    the factory and key map give D-Range's id for it and Horizon's for the two list ids, whose
+    records are 118 and 119; each list keeps the other bit of the byte; values 0..3 are all valid;
+  - 'list' form (round 4): controller plumbing: the factory gets Horizon Correction's id for the new id and every other
     id unchanged; the key map read gives Horizon's id for the new id and every other value
     unchanged; SelectMenuController::SetCurrentMenu selects record 118 for the new id and the
     official record for Horizon's;
@@ -32,6 +37,10 @@ if not __debug__:raise RuntimeError('Validation requires Python assertions')
 ROOT=Path(__file__).resolve().parents[2]
 
 NEW,HORIZON=0x020001a0,0x0200007d
+SWITCH,STYLE,D_RANGE=0x020001a1,0x020001a2,0x020000ba
+SUB_SETCUR,SUB_TABLE,SUB_REC,SUB_BYTE=0x531c5950,0x53b3fb10,0x64,0x174
+SUB_SITES=[(0x531c5d18,0x531c5d20,3),(0x531c5d80,0x531c5d88,2),(0x531c60e8,0x531c60f4,8),(0x531c6318,0x531c631c,5),(0x531c63e4,0x531c63f0,3)]
+TWO_ICONS,SUB_ICON=0x5339df08,0x533a6a70
 PTR,OFFSET=0x55063f34,0x9a2
 REC=0x62058000
 BUILDER,MENU_TABLE,STILL=0x5319a778,0x55001eb8,0x53b36dec
@@ -52,6 +61,12 @@ NAMES=['Vkopírování data','Datostempel','Date Imprint','Päiväysleima','Impr
   'Впечатывание даты','拍摄时间戳','Impresión de fecha','Datumstämpel','ประทับวันที่','拍攝時間戳','Tarih baskısı']
 ROWS=[9,2,4,5,16,13,8,11,1,17,3,12,0,7,20,6,14,10,19,15,18]
 SHORT,LONG="'26 10 08",'2026.10.08 17:34'
+def ts_names(name):
+    src=(ROOT/'core/src/fw/aspect/datestamp-menu.ts').read_text()
+    body=re.search(name+r": readonly string\[\] = \[(.*?)\];",src,re.S).group(1)
+    return re.findall(r"'([^']*)'",body)
+ON_OFF,STYLES=ts_names('DATESTAMP_ON_OFF_NAMES'),ts_names('DATESTAMP_STYLE_NAMES')
+assert len(ON_OFF)==len(STYLES)==21
 CFG,ARG,DESC,PLAT=0x558c0000,0x558c0100,0x558c0200,0x558c0f00
 MAIN,PV,TH,LOW=0x63000000,0x63800000,0x63a00000,0x5c000000
 SW,SH,MW,MH=2048,1400,1920,1280
@@ -72,7 +87,7 @@ class DateProbe(AdjProbe):
         R=lambda n:cpu.reg_read(getattr(reg,'UC_ARM_REG_R%d'%n))
         if at==MODEL:ret(cpu,s.model)
         elif at==SPEC:ret(cpu,0x62055000)
-        elif at in (LINE_ICON,TITLE,LIST_ITEM):s.ui.append((at,R(0),R(1),R(2)));ret(cpu,0)
+        elif at in (LINE_ICON,TITLE,LIST_ITEM,TWO_ICONS,SUB_ICON):s.ui.append((at,R(0),R(1),R(2)));ret(cpu,0)
         elif at in (INVALIDATE,CLEAN):ret(cpu)
         elif at==CACHE:ret(cpu,0x5536d1b4)
         elif at==PLATFORM:ret(cpu,PLAT)
@@ -133,39 +148,9 @@ def execute(p,pics):
     assert uc.reg_read(reg.UC_ARM_REG_SP)==STACK and uc.reg_read(reg.UC_ARM_REG_R12)==STACK and uc.reg_read(reg.UC_ARM_REG_LR)==STOP
     return [bytes(uc.mem_read(a,len(b))) for a,b in pics['memory']]
 
-def verify(data,manifest):
-    e=manifest['entries'];ids=manifest['dateImprint'];assert ids
-    p=DateProbe(data,manifest);c=p.uc;calls=0;report={}
+def verify_list(p,data,manifest,official,report):
+    c=p.uc;e=manifest['entries'];ids=manifest['dateImprint'];calls=0
     orig=lambda a,n:data[a-0x53000000:a-0x53000000+n]
-    # 1. Texts and icons.
-    roots=manifest['catalogs']['textRoots']
-    for row,lang in enumerate(ROWS):
-        for tid,text in ((ids['name'],NAMES[lang]),(ids['short'],SHORT),(ids['long'],LONG)):
-            rec=u32(c,u32(c,roots+row*4)+tid*4);units,lines,_,at=struct.unpack('<BBHI',bytes(c.mem_read(rec,8)))
-            assert (units,lines)==(len(text)+1,1) and bytes(c.mem_read(at,units*2)).decode('utf-16le')==text+'\0',(row,tid)
-    icons=bytes.fromhex(manifest['iconAddition']['bytes']);origin=manifest['iconAddition']['originalLength']
-    for k in ('iconShort','iconLong'):
-        w,h,o=struct.unpack('<HHI',bytes(c.mem_read(u32(c,manifest['catalogs']['iconRoot']+ids[k]*4),8)))
-        assert (w,h)==(40,40) and o*4>=origin and o*4-origin+6400<=len(icons)
-    # 2. Still menu per model.
-    still=orig(STILL,0x384)
-    def items(d):return [(struct.unpack_from('<I',d,0x8c+i*8)[0],struct.unpack_from('<I',d,0x1bc+i*4)[0],struct.unpack_from('<I',d,0x254+i*8)[0]) for i in range(38)]
-    official=items(still)
-    for model,drop,firsts in ((0,25,[0,8,16,19,25,30,34]),(1,13,[0,8,15,18,25,30,34])):
-        p.model=model;c.mem_write(MENU_TABLE,struct.pack('<I',STILL))
-        regs=[0x7000+i for i in range(4)]
-        for i,v in enumerate(regs):c.reg_write(getattr(reg,'UC_ARM_REG_R'+str(i)),v)
-        c.reg_write(reg.UC_ARM_REG_SP,STACK);c.reg_write(reg.UC_ARM_REG_LR,STOP);c.reg_write(reg.UC_ARM_REG_R12,0x4444)
-        c.emu_start(BUILDER,BUILDER+4,count=1000);calls+=1
-        assert [c.reg_read(getattr(reg,'UC_ARM_REG_R'+str(i))) for i in range(4)]==regs and c.reg_read(reg.UC_ARM_REG_SP)==STACK
-        assert c.reg_read(reg.UC_ARM_REG_LR)==STOP and c.reg_read(reg.UC_ARM_REG_R12)==STACK  # mov ip,sp re-executed
-        d=bytes(c.mem_read(u32(c,MENU_TABLE),0x384));got=items(d)
-        want=[x for i,x in enumerate(official) if i!=drop]+[(e['dateLine'],NEW,0)]
-        assert got==want,(model,)
-        assert d[0x68]==7 and list(d[0x80:0x87])==firsts and d[0x8b]==38
-        assert d[:0x80]==still[:0x80] and d[0x87:0x8b]==still[0x87:0x8b]   # page titles and the rest unchanged
-        assert all(struct.unpack_from('<I',d,0x8c+i*8+4)[0]==0 for i in range(38))
-    report['menus']={'nd':'official without HDF + date','hdf':'official without ND + date'}
     # 3. Factory, key map, SetCurrentMenu.
     ids_seen=sorted({x[1] for x in official}|{HORIZON,0x020000ba,0x0200013a,0x0200013b,NEW,NEW+1,0x08000000})
     for cid in ids_seen:
@@ -208,6 +193,134 @@ def verify(data,manifest):
     p.setting(1,pointer=False)
     assert [p.call(e['dateIsCurrent'],0,v) for v in range(3)]==[1,0,0];p.call(e['dateSet'],0,2);assert p.byte()==1;calls+=4
     report['list']={'values':3,'stored_normalised':{hex(k):v for k,v in states.items()}}
+    return calls
+
+def verify_submenu(p,data,manifest,official,report):
+    c=p.uc;e=manifest['entries'];ids=manifest['dateImprint'];calls=0
+    orig=lambda a,n:data[a-0x53000000:a-0x53000000+n]
+    pics=manifest.get('pictures')
+    # 3. Factory and key map: the submenu id gets D-Range's, the two list ids Horizon's (and the
+    # pictures' list id, when built), every other id itself.
+    mapped={NEW:D_RANGE,SWITCH:HORIZON,STYLE:HORIZON,**({NEW+3:HORIZON} if pics else {})}
+    seen=sorted({x[1] for x in official}|{HORIZON,D_RANGE,0x0200013a,0x0200013b,NEW,SWITCH,STYLE,NEW+3,NEW+4,0x08000000})
+    for cid in seen:
+        want=mapped.get(cid,cid)
+        c.reg_write(reg.UC_ARM_REG_R0,0x62056000);c.reg_write(reg.UC_ARM_REG_R1,cid);c.reg_write(reg.UC_ARM_REG_SP,STACK)
+        c.emu_start(FACTORY,FACTORY+4,count=80)
+        assert c.reg_read(reg.UC_ARM_REG_R1)==want and c.reg_read(reg.UC_ARM_REG_R3)==0x13b,hex(cid)
+        assert c.reg_read(reg.UC_ARM_REG_R0)==0x62056000 and c.reg_read(reg.UC_ARM_REG_SP)==STACK
+        c.mem_write(0x62057000,struct.pack('<I',cid))
+        assert p.call(e['dateKeys'],0x62057000)==want;calls+=1
+    assert u32(c,KEYREAD)==(0xeb000000|(((e['dateKeys']-(KEYREAD+8))>>2)&0xffffff))
+    # SetCurrentMenu of the lists and of the submenus (patched entries, official paths for the rest).
+    obj=0x62059000
+    lists={SWITCH:118,STYLE:119,HORIZON:44,**({NEW+3:120} if pics else {})}
+    for cid,want in lists.items():
+        c.mem_write(obj,bytes(0x200));p.call(SETCUR,obj,cid);calls+=1
+        assert c.mem_read(obj+0x198,1)[0]==want,(hex(cid),c.mem_read(obj+0x198,1)[0])
+    for cid,want in ((NEW,18),(D_RANGE,6)):
+        c.mem_write(obj,bytes(0x200));p.call(SUB_SETCUR,obj,cid);calls+=1
+        assert c.mem_read(obj+SUB_BYTE,1)[0]==want,(hex(cid),c.mem_read(obj+SUB_BYTE,1)[0])
+    # 4. List table (records 0..117 official, 118 On/Off, 119 Style).
+    table=None
+    for lo,hi,r in SITES:
+        a,b=u32(c,lo),u32(c,hi);va=(a&0xfff)|((a>>4)&0xf000)|(((b&0xfff)|((b>>4)&0xf000))<<16)
+        assert a==movw(r,va&0xffff) and b==movw(r,va>>16,True);table=table or va;assert va==table
+    assert table==e['dateListTable'] and table!=TABLE
+    assert bytes(c.mem_read(table,118*REC_SIZE))==orig(TABLE,118*REC_SIZE)
+    horizon=orig(TABLE+44*REC_SIZE,REC_SIZE)
+    for k,(title,cnt,draw,st,cur) in enumerate(((ids['onOff'],e['dateCount'],e['dateDrawOnOff'],e['dateSetOnOff'],e['dateIsOnOff']),
+                                               (ids['style'],e['dateCount'],e['dateDrawStyle'],e['dateSetStyle'],e['dateIsStyle']))):
+        rec=bytes(c.mem_read(table+(118+k)*REC_SIZE,REC_SIZE));f=struct.unpack('<16I',rec)
+        assert f[0]==0x10000 and f[1]==title and f[2:10]==(cnt,0,draw,0,st,0,cur,0) and not any(f[10:])
+        h=struct.unpack('<16I',horizon);assert h[0]==f[0] and h[3]==f[3]
+    assert p.call(e['dateCount'],0)==2;calls+=1
+    for draw,values in ((e['dateDrawOnOff'],((344,2),(345,1))),(e['dateDrawStyle'],((ids['iconShort'],ids['short']),(ids['iconLong'],ids['long'])))):
+        for v,(icon,text) in enumerate(values):
+            p.ui=[];p.call(draw,0x62056000,0x6205a000,v);calls+=1
+            assert p.ui==[(LIST_ITEM,0x6205a000,icon,text)],(v,p.ui)
+    # Submenu table: records 0..17 official, 18 the date imprint's.
+    st=None
+    for lo,hi,r in SUB_SITES:
+        a,b=u32(c,lo),u32(c,hi);va=(a&0xfff)|((a>>4)&0xf000)|(((b&0xfff)|((b>>4)&0xf000))<<16)
+        assert a==movw(r,va&0xffff) and b==movw(r,va>>16,True);st=st or va;assert va==st
+    assert st==e['submenuTable'] and st!=SUB_TABLE
+    assert bytes(c.mem_read(st,18*SUB_REC))==orig(SUB_TABLE,18*SUB_REC)
+    drange=orig(SUB_TABLE+6*SUB_REC,SUB_REC);rec=bytes(c.mem_read(st+18*SUB_REC,SUB_REC))
+    want=bytearray(drange);struct.pack_into('<H',want,2,ids['name']);struct.pack_into('<HH',want,8,ids['onOff'],ids['style'])
+    struct.pack_into('<II',want,0x14,SWITCH,STYLE);struct.pack_into('<4I',want,0x3c,e['dateLineOnOff'],0,e['dateLineStyle'],0)
+    assert rec==bytes(want) and rec[6]==2 and struct.unpack_from('<I',rec,0x1c)[0]==0x10000000
+    assert u32(c,SUB_SETCUR)==(0xea000000|(((e['submenuSetCurrent']-(SUB_SETCUR+8))>>2)&0xffffff))
+    # Every stored value: lists have exactly one current value, the lines show both values.
+    states={}
+    for stored in (0,1,2,3,4,7,0xff):
+        norm=stored if stored<=3 else 0
+        p.setting(stored);sw=[p.call(e['dateIsOnOff'],0,v) for v in range(2)];calls+=2
+        assert sw==[int(norm&1==0),int(norm&1==1)] and p.byte()==norm,(stored,sw)
+        p.setting(stored);sy=[p.call(e['dateIsStyle'],0,v) for v in range(2)];calls+=2
+        assert sy==[int(norm&2==0),int(norm&2==2)] and p.byte()==norm,(stored,sy)
+        on=345 if norm&1 else 344;style=ids['iconLong'] if norm&2 else ids['iconShort']
+        p.ui=[];p.setting(stored);p.call(e['dateLine'],0x62056000,0x6205b000);calls+=1
+        assert p.ui==[(TWO_ICONS,0x6205b000,on,style),(TITLE,0x6205b000,ids['name'],ids['name'])],(stored,p.ui)
+        p.ui=[];p.setting(stored);p.call(e['dateLineOnOff'],0x62056000,0x6205b000);calls+=1
+        assert [u[:3] for u in p.ui]==[(SUB_ICON,0x6205b000,on)],(stored,p.ui)
+        p.ui=[];p.setting(stored);p.call(e['dateLineStyle'],0x62056000,0x6205b000);calls+=1
+        assert [u[:3] for u in p.ui]==[(SUB_ICON,0x6205b000,style)],(stored,p.ui)
+        states[stored]=norm
+    # Setting one list keeps the other's bit; values past the list and a missing record do nothing.
+    for start in range(4):
+        for v in range(2):
+            p.setting(start);p.call(e['dateSetOnOff'],0,v);assert p.byte()==(start&2)|v;calls+=1
+            p.setting(start);p.call(e['dateSetStyle'],0,v);assert p.byte()==(start&1)|(v<<1);calls+=1
+        for bad in (2,3,0xffffffff):
+            p.setting(start);p.call(e['dateSetOnOff'],0,bad);p.call(e['dateSetStyle'],0,bad);assert p.byte()==start;calls+=2
+    p.setting(9);p.call(e['dateSetOnOff'],0,1);assert p.byte()==1;calls+=1   # a stray value is reset first
+    p.setting(3,pointer=False)
+    assert [p.call(e['dateIsOnOff'],0,v) for v in range(2)]==[1,0] and [p.call(e['dateIsStyle'],0,v) for v in range(2)]==[1,0];calls+=4
+    p.call(e['dateSetOnOff'],0,1);p.call(e['dateSetStyle'],0,1);assert p.byte()==3;calls+=2
+    p.ui=[];p.call(e['dateLine'],0x62056000,0x6205b000);assert p.ui[0]==(TWO_ICONS,0x6205b000,344,ids['iconShort']);calls+=1
+    report['submenu']={'record':18,'lists':[118,119],'values':4,'stored_normalised':{hex(k):v for k,v in states.items()}}
+    return calls
+
+def verify(data,manifest):
+    e=manifest['entries'];ids=manifest['dateImprint'];assert ids
+    p=DateProbe(data,manifest);c=p.uc;calls=0;report={}
+    sub=ids.get('form')=='submenu';assert ids.get('form','list') in ('list','submenu')
+    orig=lambda a,n:data[a-0x53000000:a-0x53000000+n]
+    # 1. Texts and icons.
+    roots=manifest['catalogs']['textRoots']
+    for row,lang in enumerate(ROWS):
+        extra=((ids['onOff'],ON_OFF[lang]),(ids['style'],STYLES[lang])) if sub else ()
+        for tid,text in ((ids['name'],NAMES[lang]),(ids['short'],SHORT),(ids['long'],LONG))+extra:
+            rec=u32(c,u32(c,roots+row*4)+tid*4);units,lines,_,at=struct.unpack('<BBHI',bytes(c.mem_read(rec,8)))
+            assert (units,lines)==(len(text)+1,1) and bytes(c.mem_read(at,units*2)).decode('utf-16le')==text+'\0',(row,tid)
+    icons=bytes.fromhex(manifest['iconAddition']['bytes']);origin=manifest['iconAddition']['originalLength']
+    for k in ('iconShort','iconLong'):
+        w,h,o=struct.unpack('<HHI',bytes(c.mem_read(u32(c,manifest['catalogs']['iconRoot']+ids[k]*4),8)))
+        assert (w,h)==(40,40) and o*4>=origin and o*4-origin+6400<=len(icons)
+    # 2. Still menu per model.
+    still=orig(STILL,0x384)
+    def items(d):return [(struct.unpack_from('<I',d,0x8c+i*8)[0],struct.unpack_from('<I',d,0x1bc+i*4)[0],struct.unpack_from('<I',d,0x254+i*8)[0]) for i in range(38)]
+    official=items(still)
+    for model,drop,firsts in ((0,25,[0,8,16,19,25,30,34]),(1,13,[0,8,15,18,25,30,34])):
+        p.model=model;c.mem_write(MENU_TABLE,struct.pack('<I',STILL))
+        regs=[0x7000+i for i in range(4)]
+        for i,v in enumerate(regs):c.reg_write(getattr(reg,'UC_ARM_REG_R'+str(i)),v)
+        c.reg_write(reg.UC_ARM_REG_SP,STACK);c.reg_write(reg.UC_ARM_REG_LR,STOP);c.reg_write(reg.UC_ARM_REG_R12,0x4444)
+        c.emu_start(BUILDER,BUILDER+4,count=1000);calls+=1
+        assert [c.reg_read(getattr(reg,'UC_ARM_REG_R'+str(i))) for i in range(4)]==regs and c.reg_read(reg.UC_ARM_REG_SP)==STACK
+        assert c.reg_read(reg.UC_ARM_REG_LR)==STOP and c.reg_read(reg.UC_ARM_REG_R12)==STACK  # mov ip,sp re-executed
+        d=bytes(c.mem_read(u32(c,MENU_TABLE),0x384));got=items(d)
+        want=[x for i,x in enumerate(official) if i!=drop]+[(e['dateLine'],NEW,0)]
+        assert got==want,(model,)
+        assert d[0x68]==7 and list(d[0x80:0x87])==firsts and d[0x8b]==38
+        assert d[:0x80]==still[:0x80] and d[0x87:0x8b]==still[0x87:0x8b]   # page titles and the rest unchanged
+        assert all(struct.unpack_from('<I',d,0x8c+i*8+4)[0]==0 for i in range(38))
+    report['menus']={'nd':'official without HDF + date','hdf':'official without ND + date'}
+    if sub:
+        calls+=verify_submenu(p,data,manifest,official,report)
+    else:
+        calls+=verify_list(p,data,manifest,official,report)
     # 5. Pictures: the same as GR IV's module, for every setting value.
     pics=pictures();base=[b for _,b in pics['memory']];results={}
     for stored,pointer in ((0,True),(1,True),(2,True),(3,True),(7,True),(1,False)):

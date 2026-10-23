@@ -18,8 +18,19 @@
  * as GR IV); any other value counts as, and is reset to, off.
  *
  * The menu: one line "Date Imprint" at the end of the still menu's last page (Shooting Assist,
- * after Horizon Correction), opening a list of three values: Off / '26 10 22 / 2026.10.22 17:34.
- * (GR IV has a submenu with two lists; one list is enough and needs no submenu record.)
+ * after Horizon Correction). Two forms:
+ *  - 'submenu' (round 6, as GR IV's datestamp-menu.ts): the line shows two icons (on/off, style)
+ *    and opens a submenu like D-Range Correction's (SubMenuController, record 6) with two lines,
+ *    each a list of two values: On/Off (Off / On) and Style ('26 10 08 / 2026.10.08 17:34). The
+ *    byte holds bit 0 on and bit 1 long, so all four values 0..3 are valid.
+ *  - 'list' (round 4, camera-tested; kept so those files are recognised): one list of three
+ *    values Off / short / long (bytes 0, 1, 3).
+ *  - Submenu records (0x64 bytes: +2 title, +6 line count, +8.. line texts, +0x14.. line
+ *    controller ids, +0x3c.. line value draw functions) in a table of 17 at 0x53b3fb10 addressed
+ *    from 5 places; copied with the added records from 18 on (17 is the constructor's start value,
+ *    0x531c66ac); SetCurrentMenu (0x531c5950, record byte +0x174) maps the new ids to them. The
+ *    factory hands out the submenu controller (D-Range's id 0x020000ba) for a new submenu id and
+ *    the key map gives it D-Range's keys.
  *
  *  - Still menu. TopMenuController's builder (0x5319a778) reads the five tab descriptors
  *    (0x384 bytes) from the table at 0x55001eb8; the still descriptor (0x53b36dec) already has
@@ -91,7 +102,23 @@ export interface Gr3xDateProgram {
   word(address: number): number;
   read(address: number, size: number): Uint8Array;
 }
-export interface Gr3xDateIds { name: number; short: number; long: number; iconShort: number; iconLong: number }
+export interface Gr3xDateIds {
+  name: number; short: number; long: number; iconShort: number; iconLong: number;
+  /** 'submenu' form only: the line names On/Off and Style. */
+  onOff?: number; style?: number;
+}
+export type Gr3xDateForm = 'list' | 'submenu';
+export const GR3X_DATE_SWITCH_ID = 0x020001a1;
+export const GR3X_DATE_STYLE_ID = 0x020001a2;
+const D_RANGE_ID = 0x020000ba, D_RANGE_RECORD = 6;
+const SUB_SET_CURRENT = 0x531c5950, SUB_RECORD_BYTE = 0x174;
+const SUB_TABLE = 0x53b3fb10, SUB_RECORD = 0x64, SUB_RECORDS = 17, SUB_CONSTRUCTOR_START = 0x531c66ac;
+export const GR3X_SUB_FIRST_RECORD = SUB_RECORDS + 1;
+const SUB_SITES: readonly (readonly [number, number, number])[] = [
+  [0x531c5d18, 0x531c5d20, 3], [0x531c5d80, 0x531c5d88, 2], [0x531c60e8, 0x531c60f4, 8], [0x531c6318, 0x531c631c, 5], [0x531c63e4, 0x531c63f0, 3],
+];
+const TOP_SET_TWO_ICONS = 0x5339df08, SUB_SET_ICON = 0x533a6a70;
+const ICON_ON = 345, TEXT_ON = 1;
 
 const lo = (v: number) => v & 0xffff, hi = (v: number) => v >>> 16;
 const fail = (message: string): never => { throw new FirmwareError('unexpected-layout', message); };
@@ -102,6 +129,10 @@ const bl = (at: number, target: number) => (0xeb000000 | (((target - (at + 8)) >
  * (and stored back as 0). Flags are not kept. `n` makes the label unique. */
 const load = (n: string) => `movw r2,#${lo(GR3X_DATE_SETTINGS_POINTER)};movt r2,#${hi(GR3X_DATE_SETTINGS_POINTER)};ldr r2,[r2];mov r3,#0;
   cmp r2,#0;beq ld${n};ldrb r3,[r2,#${GR3X_DATE_OFFSET}];cmp r3,#1;cmpne r3,#3;movne r3,#0;strbne r3,[r2,#${GR3X_DATE_OFFSET}];ld${n}:`;
+
+/** As `load`, for the submenu form: 0..3 kept, anything above 3 stored back as 0. */
+const load4 = (n: string) => `movw r2,#${lo(GR3X_DATE_SETTINGS_POINTER)};movt r2,#${hi(GR3X_DATE_SETTINGS_POINTER)};ldr r2,[r2];mov r3,#0;
+  cmp r2,#0;beq ld${n};ldrb r3,[r2,#${GR3X_DATE_OFFSET}];cmp r3,#3;movhi r3,#0;strbhi r3,[r2,#${GR3X_DATE_OFFSET}];ld${n}:`;
 
 export function gr3xDateModule(): Uint8Array {
   const raw = Uint8Array.from(atob(GR3X_DATESTAMP_CODE), c => c.charCodeAt(0));
@@ -135,8 +166,10 @@ export function installGr3xDateImprintMenu(p: Gr3xDateProgram, ids: Gr3xDateIds)
  * shutdown.ts), in that order as list records 118 and up. With the date imprint alone the bytes
  * are those of round 4 (camera-tested): the pictures' parts are only added when there are pictures.
  */
-export function installGr3xMenuAdditions(p: Gr3xDateProgram, o: { date?: Gr3xDateIds; picture?: Gr3xPictureIds }) {
+export function installGr3xMenuAdditions(p: Gr3xDateProgram, o: { date?: Gr3xDateIds; dateForm?: Gr3xDateForm; picture?: Gr3xPictureIds }) {
   const ids = o.date;
+  const sub = !!ids && o.dateForm === 'submenu';
+  if (sub && (ids!.onOff === undefined || ids!.style === undefined)) fail('IIIx date imprint submenu texts');
   if (!ids && !o.picture) fail('no IIIx menu additions');
   // --- Checks of the official code and data this relies on.
   const guards: readonly (readonly [number, number])[] = [
@@ -147,6 +180,8 @@ export function installGr3xMenuAdditions(p: Gr3xDateProgram, o: { date?: Gr3xDat
     [SELECT_CONSTRUCTOR_START, 0xe3a0e075], // mov lr,#117: the list constructor starts with record 117
     [SELECT_SCAN_END, 0xe2847d75], // add r7,r4,#0x1d40: the longest-list scan ends 117 records on
     [APP, 0xe1a0c00d], [SPEC_MODEL, 0xe1a0c00d], [LINE_VALUE_ICON, 0xe1a0c00d], [TOP_SET_TITLE, 0xe1a0c00d], [LIST_SET_ITEM, 0xe1a0c00d],
+    ...(sub ? [[SUB_SET_CURRENT, 0xe28134fe], [SUB_SET_CURRENT + 4, 0xe1a0c00d], [SUB_CONSTRUCTOR_START, 0xe3a02011], // mov r2,#17
+      [TOP_SET_TWO_ICONS, 0xe1a0c00d], [SUB_SET_ICON, 0xe1a0c00d]] as const : []),
   ];
   for (const [at, w] of guards) if (p.word(at) !== w >>> 0) fail(`IIIx date imprint menu guard at ${at.toString(16)}`);
   const still = p.read(STILL_MENU, DESCRIPTOR), dv = new DataView(still.buffer);
@@ -176,7 +211,38 @@ export function installGr3xMenuAdditions(p: Gr3xDateProgram, o: { date?: Gr3xDat
   const lists: { id: number; title: number; count: number; draw: number; set: number; isCurrent: number }[] = [];
   const entries: Record<string, number> = {};
   let line = 0;
-  if (ids) {
+  const submenus: { id: number; record: Uint8Array }[] = [];
+  if (ids && sub) {
+    const I = ids;
+    // --- The line of the still menu: both values' icons (on/off, style) and the name.
+    line = p.code(`push {r4,lr};mov r4,r1;${load4('a')}
+      tst r3,#1;movweq r1,#${ICON_OFF};movwne r1,#${ICON_ON};tst r3,#2;movweq r2,#${I.iconShort};movwne r2,#${I.iconLong};
+      mov r0,r4;bl #${TOP_SET_TWO_ICONS};mov r0,r4;movw r1,#${I.name};mov r2,r1;pop {r4,lr};b #${TOP_SET_TITLE};`);
+    // --- Submenu lines: the icon of the current value (this = r0, line = r1).
+    const lineOnOff = p.code(`${load4('b')}mov r0,r1;tst r3,#1;movweq r1,#${ICON_OFF};movwne r1,#${ICON_ON};b #${SUB_SET_ICON};`);
+    const lineStyle = p.code(`${load4('c')}mov r0,r1;tst r3,#2;movweq r1,#${I.iconShort};movwne r1,#${I.iconLong};b #${SUB_SET_ICON};`);
+    // --- The two lists (this = r0; draw: item r1, value r2; set / is current: value r1).
+    const count = p.code('mov r0,#2;bx lr;');
+    const drawOnOff = p.code(`mov r0,r1;cmp r2,#0;movweq r1,#${ICON_OFF};moveq r2,#${TEXT_OFF};movwne r1,#${ICON_ON};movne r2,#${TEXT_ON};b #${LIST_SET_ITEM};`);
+    const setOnOff = p.code(`cmp r1,#1;bxhi lr;push {r4};mov r4,r1;${load4('d')}cmp r2,#0;beq so;bic r3,r3,#1;orr r3,r3,r4;strb r3,[r2,#${GR3X_DATE_OFFSET}];so:pop {r4};bx lr;`);
+    const isOnOff = p.code(`${load4('e')}and r3,r3,#1;cmp r3,r1;moveq r0,#1;movne r0,#0;bx lr;`);
+    const drawStyle = p.code(`mov r0,r1;cmp r2,#0;movweq r1,#${I.iconShort};movweq r2,#${I.short};movwne r1,#${I.iconLong};movwne r2,#${I.long};b #${LIST_SET_ITEM};`);
+    const setStyle = p.code(`cmp r1,#1;bxhi lr;push {r4};mov r4,r1;${load4('f')}cmp r2,#0;beq ss;bic r3,r3,#2;cmp r4,#0;orrne r3,r3,#2;strb r3,[r2,#${GR3X_DATE_OFFSET}];ss:pop {r4};bx lr;`);
+    const isStyle = p.code(`cmp r1,#1;movhi r0,#0;bxhi lr;${load4('g')}and r3,r3,#2;cmp r1,#0;movne r1,#2;cmp r3,r1;moveq r0,#1;movne r0,#0;bx lr;`);
+    lists.push({ id: GR3X_DATE_SWITCH_ID, title: I.onOff!, count, draw: drawOnOff, set: setOnOff, isCurrent: isOnOff });
+    lists.push({ id: GR3X_DATE_STYLE_ID, title: I.style!, count, draw: drawStyle, set: setStyle, isCurrent: isStyle });
+    const tpl = p.read(SUB_TABLE + D_RANGE_RECORD * SUB_RECORD, SUB_RECORD), tv = new DataView(tpl.buffer);
+    if (tv.getUint16(2, true) !== 337 || tpl[6] !== 2 || tv.getUint32(0x14, true) !== 0x02000077 || tv.getUint32(0x18, true) !== 0x02000078 ||
+      tv.getUint32(0x1c, true) !== 0x10000000 || [0x40, 0x48, 0x4c, 0x50, 0x54, 0x58, 0x5c, 0x60].some(o => tv.getUint32(o, true) !== 0))
+      fail('IIIx D-Range Correction submenu record');
+    const record = tpl.slice(), rv = new DataView(record.buffer);
+    rv.setUint16(2, I.name, true); rv.setUint16(8, I.onOff!, true); rv.setUint16(10, I.style!, true);
+    rv.setUint32(0x14, GR3X_DATE_SWITCH_ID, true); rv.setUint32(0x18, GR3X_DATE_STYLE_ID, true);
+    rv.setUint32(0x3c, lineOnOff, true); rv.setUint32(0x40, 0, true); rv.setUint32(0x44, lineStyle, true); rv.setUint32(0x48, 0, true);
+    submenus.push({ id: GR3X_DATE_MENU_ID, record });
+    Object.assign(entries, { dateLine: line, dateLineOnOff: lineOnOff, dateLineStyle: lineStyle, dateCount: count,
+      dateDrawOnOff: drawOnOff, dateSetOnOff: setOnOff, dateIsOnOff: isOnOff, dateDrawStyle: drawStyle, dateSetStyle: setStyle, dateIsStyle: isStyle });
+  } else if (ids) {
     // --- The line of the still menu: the current value's icon and the name.
     const icon = (dst: string, n: string) => `cmp r3,#1;movwlo ${dst},#${ICON_OFF};beq i${n}s;bhi i${n}l;b i${n}d;
       i${n}s:movw ${dst},#${ids.iconShort};b i${n}d;i${n}l:movw ${dst},#${ids.iconLong};i${n}d:`;
@@ -214,6 +280,20 @@ export function installGr3xMenuAdditions(p: Gr3xDateProgram, o: { date?: Gr3xDat
     moveq r3,#${GR3X_DATE_RECORD + k};strbeq r3,[r0,#${SELECT_RECORD_BYTE}];bxeq lr;`).join('') + `
     add r3,r1,#0xfe000000;b #${SELECT_SET_CURRENT + 4};`);
   p.patch(SELECT_SET_CURRENT, 0xe28134fe, branchWord(SELECT_SET_CURRENT, current), o.picture ? `${what}: list record` : 'date imprint: list record');
+  if (submenus.length) {
+    for (const [low, high, r] of SUB_SITES)
+      if (p.word(low) !== movWord(r, lo(SUB_TABLE)) || p.word(high) !== movWord(r, hi(SUB_TABLE), true)) fail('IIIx submenu table site');
+    const subTable = p.append(new Uint8Array([...p.read(SUB_TABLE, GR3X_SUB_FIRST_RECORD * SUB_RECORD), ...submenus.flatMap(m => [...m.record])]));
+    for (const [low, high, r] of SUB_SITES) {
+      p.patch(low, movWord(r, lo(SUB_TABLE)), movWord(r, lo(subTable)), 'added menus: submenu records, low half');
+      p.patch(high, movWord(r, hi(SUB_TABLE), true), movWord(r, hi(subTable), true), 'added menus: submenu records, high half');
+    }
+    const subCurrent = p.code(submenus.map((m, k) => `movw ip,#${lo(m.id)};movt ip,#${hi(m.id)};cmp r1,ip;
+      moveq r3,#${GR3X_SUB_FIRST_RECORD + k};strbeq r3,[r0,#${SUB_RECORD_BYTE}];bxeq lr;`).join('') + `
+      add r3,r1,#0xfe000000;b #${SUB_SET_CURRENT + 4};`);
+    p.patch(SUB_SET_CURRENT, 0xe28134fe, branchWord(SUB_SET_CURRENT, subCurrent), 'added menus: submenu record');
+    Object.assign(entries, { submenuTable: subTable, submenuSetCurrent: subCurrent });
+  }
 
   if (ids) {
     // --- Two still-menu descriptors, one per model.
@@ -245,11 +325,12 @@ export function installGr3xMenuAdditions(p: Gr3xDateProgram, o: { date?: Gr3xDat
   if (o.picture) Object.assign(entries, installGr3xPictureSetupLine(p, entries.pictureLine));
 
   // --- Controller ids: Horizon Correction's list controller and key map.
-  const factory = p.code(lists.map(l => `movw ip,#${lo(l.id)};movt ip,#${hi(l.id)};cmp r1,ip;
-    movweq r1,#${lo(HORIZON_ID)};movteq r1,#${hi(HORIZON_ID)};`).join('') + `movw r3,#0x13b;b #${FACTORY + 4};`);
+  const mapped = [...lists.map(l => [l.id, HORIZON_ID] as const), ...submenus.map(m => [m.id, D_RANGE_ID] as const)];
+  const factory = p.code(mapped.map(([id, to]) => `movw ip,#${lo(id)};movt ip,#${hi(id)};cmp r1,ip;
+    movweq r1,#${lo(to)};movteq r1,#${hi(to)};`).join('') + `movw r3,#0x13b;b #${FACTORY + 4};`);
   p.patch(FACTORY, movWord(3, 0x13b), branchWord(FACTORY, factory), o.picture ? `${what}: list controller` : 'date imprint: list controller');
-  const keys = p.code('ldr r0,[r0];' + lists.map(l => `movw ip,#${lo(l.id)};movt ip,#${hi(l.id)};cmp r0,ip;
-    movweq r0,#${lo(HORIZON_ID)};movteq r0,#${hi(HORIZON_ID)};`).join('') + 'bx lr;');
+  const keys = p.code('ldr r0,[r0];' + mapped.map(([id, to]) => `movw ip,#${lo(id)};movt ip,#${hi(id)};cmp r0,ip;
+    movweq r0,#${lo(to)};movteq r0,#${hi(to)};`).join('') + 'bx lr;');
   p.patch(KEY_MAP_READ, bl(KEY_MAP_READ, CURRENT_ID_GETTER), bl(KEY_MAP_READ, keys), o.picture ? `${what}: key map of the lists` : 'date imprint: key map of the list');
   void assembleWords;
   return { ...entries, dateListTable: table, dateSetCurrent: current, dateFactory: factory, dateKeys: keys };

@@ -92,16 +92,18 @@ def verify(data,manifest):
     assert want[10][1]==0x020000ad and want[37][1]==0x10000000
     report['setup']='official + picture line after End Screen'
     # 3. Controller plumbing.
-    for cid in sorted({x[1] for x in items(official,30)}|{HORIZON,PIC_ID,DATE_ID,PIC_ID+1,0x08000000}):
+    sub=bool(date) and manifest['dateImprint'].get('form')=='submenu'
+    dmap={DATE_ID:0x020000ba,DATE_ID+1:HORIZON,DATE_ID+2:HORIZON} if sub else ({DATE_ID:HORIZON} if date else {})
+    for cid in sorted({x[1] for x in items(official,30)}|{HORIZON,PIC_ID,DATE_ID,DATE_ID+1,DATE_ID+2,PIC_ID+1,0x08000000}):
         c.reg_write(reg.UC_ARM_REG_R0,0x62056000);c.reg_write(reg.UC_ARM_REG_R1,cid);c.reg_write(reg.UC_ARM_REG_SP,STACK)
         c.emu_start(FACTORY,FACTORY+4,count=80)
-        mapped=HORIZON if cid==PIC_ID or (date and cid==DATE_ID) else cid
+        mapped=HORIZON if cid==PIC_ID else dmap.get(cid,cid)
         assert c.reg_read(reg.UC_ARM_REG_R1)==mapped and c.reg_read(reg.UC_ARM_REG_R3)==0x13b,hex(cid)
         c.mem_write(0x62057000,struct.pack('<I',cid))
         assert p.call(e['dateKeys'],0x62057000)==mapped;calls+=1
-    record=118+(1 if date else 0)
+    record=118+((2 if sub else 1) if date else 0)
     obj=0x62059000
-    for cid,want_rec in ((PIC_ID,record),(HORIZON,44))+(((DATE_ID,118),) if date else ()):
+    for cid,want_rec in ((PIC_ID,record),(HORIZON,44))+((((DATE_ID+1,118),(DATE_ID+2,119)) if sub else ((DATE_ID,118),)) if date else ()):
         c.mem_write(obj,bytes(0x200));p.call(SETCUR,obj,cid);calls+=1
         assert c.mem_read(obj+0x198,1)[0]==want_rec
     table=e['dateListTable']

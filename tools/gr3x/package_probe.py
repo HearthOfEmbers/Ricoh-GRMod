@@ -142,6 +142,7 @@ def verify(original,new,manifest,build,reference):
         expected={'schema':1,'ratios':[{'ratio':m.ratios[i],'name':m.names[i]} for i,_,_ in m.custom]}
         if manifest.get('adjSoftFocus'):expected['adjSoftFocus']=True
         if manifest.get('dateImprint'):expected['dateImprint']=True
+        if manifest.get('dateImprint') and manifest['dateImprint'].get('form')=='submenu':expected['dateMenu']='submenu'
         if manifest.get('pictures'):expected['pictures']=build['pictures']
         assert recipe==expected,recipe
         padding=start+length
