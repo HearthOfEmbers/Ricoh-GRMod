@@ -18,7 +18,7 @@
  * the encoder. Pictures of another format or of odd sizes are left alone.
  *
  * `setting` is the address of one byte: bit 0 on, bit 1 the long style ("2026.10.08 17:34"
- * instead of "'26 10 08"); a value above 3 counts as off. The imprint is orange (light only on a
+ * instead of "'26 10 08"), bit 2 (0.8.3) "Follow Orientation" off; a value above 7 counts as off. The imprint is orange (light only on a
  * black-and-white photo). The camera menu entry that sets the byte is in `datestamp-menu.ts`.
  *
  * Orientation (0.8.3): a photo taken with the camera held upright or upside down is stored as the
@@ -54,6 +54,12 @@ export const DATESTAMP_BYTE = 0x55084dd8 + 4 + 0x94b;
 /** Bits of the setting byte. */
 export const DATESTAMP_ON = 1;
 export const DATESTAMP_LONG = 2;
+/**
+ * 0.8.3: "Follow Orientation" Off: the imprint always goes where it went up to 0.8.2 (bottom right
+ * of the picture as stored), whatever the camera's direction. Set means Off, so that a byte from
+ * an earlier firmware (0..3) reads as On.
+ */
+export const DATESTAMP_AS_STORED = 4;
 
 function fail(code: string, message: string): never {
   throw new FirmwareError(code, message);

@@ -17,6 +17,10 @@ Checks, for L / M / S / XS of 3:2, 4:3, 16:9, 1:1 and the added XPan (65:24) and
     black bars of the screennail / thumbnail round differently); inside the photo area; orange; and
     nothing else in the picture changed.
 
+  - the menu's "Follow Orientation" Off (bit 2 of the setting byte): as stored whatever the
+    orientation word holds (the same pictures as orientation 0 and as 0.8.2); bytes above 7 draw
+    nothing.
+
     python3 orient_check.py [--old OLD_datestamp-code.ts] [OUTDIR]
 
 Needs the Python packages unicorn and Pillow (Pillow only with OUTDIR).
@@ -338,6 +342,29 @@ def main():
                             v = shown(crop(gy, box), o)
                             Image.frombytes('L', (len(v[0]), len(v)), b''.join(v)).save(outdir / f'{rname.replace(":", "x")}_{SIZES[si]}_o{o}_{which}.png')
         print(rname, 'orientations done', flush=True)
+    # 3. the menu's "Follow Orientation" Off (bit 2 of the setting byte, 0.8.3): as stored, exactly
+    #    as orientation 0 / the 0.8.2 module, whatever the orientation word says; bytes above 7 off.
+    for rname, sizes in RATIOS[:1] + RATIOS[4:5]:
+        for main_wh in sizes[:2]:
+            for setting in (1, 3):
+                flat = run(CODE, setting, main_wh, sizes[0], look=0x10000 | 11, orient=0x100)
+                for o in (1, 2, 3):
+                    off_ = run(CODE, setting | 4, main_wh, sizes[0], look=0x10000 | 11, orient=0x100 | o)
+                    for k in ('main_buf', 'sn_buf', 'th_buf'):
+                        checks += 1
+                        if off_[k] != flat[k]:
+                            failures.append(f'Follow Orientation off: {rname} {main_wh} setting {setting} orientation {o} {k} differs from as stored')
+                if old:
+                    o82 = run(old, setting, main_wh, sizes[0], look=0x10000 | 11)
+                    checks += 1
+                    if o82['main_buf'] != flat['main_buf']:
+                        failures.append(f'as stored differs from 0.8.2: {rname} {main_wh} setting {setting}')
+    for setting in (4, 6, 8, 9, 0x80, 0xff):
+        r = run(CODE, setting, (4944, 3296), (6192, 4128), look=0x10000 | 11, orient=0x103)
+        checks += 1
+        if r['main_buf'] != run(CODE, 0, (4944, 3296), (6192, 4128), look=0x10000 | 11, orient=0x103)['main_buf']:
+            failures.append(f'setting {setting:#x} drew something')
+    print('Follow Orientation off and other setting values done', flush=True)
     print('no imprint (does not fit the photo, as on the upright picture of that shape):', len(skipped), skipped[:8])
     print(f'{checks} checks;', 'FAILED:\n  ' + '\n  '.join(failures[:60]) if failures else 'all passed')
     sys.exit(1 if failures else 0)

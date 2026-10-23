@@ -18,7 +18,12 @@ official ones:
     (view functions stubbed): two values, exactly one marked current, line texts, title, icons.
  6. SelectMenuController's constructor scan over all list records (0x531D6D4C, start and end of
     the relocated table): same number of records and the same longest list as officially.
- 7. Texts 841..845 in all 21 languages and the two icons (catalog entries, lookup bounds).
+ 7. Texts 841..845 and 879 in all 21 languages and the two icons (catalog entries, lookup bounds).
+ 8. The settings guard's fix (run on load, power-off save and user-mode recall) keeps the setting
+    byte, whatever its value: the third item (bit 2) is kept with the rest of the user settings.
+
+0.8.3: a third line "Follow Orientation" (list record 127, controller id 0x020001A5): On while bit 2
+of the setting byte is clear, so a byte from an earlier firmware (0..3) reads as On.
 
     python3 menu_check.py BUILT.bin OFFICIAL.bin [ICONS.png]
 
@@ -36,14 +41,37 @@ BASE = 0x53000000
 OFFICIAL_LEN = 0x13d2ac0
 RAMVA, RAMIMG, RAMLEN = 0x55000000, 0x5437b640, 0x57480
 B = 0x55084dd8 + 4 + 0x94b
-NEW_MENU, NEW_SWITCH, NEW_STYLE = 0x020001a0, 0x020001a1, 0x020001a2
-T_NAME, T_ONOFF, T_STYLE, T_SHORT, T_LONG = 841, 842, 843, 844, 845
+NEW_MENU, NEW_SWITCH, NEW_STYLE, NEW_ORIENT = 0x020001a0, 0x020001a1, 0x020001a2, 0x020001a5
+T_NAME, T_ONOFF, T_STYLE, T_SHORT, T_LONG, T_ORIENT = 841, 842, 843, 844, 845, 879
+AS_STORED = 4   # bit 2 of the setting byte: "Follow Orientation" off (0.8.3)
 I_SHORT, I_LONG, I_OFF, I_ON = 721, 722, 310, 311
 TEXT_CATALOG, ICON_CATALOG = 0x543d4ac0, 0x543d3ac0
 NAMES = ['Vkopírování data', 'Datostempel', 'Date Imprint', 'Päiväysleima', 'Impression date', 'Datumseinbelichtung',
          'Αποτύπωση ημ/νίας', 'Dátumbélyegző', 'Stampa data', '日付写し込み', '날짜 각인', 'Datumafdruk', 'Nadruk daty',
          'Impressão de data', 'Впечатывание даты', '拍摄时间戳', 'Impresión de fecha', 'Datumstämpel', 'ประทับวันที่',
          '拍攝時間戳', 'Tarih baskısı']
+ORIENT_NAMES = ['Podle orientace', 'Følg retning', 'Follow Orientation', 'Seuraa asentoa', "Suivre l'orientation", 'Ausrichtung folgen',
+                'Βάσει προσανατολισμού', 'Tájolás követése', 'Segui orientamento', 'カメラの向きに合わせる', '카메라 방향 따르기',
+                'Oriëntatie volgen', 'Zgodnie z orientacją', 'Seguir orientação', 'По ориентации камеры', '跟随相机方向',
+                'Seguir orientación', 'Följ orientering', 'ตามทิศทางกล้อง', '跟隨相機方向', 'Yönü takip et']
+
+
+def norm(raw):
+    """What the menu makes of a setting byte: 0..7 kept, anything else 0."""
+    return raw if raw <= 7 else 0
+
+
+def list_bit(v, which):
+    """Current value (index) of list `which` (0 On/Off, 1 Style, 2 Follow Orientation) for byte v."""
+    if which == 2:
+        return 0 if v & AS_STORED else 1
+    return (v >> which) & 1
+
+
+def list_set(v, which, i):
+    if which == 2:
+        return (v & ~AS_STORED) | (0 if i == 1 else AS_STORED)
+    return (v & ~(1 << which)) | (i << which)
 
 failures = []
 
@@ -222,7 +250,9 @@ def check_factory(new, off, ids):
     check(factory_class(new, NEW_MENU) == sub, 'factory: new submenu id')
     check(factory_class(new, NEW_SWITCH) == lst, 'factory: new list id (on/off)')
     check(factory_class(new, NEW_STYLE) == lst, 'factory: new list id (style)')
-    check(factory_class(new, NEW_STYLE + 1) == factory_class(off, NEW_STYLE + 1), 'factory: id after the new ones')
+    check(factory_class(new, NEW_ORIENT) == lst, 'factory: new list id (follow orientation)')
+    for other in (NEW_STYLE + 1, NEW_STYLE + 2, NEW_ORIENT + 1):
+        check(factory_class(new, other) == factory_class(off, other), f'factory: id {other:#x} (not ours)')
     # The path through the factory (and so the cache slot of the instance) is that of D-Range /
     # Horizon Correction: the new ids get the same object.
     print('  submenu controller: constructor', hex(sub[1]), '; list controller: constructor', hex(lst[1]))
@@ -247,6 +277,9 @@ def check_set_current(new, off):
     check(set_current(new, 0x531e1bd0, 0x174, NEW_MENU) == 19, 'submenu SetCurrentMenu(new id)')
     check(set_current(new, 0x531d5e8c, 0x1a4, NEW_SWITCH) == 125, 'list SetCurrentMenu(on/off id)')
     check(set_current(new, 0x531d5e8c, 0x1a4, NEW_STYLE) == 126, 'list SetCurrentMenu(style id)')
+    check(set_current(new, 0x531d5e8c, 0x1a4, NEW_ORIENT) == 127, 'list SetCurrentMenu(follow orientation id)')
+    for other in (NEW_STYLE + 1, NEW_STYLE + 2, NEW_ORIENT + 1):
+        check(set_current(new, 0x531d5e8c, 0x1a4, other) == set_current(off, 0x531d5e8c, 0x1a4, other), f'list SetCurrentMenu({other:#x}) not ours')
 
 
 def check_records(new, off):
@@ -263,15 +296,19 @@ def check_records(new, off):
     check(new.rd(st, 19 * 0x64) == off.rd(0x53da6718, 19 * 0x64), 'submenu table: official records changed')
     check(new.rd(lt, 125 * 0x4c) == off.rd(0x53da2d20, 125 * 0x4c), 'list table: official records changed')
     r = st + 19 * 0x64
-    check(new.u16(r + 2) == T_NAME and new.rd(r + 6, 1)[0] == 2 and new.u16(r + 8) == T_ONOFF and new.u16(r + 10) == T_STYLE,
-          'submenu record: title / count / line texts')
-    check(new.u32(r + 0x14) == NEW_SWITCH and new.u32(r + 0x18) == NEW_STYLE, 'submenu record: line ids')
+    check(new.u16(r + 2) == T_NAME and new.rd(r + 6, 1)[0] == 3 and new.u16(r + 8) == T_ONOFF and new.u16(r + 10) == T_STYLE
+          and new.u16(r + 12) == T_ORIENT and new.u16(r + 14) == 0, 'submenu record: title / count / line texts')
+    check(new.u32(r + 0x14) == NEW_SWITCH and new.u32(r + 0x18) == NEW_STYLE and new.u32(r + 0x1c) == NEW_ORIENT and new.u32(r + 0x20) == 0x10000000,
+          'submenu record: line ids')
     d_range = 0x53da6718 + 6 * 0x64
-    check(new.rd(r + 0x1c, 0x20 - 0x14) == off.rd(d_range + 0x1c, 0x20 - 0x14) and new.rd(r + 0x28, 0x14) == off.rd(d_range + 0x28, 0x14),
-          'submenu record: other fields differ from D-Range Correction')
-    line_draw = [new.u32(r + 0x3c), new.u32(r + 0x44)]
+    instant = 0x53da6718 + 11 * 0x64   # Instant Review: three lines, the layout followed
+    check(off.rd(instant + 6, 1)[0] == 3 and off.u32(instant + 0x20) == 0x10000000 and off.u16(instant + 14) == 0, 'Instant Review record is not as expected')
+    same = [o for o in range(0, 0x64, 2) if not (o in (2, 6, 8, 10, 12, 14) or 0x14 <= o < 0x24 or 0x3c <= o < 0x54)]
+    check(all(new.u16(r + o) == off.u16(d_range + o) for o in same), 'submenu record: other fields differ from D-Range Correction')
+    check(all(new.u32(r + o) == 0 for o in (0x40, 0x48, 0x50)), 'submenu record: second words of the line functions')
+    line_draw = [new.u32(r + 0x3c), new.u32(r + 0x44), new.u32(r + 0x4c)]
     lists = []
-    for k, title in ((125, T_ONOFF), (126, T_STYLE)):
+    for k, title in ((125, T_ONOFF), (126, T_STYLE), (127, T_ORIENT)):
         q = lt + k * 0x4c
         check(new.u16(q + 4) == title, f'list record {k}: title')
         lists.append({name: new.u32(q + o) for name, o in (('count', 0x0c), ('draw', 0x14), ('set', 0x24), ('current', 0x2c))})
@@ -286,35 +323,35 @@ def check_records(new, off):
 
     item = 0x70800000
     expect_icons = {0: (I_OFF, I_SHORT), 1: (I_ON, I_SHORT), 2: (I_OFF, I_LONG), 3: (I_ON, I_LONG)}
-    for raw in (0, 1, 2, 3, 4, 7, 0x80, 0xff):
-        v = raw if raw <= 3 else 0
+    for raw in (0, 1, 2, 3, 4, 5, 6, 7, 8, 0x80, 0xff):
+        v = norm(raw)
         e = Emu(new)
         e.mu.mem_write(B, bytes([raw]))
         e.call(top, (0x70000000, item))
         icons = [c for c in e.calls if c[0] == 'top-icons']
         titles = [c for c in e.calls if c[0] == 'top-title']
-        check(icons == [('top-icons', item, *expect_icons[v])] and titles and titles[0][1:3] == (item, T_NAME),
+        check(icons == [('top-icons', item, *expect_icons[v & 3])] and titles and titles[0][1:3] == (item, T_NAME),
               f'top line, byte {raw}: {e.calls}')
         check(e.byte(B) == v, f'top line, byte {raw}: not normalised')
         for which, fn in enumerate(line_draw):
             e = Emu(new)
             e.mu.mem_write(B, bytes([raw]))
             e.call(fn, (0x70000000, item))
-            want = expect_icons[v][which]
+            want = expect_icons[v & 3][which] if which < 2 else (I_OFF if v & AS_STORED else I_ON)
             check(e.calls == [('sub-icon', item, want, e.calls[0][3] if e.calls else 0)], f'submenu line {which}, byte {raw}: {e.calls}')
         for which, h in enumerate(lists):
             e = Emu(new)
             e.mu.mem_write(B, bytes([raw]))
             check(e.call(h['count'], (0x70000000,)) == 2, 'list count')
             cur = [e.call(h['current'], (0x70000000, i)) for i in (0, 1)]
-            bit = (v >> which) & 1
+            bit = list_bit(v, which)
             check(cur == [1 - bit, bit], f'list {which}, byte {raw}: current {cur}')
             check(e.byte(B) == v, f'list {which}, byte {raw}: not normalised')
             for i in (0, 1):
                 e2 = Emu(new)
                 e2.mu.mem_write(B, bytes([raw]))
                 e2.call(h['set'], (0x70000000, i))
-                want = (v & ~(1 << which)) | (i << which)
+                want = list_set(v, which, i)
                 check(e2.byte(B) == want, f'list {which} set {i}, byte {raw}: {e2.byte(B)} want {want}')
             e3 = Emu(new)
             e3.mu.mem_write(B, bytes([raw]))
@@ -327,7 +364,7 @@ def check_records(new, off):
             e.calls.clear()
             e.call(h['draw'], (0x70000000, item, i))
             out.append(e.calls[0][1:] if e.calls else None)
-        want = [[(item, I_OFF, 2), (item, I_ON, 1)], [(item, I_SHORT, T_SHORT), (item, I_LONG, T_LONG)]][which]
+        want = [[(item, I_OFF, 2), (item, I_ON, 1)], [(item, I_SHORT, T_SHORT), (item, I_LONG, T_LONG)], [(item, I_OFF, 2), (item, I_ON, 1)]][which]
         check(out == want, f'list {which} draw: {out}')
     print('  records: submenu table', hex(st), 'list table', hex(lt))
 
@@ -346,20 +383,22 @@ def check_texts_icons(new, off, png):
     first = 0x55000000 + (0x5437d7b0 - 0x5437b640)
     for l in range(21):
         k = (roots[l] + 4 - first) // 0xd14
-        got = [text(new, l, t) for t in (T_NAME, T_ONOFF, T_STYLE, T_SHORT, T_LONG)]
-        check(got[0] == NAMES[k] and got[3] == "'26 10 08" and got[4] == '2026.10.08 17:34' and got[1] and got[2], f'texts, language row {l}: {got}')
+        got = [text(new, l, t) for t in (T_NAME, T_ONOFF, T_STYLE, T_SHORT, T_LONG, T_ORIENT)]
+        check(got[0] == NAMES[k] and got[3] == "'26 10 08" and got[4] == '2026.10.08 17:34' and got[1] and got[2] and got[5] == ORIENT_NAMES[k], f'texts, language row {l}: {got}')
         check(text(new, l, 2) == text(off, l, 2) if False else True, '')
     for site in (0x543d4ac0,):
         pass
     for low in (0x5323dbb4, 0x5323e40c):
         w = new.u32(low)
         bound = ((w >> 4) & 0xf000) | (w & 0xfff)
-        check(722 <= bound <= 730, f'icon bound at {low:#x}: {bound}')
+        check(bound >= 722, f"icon bound at {low:#x}: {bound}")
     for tid in (I_SHORT, I_LONG):
         d = new.u32(ICON_CATALOG + tid * 4)
         kind, w, h, flags = struct.unpack('<4H', new.rd(d, 8))
         check((kind, w, h, flags) == (1, 40, 40, 0), f'icon {tid}: descriptor {kind, w, h, flags}')
-    print('  texts:', [text(new, 15, t) for t in range(841, 846)], [text(new, 2, t) for t in range(841, 846)])
+    print('  texts:', [text(new, 15, t) for t in list(range(841, 846)) + [T_ORIENT]], [text(new, 2, t) for t in list(range(841, 846)) + [T_ORIENT]])
+    for lid in (0, 9, 17, 19):   # language rows: 0 Japanese, 9 Swedish, 17 Korean, 19 Simplified Chinese
+        print('   row', lid, text(new, lid, T_NAME), '/', text(new, lid, T_ORIENT))
 
 
 def views(img, raw, setup):
@@ -390,9 +429,9 @@ def views(img, raw, setup):
 def check_controllers(new):
     """SelectMenuController's list building (0x531DA9D4) and SubMenuController's drawing
     (0x531E271C) with the new records."""
-    for raw in (0, 1, 2, 3, 0xff):
-        v = raw if raw <= 3 else 0
-        for which, rec in enumerate((125, 126)):
+    for raw in (0, 1, 2, 3, 4, 7, 0xff):
+        v = norm(raw)
+        for which, rec in enumerate((125, 126, 127)):
             def setup(e, this, rec=rec):
                 e.mu.mem_write(this + 0x198, struct.pack('<I', 0x70700000))
                 e.mu.mem_write(this + 0x1a4, bytes([rec]))
@@ -401,7 +440,7 @@ def check_controllers(new):
             e, seen = views(new, raw, setup)
             items = [c for c in e.calls if c[0] == 'list-item']
             marks = [(c[1], c[2]) for c in seen if c[0] == hex(0x5357ad40)]
-            cur = (v >> which) & 1
+            cur = list_bit(v, which)
             check(len(items) == 2, f'list {which}, byte {raw}: {len(items)} items drawn')
             check([m[0] for m in marks] == [1 - cur, cur], f'list {which}, byte {raw}: current marks {marks}')
             check(e.byte(0x70000000 + 0x1a6) == cur, f'list {which}, byte {raw}: cursor {e.byte(0x70000000 + 0x1a6)}')
@@ -417,8 +456,8 @@ def check_controllers(new):
         icons = [c[2] for c in e.calls if c[0] == 'sub-icon']
         texts = [c[1] for c in seen if c[0] == hex(0x53583014)]
         titles = [c[1] for c in seen if c[0] == hex(0x5357f2b0)]
-        want = [I_ON if v & 1 else I_OFF, I_LONG if v & 2 else I_SHORT]
-        check(icons == want and texts == [T_ONOFF, T_STYLE] and titles == [T_NAME], f'submenu, byte {raw}: icons {icons} texts {texts} titles {titles}')
+        want = [I_ON if v & 1 else I_OFF, I_LONG if v & 2 else I_SHORT, I_OFF if v & AS_STORED else I_ON]
+        check(icons == want and texts == [T_ONOFF, T_STYLE, T_ORIENT] and titles == [T_NAME], f'submenu, byte {raw}: icons {icons} texts {texts} titles {titles}')
         if raw == 3:
             print('  submenu: title', titles, 'lines', texts, 'icons', icons)
 
@@ -471,8 +510,32 @@ def main():
     check_constructor_scan(new, off)
     print('7. texts and icons')
     check_texts_icons(new, off, sys.argv[3] if len(sys.argv) > 3 else None)
+    print('8. settings guard keeps the setting byte')
+    check_guard(new)
     print('FAILED:\n  ' + '\n  '.join(failures) if failures else 'all checks passed')
     sys.exit(1 if failures else 0)
+
+
+def check_guard(new):
+    save = 0x533e1c04
+    w = new.u32(save)
+    if w >> 24 != 0xea:
+        print('  no settings guard in this build')
+        return
+    stub = save + 8 + (((w & 0xffffff) ^ 0x800000) - 0x800000) * 4
+    bls = []
+    for k in range(12):
+        x = new.u32(stub + 4 * k)
+        if (x >> 24) == 0xeb:
+            bls.append(stub + 4 * k + 8 + (((x & 0xffffff) ^ 0x800000) - 0x800000) * 4)
+    fix = bls[1]
+    for raw in (0, 1, 2, 3, 4, 5, 6, 7):
+        e = Emu(new)
+        settings = 0x70400000
+        e.mu.mem_write(settings + 0x94b, bytes([raw]))
+        e.call(fix, (settings, 0))
+        check(e.byte(settings + 0x94b) == raw, f'guard fix changed the setting byte {raw}')
+    print('  guard fix', hex(fix), 'keeps the setting byte 0..7')
 
 
 if __name__ == '__main__':

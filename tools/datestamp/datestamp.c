@@ -37,7 +37,7 @@ struct ctx {
   void (*clean)(void *cache, u32 addr, u32 n);       /* 0x538f04c4 */
   void *(*platform)(void);                           /* 0x538f21a0 */
   void (*get_time)(void *clock, u8 *time);           /* 0x538ea9b0 */
-  const u8 *setting;                                 /* bit 0: on, bit 1: with year and time */
+  const u8 *setting;                                 /* bit 0: on, bit 1: with year and time, bit 2: as stored */
   /* Since GR Mod 0.8.2: the look of the picture, left by the development step (0x539113F8) as
    * look | level << 8 | 0x10000 (see lookstash.ts); 0 when the build has no such word. */
   const volatile u32 *look;
@@ -47,9 +47,10 @@ struct ctx {
   const volatile u32 *orient;
 };
 
-/* The setting byte (see `datestamp.ts`): anything above 3 counts as off. */
+/* The setting byte (see `datestamp.ts`): anything above 7 counts as off. */
 #define SETTING_ON 1u
 #define SETTING_LONG 2u
+#define SETTING_AS_STORED 4u /* 0.8.3: "Follow Orientation" off */
 
 /* Glyph codes besides the digits 0..15. */
 #define G_APOSTROPHE 16
@@ -411,7 +412,7 @@ void datestamp(const struct ctx *k, u32 *config) {
   struct picture *seen[4];
   void *cache, *platform;
   setting = *k->setting;
-  if (setting > (SETTING_ON | SETTING_LONG) || !(setting & SETTING_ON) || !ram(config)) return;
+  if (setting > (SETTING_ON | SETTING_LONG | SETTING_AS_STORED) || !(setting & SETTING_ON) || !ram(config)) return;
 #ifdef DIAG
   diag(k, k->cache(), config);
 #endif
@@ -463,7 +464,7 @@ void datestamp(const struct ctx *k, u32 *config) {
     u32 o;
     if (!mainp) return;
     mono = mono_by_look(k);
-    o = orientation(k);
+    o = (setting & SETTING_AS_STORED) ? O_NONE : orientation(k);
     for (i = 0; i < 4; i++) {
       struct picture *p = seen[i];
       s32 pw, ph, rw, rh;

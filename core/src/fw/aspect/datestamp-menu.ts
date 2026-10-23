@@ -2,15 +2,19 @@
 /**
  * The camera-menu entry of the date imprint (firmware 1.11): a line "Date Imprint" on the
  * Shooting Assist page of the still shooting menu, after Horizon Correction. It opens a small
- * submenu like D-Range Correction's with two lines, each a list of two values:
+ * submenu like D-Range Correction's with three lines (0.8.2: the first two), each a list of two
+ * values:
  *
- *   On/Off   Off / On
- *   Style    '26 10 08 / 2026.10.08 17:34
+ *   On/Off               Off / On
+ *   Style                '26 10 08 / 2026.10.08 17:34
+ *   Follow Orientation   Off / On   (0.8.3; On: bottom right of the picture as it is viewed)
  *
- * Both are kept in the setting byte of `datestamp.ts` (byte 0x94B of the user settings): bit 0 on,
- * bit 1 the long style. The menu treats any other value (the byte is padding the official firmware
- * never sets) as 0 and writes 0 back the first time it reads it, so lists always have exactly one
- * current value.
+ * All are kept in the setting byte of `datestamp.ts` (byte 0x94B of the user settings): bit 0 on,
+ * bit 1 the long style, bit 2 "Follow Orientation" off (so that the values 0..3 an earlier GR Mod
+ * firmware left read as On). The menu treats any other value (the byte is padding the official
+ * firmware never sets, and the factory-defaults initialiser leaves it as it is) as 0 and writes 0
+ * back the first time it reads it, so lists always have exactly one current value. (A firmware up
+ * to 0.8.2 treats 4..7 that way too: the imprint is then off there.)
  *
  * What is changed, all found by reading the official 1.11 code:
  *
@@ -25,7 +29,8 @@
  *    (SpecModel, 0 GR IV, 1 HDF, 2 Monochrome) at 0x55001E78. Every model sees exactly the
  *    official menu plus the new line. The builder is the only reader of that table.
  *  - Controller ids. The new line opens controller 0x020001A0 (the submenu), whose lines open
- *    0x020001A1 and 0x020001A2 (the lists); the firmware does not use these ids. The controller
+ *    0x020001A1, 0x020001A2 and 0x020001A5 (the lists; 0x020001A3 / A4 are the power-off picture's,
+ *    see shutdown.ts); the firmware does not use these ids. The controller
  *    factory (0x53185F7C, the only place a controller is looked up by id) hands out the submenu
  *    controller for the first and the list controller for the other two, as for D-Range
  *    Correction (0x020000D0) and Horizon Correction (0x02000094).
@@ -36,13 +41,14 @@
  *    the new id to it.
  *  - Lists (SelectMenuController). Records of 0x4C bytes (title, then member-function pointers:
  *    value count +0x0C, draw value i +0x14, set value i +0x24, is value i current +0x2C) in a table
- *    of 124 at 0x53DA2D20 addressed from 16 places; copied with two more records (125, 126; 124 is
+ *    of 124 at 0x53DA2D20 addressed from 16 places; copied with three more records (125..127; 124 is
  *    the constructor's start value), the model being Horizon Correction's record. SetCurrentMenu
  *    (0x531D5E8C) maps the new ids to them. The constructor also scans the table up to its end
  *    (pool word 0x531D6DAC) for the longest list; that end moves with the table (and still ends
  *    after the 124 official records).
- *  - Texts 841..845 in all 21 languages (relocated text catalog, see `build.ts`): the line name,
- *    "On/Off", "Style" and the two style names. Off and On are the camera's texts 2 and 1.
+ *  - Texts 841..845 and 879 in all 21 languages (relocated text catalog, see `build.ts`): the line
+ *    name, "On/Off", "Style", the two style names and "Follow Orientation". Off and On are the
+ *    camera's texts 2 and 1.
  *  - Icons: the camera's OFF / ON (310, 311) and two new 40x40 icons for the styles, numbers 721
  *    and 722 (the ratio icon numbers of identities 5 and 6, never given out; the lookup bound stays
  *    within what added ratios use).
@@ -52,15 +58,17 @@ import { assembleWords, branchTarget, movImmediate, movWord } from './arm';
 import {
   ICON_CATALOG, LANGUAGES, LOOKUP_BOUNDS, NATIVE_TEXT_ROOTS, Patch, TEXT_CATALOG, concat, expectWord, u16le, u32le, utf16z,
 } from './build';
-import { DATESTAMP_BYTE } from './datestamp';
+import { DATESTAMP_AS_STORED, DATESTAMP_BYTE } from './datestamp';
 
 /** Controller ids of the submenu and of its two lists. */
 export const DATESTAMP_MENU_ID = 0x020001a0;
 export const DATESTAMP_SWITCH_ID = 0x020001a1;
 export const DATESTAMP_STYLE_ID = 0x020001a2;
+/** 0.8.3: the "Follow Orientation" list. */
+export const DATESTAMP_ORIENT_ID = 0x020001a5;
 
 /** Texts: line / submenu name, the two line names, the two style names. */
-export const DATESTAMP_TEXT_IDS = { name: 841, onOff: 842, style: 843, short: 844, long: 845 } as const;
+export const DATESTAMP_TEXT_IDS = { name: 841, onOff: 842, style: 843, short: 844, long: 845, orient: 879 } as const;
 /** Icons of the two styles. */
 export const DATESTAMP_ICON_IDS = { short: 721, long: 722 } as const;
 const ICON_OFF = 310;
@@ -83,6 +91,17 @@ export const DATESTAMP_STYLE_NAMES: readonly string[] = [
   'Styl', 'Stil', 'Style', 'Tyyli', 'Style', 'Stil', 'Στυλ',
   'Stílus', 'Stile', 'スタイル', '스타일', 'Stijl', 'Styl', 'Estilo',
   'Стиль', '样式', 'Estilo', 'Stil', 'รูปแบบ', '樣式', 'Stil',
+];
+/**
+ * "Follow Orientation", in `LANGS` order. Each fits the width of the camera's own submenu lines (no
+ * longer than its longest line text of that language, see the test). The Chinese and Japanese
+ * names use characters that are not among the camera's own texts (跟 随/隨 向), but are in its
+ * fonts (RT_CN_S / RT_CN_T / RT_JP, full character sets), as 戳 and 样 of the line name are.
+ */
+export const DATESTAMP_ORIENT_NAMES: readonly string[] = [
+  'Podle orientace', 'Følg retning', 'Follow Orientation', 'Seuraa asentoa', "Suivre l'orientation", 'Ausrichtung folgen', 'Βάσει προσανατολισμού',
+  'Tájolás követése', 'Segui orientamento', 'カメラの向きに合わせる', '카메라 방향 따르기', 'Oriëntatie volgen', 'Zgodnie z orientacją', 'Seguir orientação',
+  'По ориентации камеры', '跟随相机方向', 'Seguir orientación', 'Följ orientering', 'ตามทิศทางกล้อง', '跟隨相機方向', 'Yönü takip et',
 ];
 export const DATESTAMP_SHORT_TEXT = "'26 10 08";
 export const DATESTAMP_LONG_TEXT = '2026.10.08 17:34';
@@ -134,6 +153,7 @@ const HORIZON_ID = 0x02000094;
 export const SUB_RECORD_NUMBER = SUB_RECORDS + 1;
 export const SWITCH_RECORD_NUMBER = SELECT_RECORDS + 1;
 export const STYLE_RECORD_NUMBER = SELECT_RECORDS + 2;
+export const ORIENT_RECORD_NUMBER = SELECT_RECORDS + 3;
 
 // Functions the handlers call.
 const APP = 0x5323ea84; // application singleton
@@ -353,9 +373,9 @@ export function hookControllerFactory(patch: Patch, body: string, what: string):
 
 // --------------------------------------------------------------------------------------------
 
-/** Load the setting byte into r3 (r2 = its address); anything above 3 becomes (and is stored as) 0. */
+/** Load the setting byte into r3 (r2 = its address); anything above 7 becomes (and is stored as) 0. */
 const LOAD_SETTING = `movw r2, #${lo(DATESTAMP_BYTE)}; movt r2, #${hi(DATESTAMP_BYTE)}; ldrb r3, [r2]
-  cmp r3, #3; movhi r3, #0; strbhi r3, [r2]`;
+  cmp r3, #7; movhi r3, #0; strbhi r3, [r2]`;
 
 function relocateTable(patch: Patch, table: number, record: number, copyRecords: number, added: readonly Uint8Array[], sites: readonly (readonly [number, number, number])[], what: string): number {
   for (const [low, high, r] of sites) {
@@ -401,7 +421,7 @@ export function installDateStampMenu(patch: Patch, iconbin: Uint8Array): Uint8Ar
     fail('unexpected-layout', 'HDF and Red Filter items are not the official ones');
   }
   if (id(35) !== 0x02000092 || id(36) !== 0x02000093 || id(37) !== 0x02000094) fail('unexpected-layout', 'Shooting Assist items are not the official ones');
-  for (let i = 0; i < MAX_ITEMS; i++) if (id(i) === DATESTAMP_MENU_ID || id(i) === DATESTAMP_SWITCH_ID || id(i) === DATESTAMP_STYLE_ID) fail('unexpected-layout', 'controller id already in use');
+  for (let i = 0; i < MAX_ITEMS; i++) if ([DATESTAMP_MENU_ID, DATESTAMP_SWITCH_ID, DATESTAMP_STYLE_ID, DATESTAMP_ORIENT_ID].includes(id(i))) fail('unexpected-layout', 'controller id already in use');
 
   const subTemplate = patch.read(SUB_TABLE + D_RANGE_RECORD * SUB_RECORD, SUB_RECORD);
   const sv = new DataView(subTemplate.buffer);
@@ -420,6 +440,7 @@ export function installDateStampMenu(patch: Patch, iconbin: Uint8Array): Uint8Ar
     { id: T.style, names: DATESTAMP_STYLE_NAMES },
     { id: T.short, names: Array(LANGUAGES).fill(DATESTAMP_SHORT_TEXT) },
     { id: T.long, names: Array(LANGUAGES).fill(DATESTAMP_LONG_TEXT) },
+    { id: T.orient, names: DATESTAMP_ORIENT_NAMES },
   ]);
   const icons = installIcons(patch, iconbin);
   const I = DATESTAMP_ICON_IDS;
@@ -445,6 +466,12 @@ export function installDateStampMenu(patch: Patch, iconbin: Uint8Array): Uint8Ar
     `${LOAD_SETTING}
      mov r0, r1
      tst r3, #2; movweq r1, #${I.short}; movwne r1, #${I.long}
+     b #${SUB_SET_ICON}`, at), 16);
+  // "Follow Orientation": On while bit 2 is clear.
+  const lineOrient = patch.append((at) => assembleWords(
+    `${LOAD_SETTING}
+     mov r0, r1
+     tst r3, #${DATESTAMP_AS_STORED}; movweq r1, #${ICON_ON}; movwne r1, #${ICON_OFF}
      b #${SUB_SET_ICON}`, at), 16);
 
   // --- Lists (this = r0; draw: item = r1, value = r2; set / is current: value = r1).
@@ -473,6 +500,15 @@ export function installDateStampMenu(patch: Patch, iconbin: Uint8Array): Uint8Ar
   const isStyle = patch.append((at) => assembleWords(
     `${LOAD_SETTING}
      mov r3, r3, lsr #1; and r3, r3, #1; cmp r3, r1; moveq r0, #1; movne r0, #0; bx lr`, at), 16);
+  // Values 0 Off, 1 On (as the On/Off list draws them); stored inverted in bit 2.
+  const setOrient = patch.append((at) => assembleWords(
+    `cmp r1, #1; bxhi lr
+     ${LOAD_SETTING}
+     bic r3, r3, #${DATESTAMP_AS_STORED}; cmp r1, #0; orreq r3, r3, #${DATESTAMP_AS_STORED}; strb r3, [r2]; bx lr`, at), 16);
+  const isOrient = patch.append((at) => assembleWords(
+    `${LOAD_SETTING}
+     tst r3, #${DATESTAMP_AS_STORED}; moveq r3, #1; movne r3, #0
+     cmp r3, r1; moveq r0, #1; movne r0, #0; bx lr`, at), 16);
 
   const listRecord = (title: number, draw: number, set: number, isCurrent: number): Uint8Array => {
     const r = listTemplate.slice();
@@ -490,23 +526,33 @@ export function installDateStampMenu(patch: Patch, iconbin: Uint8Array): Uint8Ar
   const lists = relocateTable(patch, SELECT_TABLE, SELECT_RECORD, SELECT_RECORDS + 1, [
     listRecord(T.onOff, drawOnOff, setOnOff, isOnOff),
     listRecord(T.style, drawStyle, setStyle, isStyle),
+    listRecord(T.orient, drawOnOff, setOrient, isOrient),
   ], SELECT_SITES, 'date imprint: list records');
   // The constructor's scan for the longest list stops at the end of the official records (the
-  // two new lists have 2 values, fewer than many official ones).
+  // new lists have 2 values, fewer than many official ones).
   patch.setWord(SELECT_TABLE_END_LITERAL, lists + SELECT_RECORDS * SELECT_RECORD, 'date imprint: end of the official list records');
 
   const subRecord = subTemplate.slice();
   {
     const v = new DataView(subRecord.buffer);
     v.setUint16(2, T.name, true);
+    // Three lines, laid out as Instant Review's (record 11): texts from +8 (0 after the last),
+    // controller ids from +0x14 (0x10000000 after the last), value-draw functions from +0x3C.
+    subRecord[6] = 3;
     v.setUint16(8, T.onOff, true);
     v.setUint16(10, T.style, true);
+    v.setUint16(12, T.orient, true);
+    v.setUint16(14, 0, true);
     v.setUint32(0x14, DATESTAMP_SWITCH_ID, true);
     v.setUint32(0x18, DATESTAMP_STYLE_ID, true);
+    v.setUint32(0x1c, DATESTAMP_ORIENT_ID, true);
+    v.setUint32(0x20, 0x10000000, true);
     v.setUint32(0x3c, lineOnOff, true);
     v.setUint32(0x40, 0, true);
     v.setUint32(0x44, lineStyle, true);
     v.setUint32(0x48, 0, true);
+    v.setUint32(0x4c, lineOrient, true);
+    v.setUint32(0x50, 0, true);
   }
   relocateTable(patch, SUB_TABLE, SUB_RECORD, SUB_RECORDS + 1, [subRecord], SUB_SITES, 'date imprint: submenu records');
   patch.submenuRecords = SUB_RECORD_NUMBER + 1;
@@ -553,8 +599,9 @@ export function installDateStampMenu(patch: Patch, iconbin: Uint8Array): Uint8Ar
   const factory = patch.append((at) => assembleWords(
     `movw ip, #${lo(DATESTAMP_MENU_ID)}; movt ip, #${hi(DATESTAMP_MENU_ID)}
      subs ip, r1, ip; beq sub
+     cmp ip, #${DATESTAMP_ORIENT_ID - DATESTAMP_MENU_ID}; beq list
      cmp ip, #2; bhi out
-     movw r1, #${lo(HORIZON_ID)}; movt r1, #${hi(HORIZON_ID)}; b out
+     list: movw r1, #${lo(HORIZON_ID)}; movt r1, #${hi(HORIZON_ID)}; b out
      sub: movw r1, #${lo(D_RANGE_ID)}; movt r1, #${hi(D_RANGE_ID)}
      out: movw r3, #0x12e
      b #${FACTORY + 4}`, at), 16);
@@ -572,6 +619,8 @@ export function installDateStampMenu(patch: Patch, iconbin: Uint8Array): Uint8Ar
      moveq r3, #${SWITCH_RECORD_NUMBER}; strbeq r3, [r0, #0x1a4]; bxeq lr
      cmp ip, #1
      moveq r3, #${STYLE_RECORD_NUMBER}; strbeq r3, [r0, #0x1a4]; bxeq lr
+     cmp ip, #${DATESTAMP_ORIENT_ID - DATESTAMP_SWITCH_ID}
+     moveq r3, #${ORIENT_RECORD_NUMBER}; strbeq r3, [r0, #0x1a4]; bxeq lr
      add r3, r1, #0xfe000000
      b #${SELECT_SET_CURRENT + 4}`, at), 16);
   patch.setWord(SELECT_SET_CURRENT, branchWord(SELECT_SET_CURRENT, selectCurrent), 'date imprint: list records');
