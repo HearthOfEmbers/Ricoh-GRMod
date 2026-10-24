@@ -18,6 +18,12 @@
  * This build's table has that one entry; a camera-menu list of guide numbers (to come) only needs to
  * add entries and the list, the exposure module reads whatever the table holds.
  *
+ * Flash and ambient light add up on the subject, so the exposure is planned for the two together:
+ * the shutter speed sets how they share it (the background, lit by the ambient light only, gets the
+ * ambient share), aperture and ISO make the sum right. The share is a background balance, 1 EV
+ * darker than a correct exposure by default (half each); a camera-menu choice of it (to come) is
+ * bits 4..7 of the same byte 0x99A and a second table, like the guide number's.
+ *
  * Independent work: everything below was found in the official 1.11 firmware, starting from its
  * texts ("Flash On", "Flash Mode"), its menu record tables and the class names of its exposure code
  * (AeProgramDiagramFlash, AeFlashComData, ...). How the choice is kept and where the exposure is
@@ -53,8 +59,8 @@
  *    picture is prepared from those (0x53680D28). The call at 0x5367AAA8 goes through a wrapper
  *    that runs the flash program and then the module `tools/directflash/directflash.c`, which
  *    replaces the result when Direct Flash applies (see the module for the fields it reads).
- *  - Guide number: byte 0x99A (CURRENT() + 4), the same kind of padding as 0x99B (bytes 0x997..0x999
- *    then a word at 0x99C; UserDataInitValue never writes it). Not changed by this build.
+ *  - Guide number and background balance: byte 0x99A (CURRENT() + 4), the same kind of padding as
+ *    0x99B (UserDataInitValue never writes it): bits 0..3 and 4..7. Not changed by this build.
  *  - Name: text 882, "Direct Flash" in the 21 languages; icon 733 (the ratio icon number of
  *    identity 17, never given out: added ratios use 7..14, the date imprint 5, 6, 15, 16).
  *
@@ -69,7 +75,10 @@ export const DIRECT_FLASH_TEXT_ID = 882;
 export const DIRECT_FLASH_ICON_ID = 733;
 /** The setting byte: 1 = Direct Flash (with Flash Mode 0). */
 export const DIRECT_FLASH_BYTE = 0x55084dd8 + 4 + 0x99b;
-/** The guide number choice: index into DIRECT_FLASH_GUIDE_NUMBERS; 0 on every camera. */
+/**
+ * The camera-menu choices, 0 on every camera: bits 0..3 index DIRECT_FLASH_GUIDE_NUMBERS, bits 4..7
+ * DIRECT_FLASH_BACKGROUNDS (a choice beyond a table is its entry 0).
+ */
 export const DIRECT_FLASH_GN_BYTE = 0x55084dd8 + 4 + 0x99a;
 /**
  * Test builds only: the RAM word that holds the planner's diagnostic buffer (allocated by the module
@@ -81,6 +90,12 @@ const HEAP_ALLOC = 0x538e09b0;
 const ZERO_FILL_END = 0x53000460;
 /** Guide numbers (ISO 100, metres) by choice; entry 0 is the GF-2's (9.8 ft / 3 m). */
 export const DIRECT_FLASH_GUIDE_NUMBERS: readonly number[] = [3];
+/**
+ * Background balances by choice: how many EV the background (lit by the ambient light only) is
+ * darker than a correct exposure, the flash giving the rest of the subject's light. Entry 0: 1 EV,
+ * the flash and the ambient light half each.
+ */
+export const DIRECT_FLASH_BACKGROUNDS: readonly number[] = [1];
 
 /** In `LANGS` order (cs da en fi fr de el hu it ja ko nl pl pt ru zh-CN es sv th zh-TW tr). */
 export const DIRECT_FLASH_NAMES: readonly string[] = [
@@ -224,6 +239,13 @@ export function guideNumberWord(gn: number): number {
   return new Uint32Array(f.buffer)[0];
 }
 
+/** The shutter offset of a background b EV darker, b + log2(1 - 2^-b), as a float32 bit pattern. */
+export function backgroundWord(b: number): number {
+  if (!(b > 0)) throw new RangeError('background balance must be above 0 EV');
+  const f = new Float32Array([b + Math.log2(1 - 2 ** -b)]);
+  return new Uint32Array(f.buffer)[0];
+}
+
 function decodeBase64(text: string): Uint8Array {
   const table = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
   const clean = text.replace(/=+$/, '');
@@ -361,7 +383,11 @@ export function installDirectFlash(patch: Patch, iconbin: Uint8Array, diag = fal
   const entry = diag ? DIRECTFLASH_DIAG_ENTRY : DIRECTFLASH_ENTRY;
   const module = patch.append(code, 16);
   const table = patch.append(u32le(DIRECT_FLASH_GUIDE_NUMBERS.map(guideNumberWord)), 16);
-  const ctx = patch.append(u32le([DIRECT_FLASH_BYTE, LIVE_FLASH_MODE, FLASH_OUTPUT, SYNC_TV, DIRECT_FLASH_GN_BYTE, table, DIRECT_FLASH_GUIDE_NUMBERS.length, ...(diag ? [DIRECT_FLASH_DIAG_SLOT, HEAP_ALLOC] : [])]), 16);
+  const backgrounds = patch.append(u32le(DIRECT_FLASH_BACKGROUNDS.map(backgroundWord)), 16);
+  const ctx = patch.append(u32le([
+    DIRECT_FLASH_BYTE, LIVE_FLASH_MODE, FLASH_OUTPUT, SYNC_TV, DIRECT_FLASH_GN_BYTE, table, DIRECT_FLASH_GUIDE_NUMBERS.length,
+    backgrounds, DIRECT_FLASH_BACKGROUNDS.length, ...(diag ? [DIRECT_FLASH_DIAG_SLOT, HEAP_ALLOC] : []),
+  ]), 16);
   const wrapper = patch.append((at) => assembleWords(
     `push {r4, lr}
      mov r4, r0

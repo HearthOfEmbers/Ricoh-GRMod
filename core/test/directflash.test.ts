@@ -32,6 +32,11 @@ describe('Direct Flash: data', () => {
     expect([aspect.SOFT_FOCUS_BYTE, aspect.DATESTAMP_BYTE]).not.toContain(aspect.DIRECT_FLASH_BYTE);
     expect(aspect.DIRECT_FLASH_GUIDE_NUMBERS[0]).toBe(3);
     expect(new Float32Array(new Uint32Array([aspect.guideNumberWord(3)]).buffer)[0]).toBeCloseTo(2 * Math.log2(3), 6);
+    // Background balance: entry 0 is 1 EV darker (flash and ambient light half each), offset 0.
+    expect(aspect.DIRECT_FLASH_BACKGROUNDS[0]).toBe(1);
+    expect(aspect.backgroundWord(1)).toBe(0);
+    expect(new Float32Array(new Uint32Array([aspect.backgroundWord(2)]).buffer)[0]).toBeCloseTo(2 + Math.log2(0.75), 6);
+    expect(() => aspect.backgroundWord(0)).toThrow();
   });
   it('the compiled module is the one of the committed source', () => {
     const src = readFileSync(new URL('../../tools/directflash/directflash.c', import.meta.url));

@@ -24,4 +24,4 @@ export { HALATION, HALATION_COLOUR_NAMES, HALATION_NAMES, halateRgba, halateYcc,
 export type { HalationColour, HalationLevel } from './halation';
 export type { HalationLight, HalationLook } from './halation';
 export { LOOK_STASH, ORIENT_VALID, ORIENT_WORD, STASH_WHITE } from './lookstash';
-export { DIRECT_FLASH_BYTE, DIRECT_FLASH_GN_BYTE, DIRECT_FLASH_GUIDE_NUMBERS, DIRECT_FLASH_ICON_ID, DIRECT_FLASH_NAMES, DIRECT_FLASH_TEXT_ID, drawDirectFlashIcon, guideNumberWord, installDirectFlash } from './directflash';
+export { backgroundWord, DIRECT_FLASH_BACKGROUNDS, DIRECT_FLASH_BYTE, DIRECT_FLASH_GN_BYTE, DIRECT_FLASH_GUIDE_NUMBERS, DIRECT_FLASH_ICON_ID, DIRECT_FLASH_NAMES, DIRECT_FLASH_TEXT_ID, drawDirectFlashIcon, guideNumberWord, installDirectFlash } from './directflash';

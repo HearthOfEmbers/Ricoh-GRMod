@@ -34,10 +34,13 @@ struct ctx {
   const volatile u8 *flash_mode;    /* live Flash Mode: 0 Flash On */
   const volatile u8 *flash_output;  /* Flash Output setting: 0 Auto, 1 1/1, 2 1/4 */
   float (*sync_tv)(void *apex, u32 flag, float av); /* 0x536792E0: fastest Tv the flash syncs with */
-  const volatile u8 *gn_choice;     /* setting byte: which guide number (0 = the GF-2's); for a
-                                     * camera-menu choice of the guide number */
+  const volatile u8 *choice;        /* setting byte, for camera-menu choices (0 on every camera):
+                                     * bits 0..3 the guide number, bits 4..7 the background balance */
   const float *gn_table;            /* per choice: 2 log2(GN), GN at ISO 100 in metres, full power */
   u32 gn_count;                     /* entries in gn_table (at least 1); a choice beyond is 0 */
+  const float *bal_table;           /* per choice: the shutter offset c of a background balance (see
+                                     * `solve`): b + log2(1 - 2^-b) for a background b EV darker */
+  u32 bal_count;                    /* entries in bal_table (at least 1); a choice beyond is 0 */
 #ifdef DIAG
   /* Test builds only: a RAM word (zero at start) that holds a buffer, allocated with `alloc` on the
    * first call, where every call leaves what it saw and decided (see `diag_record`); the date
@@ -72,6 +75,23 @@ static float log2_(float x)
   return (float)e + s * 2.8853900817779268f; /* 2 / ln 2 */
 }
 
+/* 2^y, to well within 1/100 EV. */
+static float exp2_(float y)
+{
+  union { float f; u32 u; } v;
+  float r, t, s;
+  int n;
+  if (y < -120.0f) y = -120.0f;
+  if (y > 120.0f) y = 120.0f;
+  n = (int)y;
+  if ((float)n > y) n--;             /* floor */
+  r = y - (float)n;                  /* 0 <= r < 1 */
+  t = r * 0.6931471805599453f;       /* ln 2 */
+  s = 1.0f + t * (1.0f + t * (1.0f / 2 + t * (1.0f / 6 + t * (1.0f / 24 + t * (1.0f / 120 + t * (1.0f / 720 + t * (1.0f / 5040)))))));
+  v.u = (u32)(n + 127) << 23;
+  return s * v.f;
+}
+
 static float clamp(float v, float lo, float hi)
 {
   if (v < lo) v = lo;
@@ -81,41 +101,58 @@ static float clamp(float v, float lo, float hi)
 
 struct plan {
   float tv, av, sv;
-  float flash_err; /* EV the subject is lit above (+) or below (-) a correct exposure */
-  float amb_err;   /* EV the ambient light is above a correct exposure at the chosen Tv */
+  float err; /* EV the subject (flash + ambient light) is above (+) or below (-) a correct exposure */
+  float bg;  /* EV the background (ambient light only) is above (+) or below (-) a correct exposure */
 };
 
 struct limits {
-  float sv_lo, sv_hi, av_lo, av_hi, tv_lo, tv_hi, ev;
+  float sv_lo, sv_hi, av_lo, av_hi, tv_lo, tv_hi, ev, c;
   void *apex;
   const struct ctx *k;
 };
 
-/* f0: the Av that gives a correct flash exposure at ISO 100 without ND. */
+/*
+ * The subject is lit by the flash and by the ambient light together; the two add up. As shares of
+ * a correct exposure (1):
+ *   flash    F = 2^(f - 5 - (Av - Sv))        f: the Av of a correct flash exposure at ISO 100
+ *   ambient  A = 2^(Ev - 5 - (Av - Sv) - Tv)  (an ND in front of the lens takes 2 EV of both)
+ * F + A = 1 fixes Av - Sv for a given Tv:  Av - Sv = log2(2^(f - 5) + 2^(Ev - 5 - Tv)).
+ * A / F = 2^(Ev - f0 - Tv) depends on the shutter speed alone (f0: f without the ND), and the
+ * background, lit by the ambient light only, is exposed at A. A background b EV darker than a
+ * correct exposure (A = 2^-b, F = 1 - 2^-b) is Tv = Ev - f0 + c, c = b + log2(1 - 2^-b): c = 0 for
+ * b = 1, the flash and the ambient light half each.
+ * Then Tv within its limits: in a dim place no slower than 1/32 s, the flash giving what the ambient
+ * light does not (all of it in the dark); in a bright one no faster than the flash syncs with, the
+ * ambient light giving more and the flash filling in. Av - Sv as above, with the lowest ISO that
+ * gets an aperture of f/2.8 or smaller, within the limits.
+ */
 static void solve(const struct limits *l, float f0, int nd, struct plan *p)
 {
-  float f = f0 - 2.0f * (float)nd; /* the ND takes two stops of the flash too */
-  float sv = clamp(l->av_lo - f + 5.0f, l->sv_lo, l->sv_hi);
-  float need = f + sv - 5.0f;
-  float av = clamp(need, l->av_lo, l->av_hi);
-  float tv_hi = l->k->sync_tv(l->apex, 1, av);
-  float amb, tv;
-  if (tv_hi > l->tv_hi) tv_hi = l->tv_hi;
-  amb = l->ev + sv - 5.0f - 2.0f * (float)nd - av;
-  tv = amb;
-  if (tv < l->tv_lo) tv = l->tv_lo;
-  if (tv > tv_hi) tv = tv_hi;
+  float f = f0 - 2.0f * (float)nd;
+  float e = l->ev - 5.0f - 2.0f * (float)nd;
+  float tv = clamp(l->ev - f0 + l->c, l->tv_lo, l->tv_hi);
+  float x = 0, sv = 0, av = 0, th = 0;
+  int pass;
+  for (pass = 0; pass < 2; pass++) {
+    x = log2_(exp2_(f - 5.0f) + exp2_(e - tv));
+    sv = clamp(l->av_lo - x, l->sv_lo, l->sv_hi);
+    av = clamp(sv + x, l->av_lo, l->av_hi);
+    th = l->k->sync_tv(l->apex, 1, av);
+    if (th > l->tv_hi) th = l->tv_hi;
+    if (tv <= th) break;
+    tv = th; /* faster than the flash syncs with: the ambient light gives more, the flash less */
+  }
+  if (tv > th) tv = th;
   p->tv = tv;
   p->av = av;
   p->sv = sv;
-  p->flash_err = need - av;
-  p->amb_err = amb - tv;
+  p->err = x - (av - sv);
+  p->bg = e - (av - sv) - tv;
 }
 
-static float worst(const struct plan *p)
+static float absf(float v)
 {
-  float a = p->flash_err < 0 ? -p->flash_err : p->flash_err;
-  return p->amb_err > a ? p->amb_err : a;
+  return v < 0 ? -v : v;
 }
 
 #ifdef DIAG
@@ -124,7 +161,7 @@ static float worst(const struct plan *p)
 #define DIAG_WORDS 32
 #define DIAG_BYTES (4 + 2 * DIAG_WORDS * 4)
 enum { D_CALL, D_REASON, D_PROGRAM, D_MODE, D_KIND, D_ND_MODE, D_ISO_AUTO, D_OUTPUT, D_MM, D_EV, D_F70, D_F74, D_SYNC,
-       D_TV_HI, D_TV_LO, D_OFF_TV, D_OFF_AV, D_OFF_SV, D_TV, D_AV, D_SV, D_ND, D_AMB_ERR, D_FLASH_ERR, D_SV_LO, D_SV_HI,
+       D_TV_HI, D_TV_LO, D_OFF_TV, D_OFF_AV, D_OFF_SV, D_TV, D_AV, D_SV, D_ND, D_BG, D_ERR, D_SV_LO, D_SV_HI,
        D_AV_LO, D_AV_HI, D_F10, D_F14, D_FA0, D_FA4 };
 static s32 x100(float v)
 {
@@ -206,13 +243,16 @@ void df_plan(u8 *ae, const struct ctx *k)
   if (mm < 100) mm = 100;
   if (mm > 8000) mm = 8000;          /* as the camera's own use of it */
 
-  i = *k->gn_choice;
+  i = *k->choice & 15u;
   if (i >= k->gn_count) i = 0;
   f0 = k->gn_table[i] - 2.0f * (log2_((float)mm) - 9.965784284662087f); /* - 2 log2(mm / 1000) */
   if (*k->flash_output == 2) f0 -= 2.0f; /* 1/4 power */
 
   l.k = k;
   l.apex = apex;
+  i = *k->choice >> 4;
+  if (i >= k->bal_count) i = 0;
+  l.c = k->bal_table[i];
   l.ev = F(0x64);
   l.sv_lo = F(0x14);
   l.sv_hi = F(0x10);
@@ -239,11 +279,12 @@ void df_plan(u8 *ae, const struct ctx *k)
   nd_mode = B(0x55d);
   nd = nd_mode == 1;
   solve(&l, f0, nd, &p);
-  if (nd_mode == 0 && (p.flash_err >= 1.0f || p.amb_err >= 1.0f)) {
-    /* ND Auto: put the ND in when the subject is too close for f/16 at the lowest ISO, or the
-     * scene too bright for the fastest shutter speed the flash syncs with, and it helps. */
+  if (nd_mode == 0 && p.err >= 1.0f) {
+    /* ND Auto: put the ND in when the picture would be too bright even at f/16 and the lowest ISO
+     * (a subject too close, or a scene too bright for the fastest shutter speed the flash syncs
+     * with), and it helps. */
     solve(&l, f0, 1, &q);
-    if (q.flash_err > -1.0f && worst(&q) < worst(&p) - 0.5f) {
+    if (q.err > -1.0f && absf(q.err) < absf(p.err) - 0.5f) {
       p = q;
       nd = 1;
     }
@@ -257,8 +298,8 @@ void df_plan(u8 *ae, const struct ctx *k)
   RECF(D_AV, p.av);
   RECF(D_SV, p.sv);
   REC(D_ND, nd);
-  RECF(D_AMB_ERR, p.amb_err);
-  RECF(D_FLASH_ERR, p.flash_err);
+  RECF(D_BG, p.bg);
+  RECF(D_ERR, p.err);
   RECF(D_SV_LO, l.sv_lo);
   RECF(D_SV_HI, l.sv_hi);
   RECF(D_AV_LO, l.av_lo);
