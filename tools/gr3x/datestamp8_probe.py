@@ -250,7 +250,7 @@ def raw_words(p,manifest,films):
                         film=films and 64<=look<64+films
                         want_look=look-32 if films and look>=64 else look
                         level={0:0,2:3<<8,5:2<<8|0x20000}[toning] if film else 0
-                        assert r2==(11 if 64<=look<84 else look) and stash==want_look|level|0x10000 and mode==0x3c,(flag,look,r2,hex(stash))
+                        assert r2==(11 if films and 64<=look<84 else look) and stash==want_look|level|0x10000 and mode==0x3c,(flag,look,r2,hex(stash))
                         if flag==0:
                             v=e84 if e83 else dirb
                             assert ow==(v if v<=3 else 0)|0x100 and fw==stash,(flag,look,e83,e84,dirb,hex(ow),hex(fw))
