@@ -44,7 +44,7 @@ describe('Direct Flash: data', () => {
 describe('Direct Flash: camera-menu settings', () => {
   it('lists at most 21 values (the list controller makes rows for the camera\'s longest list), defaults stored as 0', () => {
     const lists = aspect.directFlashLists();
-    expect(lists.map((l) => l.codes.length)).toEqual([21, 9, 8]);
+    expect(lists.map((l) => l.codes.length)).toEqual([21, 9, 8, 2]);
     for (const l of lists) {
       expect(l.codes.length).toBeLessThanOrEqual(21);
       expect(new Set(l.codes).size).toBe(l.codes.length);
@@ -52,15 +52,22 @@ describe('Direct Flash: camera-menu settings', () => {
       expect(l.codes.every((c) => c <= l.mask)).toBe(true);
       expect(l.icons.every((i) => i.length === 40 * 40 * 4)).toBe(true);
     }
-    expect(lists[0].names[lists[0].fallback]).toBe('GN 3');
-    expect(lists[1].names[lists[1].fallback]).toBe('-1.0 EV');
-    expect(lists[2].names[lists[2].fallback]).toBe('1/30');
-    // Bits of byte 0x99B: 0 Direct Flash, 1..4 background, 5..7 slowest shutter speed.
-    expect([lists[1].shift, lists[1].mask, lists[2].shift, lists[2].mask]).toEqual([1, 15, 5, 7]);
+    expect(lists[0].names[lists[0].fallback][2]).toBe('GN 3');
+    expect(lists[1].names[lists[1].fallback][2]).toBe('-1.0 EV');
+    expect(lists[2].names[lists[2].fallback][2]).toBe('1/30');
+    expect(lists[3].names[lists[3].fallback][2]).toBe('Low ISO');
+    expect(lists.every((l) => l.names.every((n) => n.length === 21))).toBe(true);
+    // Byte 0x99A: bits 0..5 GN (every listed one fits), bit 6 Max Sync; byte 0x99B: bit 0 Direct
+    // Flash, 1..4 background, 5..7 slowest shutter speed.
+    expect([lists[0].byte, lists[0].shift, lists[0].mask, lists[3].byte, lists[3].shift, lists[3].mask]).toEqual([aspect.DIRECT_FLASH_GN_BYTE, 0, 63, aspect.DIRECT_FLASH_GN_BYTE, 6, 1]);
+    expect(Math.max(...aspect.DF_GUIDE_NUMBERS)).toBeLessThan(64);
+    expect([lists[1].byte, lists[1].shift, lists[1].mask, lists[2].byte, lists[2].shift, lists[2].mask]).toEqual([aspect.DIRECT_FLASH_BYTE, 1, 15, aspect.DIRECT_FLASH_BYTE, 5, 7]);
     expect(aspect.DF_SLOWEST.map((x) => x.tv)).toEqual([7, 6, 5, 4, 3, 2, 1, 0]);
+    // The shutter line is the camera's own "Minimum Shutter Speed" (text 125).
+    expect(lists.map((l) => l.title)).toEqual([911, 912, 125, 913]);
     // Texts after the ratio names (901..908), icons below the ratio icons (720..).
-    expect(lists[2].firstText + lists[2].codes.length - 1).toBe(950);
-    expect(lists[2].firstIcon + lists[2].codes.length - 1).toBeLessThan(720);
+    expect(lists[3].firstText + lists[3].codes.length - 1).toBe(953);
+    expect(lists[3].firstIcon + lists[3].codes.length - 1).toBeLessThan(720);
   });
   it.skipIf(!have)('line names fit beside the camera\'s own submenu lines, with glyphs of its own texts', () => {
     const d = new fw.Firmware(new Uint8Array(readFileSync(P + 'official.bin'))).decoded;
@@ -68,7 +75,7 @@ describe('Direct Flash: camera-menu settings', () => {
     LANGS.forEach((lang, k) => {
       const longest = Math.max(...lines.map((id) => readName(d, lang, id).text.length));
       const allowed = allowedChars(d, lang);
-      for (const names of [aspect.DF_GN_NAMES, aspect.DF_BACKGROUND_NAMES, aspect.DF_SLOWEST_NAMES]) {
+      for (const names of [aspect.DF_MENU_NAMES, aspect.DF_GN_NAMES, aspect.DF_BACKGROUND_NAMES, aspect.DF_PRIORITY_NAMES]) {
         expect(names.length).toBe(21);
         expect(names[k].length, `${lang} ${names[k]}`).toBeLessThanOrEqual(longest);
         // 背 / 景 are not among the camera's own Chinese / Japanese texts, but in its fonts (RT_CN_S,
@@ -78,7 +85,7 @@ describe('Direct Flash: camera-menu settings', () => {
         expect(missing, `${lang} ${names[k]}`).toBe('');
       }
       for (const l of aspect.directFlashLists()) {
-        const missing = [...l.names.join('')].filter((c) => !allowed.has(c.charCodeAt(0))).join('');
+        const missing = [...l.names.map((n) => n[k]).join('')].filter((c) => !allowed.has(c.charCodeAt(0))).join('');
         expect(missing, `${lang} values`).toBe('');
       }
     });

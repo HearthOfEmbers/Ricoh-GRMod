@@ -36,8 +36,9 @@ struct ctx {
   const volatile u8 *flash_mode;    /* live Flash Mode: 0 Flash On */
   const volatile u8 *flash_output;  /* Flash Output setting: 0 Auto, 1 1/1, 2 1/4 */
   float (*sync_tv)(void *apex, u32 flag, float av); /* 0x536792E0: fastest Tv the flash syncs with */
-  const volatile u8 *gn;            /* setting byte (0x99A): the guide number (ISO 100, metres, full
-                                     * power), 0 = the default below */
+  const volatile u8 *gn;            /* setting byte (0x99A): bits 0..5 the guide number (ISO 100,
+                                     * metres, full power), 0 = the default below; bit 6 exposure
+                                     * priority Max Sync (see `solve`) */
   float gn_default;                 /* 2 log2(GN) of the default guide number */
 #ifdef DIAG
   /* Test builds only: a RAM word (zero at start) that holds a buffer, allocated with `alloc` on the
@@ -107,10 +108,12 @@ struct plan {
   float tv, av, sv;
   float err; /* EV the subject (flash + ambient light) is above (+) or below (-) a correct exposure */
   float bg;  /* EV the background (ambient light only) is above (+) or below (-) a correct exposure */
+  float want; /* the shutter speed of the balance chosen (within the slowest and the fastest) */
 };
 
 struct limits {
   float sv_lo, sv_hi, av_lo, av_hi, tv_lo, tv_hi, ev, c;
+  int sync_first;                    /* exposure priority Max Sync */
   void *apex;
   const struct ctx *k;
 };
@@ -130,17 +133,18 @@ struct limits {
  * one no faster than the flash syncs with, the ambient light giving more and the flash filling in. Av - Sv as above, with the lowest ISO that
  * gets an aperture of f/2.8 or smaller, within the limits.
  */
-static void solve(const struct limits *l, float f0, int nd, struct plan *p)
+static void solve_at(const struct limits *l, float f0, int nd, float av_lo, struct plan *p)
 {
   float f = f0 - 2.0f * (float)nd;
   float e = l->ev - 5.0f - 2.0f * (float)nd;
   float tv = clamp(l->ev - f0 + l->c, l->tv_lo, l->tv_hi);
   float x = 0, sv = 0, av = 0, th = 0;
   int pass;
+  p->want = tv;
   for (pass = 0; pass < 2; pass++) {
     x = log2_(exp2_(f - 5.0f) + exp2_(e - tv));
-    sv = clamp(l->av_lo - x, l->sv_lo, l->sv_hi);
-    av = clamp(sv + x, l->av_lo, l->av_hi);
+    sv = clamp(av_lo - x, l->sv_lo, l->sv_hi);
+    av = clamp(sv + x, av_lo, l->av_hi);
     th = l->k->sync_tv(l->apex, 1, av);
     if (th > l->tv_hi) th = l->tv_hi;
     if (tv <= th) break;
@@ -158,6 +162,32 @@ static float absf(float v)
 {
   return v < 0 ? -v : v;
 }
+
+/*
+ * Exposure priority Max Sync (bit 6 of the guide-number byte): where the flash-sync limit holds the
+ * shutter speed back from the balance chosen, try a smaller aperture (and with it a higher ISO, the
+ * sum staying correct): the camera's limit is faster beyond f/4 (Av 4) and beyond f/5 (Av 4.67).
+ * Taken when the shutter speed gets faster and the exposure is no worse.
+ */
+#define AV_SYNC_FASTEST 4.70f
+#define AV_SYNC_FASTER 4.02f
+
+static void solve(const struct limits *l, float f0, int nd, struct plan *p)
+{
+  struct plan q;
+  float floors[2];
+  int i;
+  solve_at(l, f0, nd, l->av_lo, p);
+  if (!l->sync_first) return;
+  floors[0] = AV_SYNC_FASTEST;
+  floors[1] = AV_SYNC_FASTER;
+  for (i = 0; i < 2; i++) {
+    if (!(p->tv < p->want - 0.01f) || floors[i] <= p->av || floors[i] > l->av_hi) continue;
+    solve_at(l, f0, nd, floors[i], &q);
+    if (q.tv > p->tv + 0.01f && absf(q.err) <= absf(p->err) + 0.001f) *p = q;
+  }
+}
+
 
 #ifdef DIAG
 /* Buffer: word 0 the number of calls, then two records of DIAG_WORDS words (the last call's at
@@ -248,12 +278,13 @@ void df_plan(u8 *ae, const struct ctx *k)
   if (mm < 100) mm = 100;
   if (mm > 8000) mm = 8000;          /* as the camera's own use of it */
 
-  i = *k->gn;
+  i = *k->gn & 63u;                      /* bits 0..5: the guide number; bit 6: Max Sync */
   f0 = (i ? 2.0f * log2_((float)i) : k->gn_default) - 2.0f * (log2_((float)mm) - 9.965784284662087f); /* - 2 log2(mm / 1000) */
   if (*k->flash_output == 2) f0 -= 2.0f; /* 1/4 power */
 
   l.k = k;
   l.apex = apex;
+  l.sync_first = (*k->gn >> 6) & 1;
   i = (setting >> 1) & 15u;
   if (i == 0 || i > 9) i = BG_DEFAULT;
   a = (float)i * (1.0f / 3.0f);          /* the background a EV darker */

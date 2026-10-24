@@ -1,21 +1,24 @@
 # SPDX-License-Identifier: GPL-2.0-only
-"""Emulator checks of Direct Flash's settings in the camera menu (core/src/fw/aspect/directflash-menu.ts).
+"""Emulator checks of Direct Flash's settings in the camera menu (core/src/fw/aspect/directflash-menu.ts):
+the Flash submenu's third line "Direct Flash Settings" and the submenu it opens (four lines: guide
+number, background, minimum shutter speed, exposure priority).
 
 NOT part of the program. Runs the firmware's own functions, as patched, in Unicorn, next to the
 official ones (the harness of tools/datestamp/menu_check.py):
 
- 1. The controller factory gives the list controller (Horizon Correction's) for the three new ids,
-    and every other id what it gives officially; SelectMenuController::SetCurrentMenu maps the new
-    ids to the new records and every official id (and the date imprint's) as before.
- 2. Flash Mode's submenu (record 5, in the table where it is now): five lines, the camera's two
-    unchanged, then the three new texts, ids, value-icon places (540) and value-draw functions;
-    every other field as officially.
+ 1. The controller factory gives the list controller (Horizon Correction's) for the four list ids
+    and the submenu controller for the submenu id, every other id what it gives officially; the two
+    SetCurrentMenu map the new ids to the new records and every official id (and the date
+    imprint's) as before.
+ 2. Flash Mode's submenu (record 5, in the table where it is now): three lines, the camera's two
+    unchanged, then the new one (no value icon, as Wireless > Pairing); the new submenu record:
+    Smartphone Link's (record 14) with our title, lines, ids and value draws.
  3. Every handler for every value of its field, with the other bits of the byte random: list count,
     row draw (icon and text of each value), is-current (exactly one value, the fallback for a field
     no value has), set (only its field changes), the submenu line's value icon.
  4. SelectMenuController's list building on the three records (rows, one marked current, cursor)
-    and SubMenuController's drawing of record 5 (five lines: texts, value icons), placed as the
-    camera's own five-line submenu (record 10, ADJ settings).
+    and SubMenuController's drawing of record 5 (three lines) and of the new submenu (four lines:
+    texts, value icons), placed as the camera's own Wireless (13) and Smartphone Link (14).
  5. The list constructor's scan still ends after the 124 official records with the same result.
  6. Texts (line names in 21 languages, value names), every official text kept in the widened
     language rows, icons (catalog, bounds) and a picture of all icons (ICONS.png).
@@ -42,26 +45,31 @@ OFFICIAL_LEN = 0x13d2ac0
 CURRENT = 0x55084dd8
 BYTE = CURRENT + 4 + 0x99b
 GN_BYTE = CURRENT + 4 + 0x99a
-IDS = [0x020001b0, 0x020001b1, 0x020001b2]
+IDS = [0x020001b0, 0x020001b1, 0x020001b2, 0x020001b4]
+MENU_ID = 0x020001b3
 T0 = 910
 I0 = 663
 GNS = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 16, 18, 20, 22, 25, 28, 32, 36]
 THIRDS = [1, 2, 3, 4, 5, 6, 7, 8, 9]
 SLOWEST = [('1/125', 7), ('1/60', 6), ('1/30', 0), ('1/15', 1), ('1/8', 2), ('1/4', 3), ('1/2', 4), ('1"', 5)]
-# (byte, shift, mask, codes, names)
+# (byte, shift, mask, codes, English names)
 LISTS = [
-    (GN_BYTE, 0, 0xff, [0 if g == 3 else g for g in GNS], [f'GN {g}' for g in GNS]),
+    (GN_BYTE, 0, 63, [0 if g == 3 else g for g in GNS], [f'GN {g}' for g in GNS]),
     (BYTE, 1, 15, [0 if k == 3 else k for k in THIRDS], [f'-{k / 3:.1f} EV' for k in THIRDS]),
     (BYTE, 5, 7, [c for _, c in SLOWEST], [n for n, _ in SLOWEST]),
+    (GN_BYTE, 6, 1, [0, 1], ['Low ISO', 'Max Sync Speed']),
 ]
-FIRST_TEXT = [T0 + 3, T0 + 3 + 21, T0 + 3 + 30]
-FIRST_ICON = [I0, I0 + 21, I0 + 30]
-NAMES = {  # language row -> the three line names (rows as the program indexes languages)
-    1: ['Direct Flash GN', 'Direct Flash Background', 'Direct Flash Min Shutter'],
-    0: ['ダイレクト GN', 'ダイレクト 背景明るさ', 'ダイレクト 低速限界'],
-    19: ['直闪 GN', '直闪背景亮度', '直闪最低快门'],
-    18: ['直閃 GN', '直閃背景亮度', '直閃最低快門'],
+TITLES = [T0 + 1, T0 + 2, 125, T0 + 3]
+FIRST_TEXT = [T0 + 4, T0 + 4 + 21, T0 + 4 + 30, T0 + 4 + 38]
+FIRST_ICON = [I0, I0 + 21, I0 + 30, I0 + 38]
+N_ICONS = 40
+NAMES = {  # language row -> submenu name, line names (rows as the program indexes languages)
+    1: ['Direct Flash Settings', 'Guide Number', 'Background Brightness', 'Exposure Priority'],
+    0: ['ダイレクト発光設定', 'ガイドナンバー', '背景の明るさ', '露出優先'],
+    19: ['直闪设置', '闪光指数', '背景亮度', '曝光优先'],
+    18: ['直閃設定', '閃光指數', '背景亮度', '曝光優先'],
 }
+PRIORITY_ZH = ['低 ISO 优先', '同步上限优先']
 SUB_SITES = [(0x531e2064, 0x531e206c), (0x531e20cc, 0x531e20d4), (0x531e2438, 0x531e2444), (0x531e2668, 0x531e266c), (0x531e2734, 0x531e2740)]
 SEL_SITE = (0x531d6d54, 0x531d6d64)
 
@@ -81,33 +89,47 @@ def expected_index(raw, shift, mask, codes):
 
 def check_factory_current(new, off):
     lst = factory_class(off, 0x02000094)
+    sub = factory_class(off, 0x020000d0)
+    check(sub == factory_class(off, 0x020000d5), 'official: D-Range and Pairing submenus do not share the controller path')
     for cid in IDS:
         check(factory_class(new, cid) == lst, f'factory: {cid:#x} is not the list controller')
-    for cid in (0x020001af, 0x020001b3, 0x020001b4):
+    check(factory_class(new, MENU_ID) == sub, 'factory: the submenu id is not the submenu controller')
+    for cid in (0x020001af, 0x020001b5, 0x020001b6):
         check(factory_class(new, cid) == factory_class(off, cid), f'factory: {cid:#x} (not ours) changed')
     dm.check_set_current(new, off)
     recs = [set_current(new, 0x531d5e8c, 0x1a4, cid) for cid in IDS]
-    check(recs == [128, 129, 130], f'list SetCurrentMenu of the new ids: {recs}')
-    for cid in (0x020001af, 0x020001b3):
-        check(set_current(new, 0x531d5e8c, 0x1a4, cid) == set_current(off, 0x531d5e8c, 0x1a4, cid), f'list SetCurrentMenu({cid:#x}) not ours')
-    print('  list controller for', [hex(i) for i in IDS], '; records', recs)
-    return recs
+    check(recs == [128, 129, 130, 131], f'list SetCurrentMenu of the new ids: {recs}')
+    subrec = set_current(new, 0x531e1bd0, 0x174, MENU_ID)
+    check(subrec == 20, f'submenu SetCurrentMenu of the new id: {subrec}')
+    for cid in (0x020001af, 0x020001b5):
+        for fn, o in ((0x531d5e8c, 0x1a4), (0x531e1bd0, 0x174)):
+            check(set_current(new, fn, o, cid) == set_current(off, fn, o, cid), f'SetCurrentMenu {fn:#x}({cid:#x}) not ours')
+    print('  list controller for', [hex(i) for i in IDS], '; records', recs, '; submenu', hex(MENU_ID), 'record', subrec)
+    return recs, subrec
 
 
-def check_submenu_record(new, off):
+def check_submenu_record(new, off, subrec):
     st, _ = tables(new)
     r = st + 5 * 0x64
     o = 0x53da6718 + 5 * 0x64
-    check(new.rd(r + 6, 1)[0] == 5, 'record 5: line count')
-    check([new.u16(r + 8 + 2 * k) for k in range(6)] == [127, 137, T0, T0 + 1, T0 + 2, 0], 'record 5: line texts')
-    check([new.u32(r + 0x14 + 4 * k) for k in range(5)] == [0x020000f3, 0x020000f6] + IDS, 'record 5: line ids')
-    check([new.u32(r + 0x28 + 4 * k) for k in range(5)] == [540] * 5, 'record 5: value icon places')
-    check(new.u32(r + 0x3c) == off.u32(o + 0x3c) and new.u32(r + 0x44) == off.u32(o + 0x44), 'record 5: the camera lines\' value draws')
-    draws = [new.u32(r + 0x4c + 8 * k) for k in range(3)]
-    check(all(d >= BASE + OFFICIAL_LEN for d in draws) and all(new.u32(r + 0x50 + 8 * k) == 0 for k in range(3)), 'record 5: new value draws')
-    changed = set(range(6, 7)) | set(range(12, 0x14)) | set(range(0x1c, 0x28)) | set(range(0x30, 0x3c)) | set(range(0x4c, 0x64))
+    check(new.rd(r + 6, 1)[0] == 3, 'record 5: line count')
+    check([new.u16(r + 8 + 2 * k) for k in range(4)] == [127, 137, T0, 0], 'record 5: line texts')
+    check([new.u32(r + 0x14 + 4 * k) for k in range(4)] == [0x020000f3, 0x020000f6, MENU_ID, 0x10000000], 'record 5: line ids')
+    check([new.u32(r + 0x28 + 4 * k) for k in range(4)] == [540, 540, 540, 0], 'record 5: value icon places')
+    check([new.u32(r + 0x3c + 4 * k) for k in range(6)] == [off.u32(o + 0x3c + 4 * k) for k in range(4)] + [0, 0], "record 5: value draws (the camera's two, none for ours)")
+    changed = {6, 12, 13} | set(range(0x1c, 0x20)) | set(range(0x30, 0x34))
     diff = [hex(k) for k in range(0x64) if k not in changed and new.rd(r + k, 1) != off.rd(o + k, 1)]
     check(not diff, f'record 5: other fields changed {diff}')
+    q = st + subrec * 0x64
+    m = 0x53da6718 + 14 * 0x64
+    check(new.u16(q + 2) == T0 and new.rd(q + 6, 1)[0] == 4, 'submenu record: title / count')
+    check([new.u16(q + 8 + 2 * k) for k in range(5)] == TITLES + [0], 'submenu record: line texts')
+    check([new.u32(q + 0x14 + 4 * k) for k in range(5)] == IDS + [0x10000000], 'submenu record: line ids')
+    draws = [new.u32(q + 0x3c + 8 * k) for k in range(4)]
+    check(all(d >= BASE + OFFICIAL_LEN for d in draws) and all(new.u32(q + 0x40 + 8 * k) == 0 for k in range(4)), 'submenu record: value draws')
+    changed = {2, 3} | set(range(8, 16)) | set(range(0x14, 0x24)) | set(range(0x3c, 0x5c))
+    diff = [hex(k) for k in range(0x64) if k not in changed and new.rd(q + k, 1) != off.rd(m + k, 1)]
+    check(not diff, f'submenu record: fields differ from Smartphone Link {diff}')
     return draws
 
 
@@ -118,7 +140,7 @@ def check_handlers(new, recs, draws):
     for which, ((byte, shift, mask, codes, names), rec) in enumerate(zip(LISTS, recs)):
         q = lt + rec * 0x4c
         h = {name: new.u32(q + o) for name, o in (('count', 0x0c), ('draw', 0x14), ('set', 0x24), ('current', 0x2c))}
-        check(new.u16(q + 4) == T0 + which, f'list {which}: title')
+        check(new.u16(q + 4) == TITLES[which], f'list {which}: title')
         horizon = 0x53da2d20 + 45 * 0x4c
         same = [o for o in range(0, 0x4c, 4) if o not in (0x04, 0x0c, 0x14, 0x24, 0x2c)]
         check(all(new.u32(q + o) == dm.Image.u32(OFF, horizon + o) for o in same), f'list {which}: other fields differ from Horizon Correction')
@@ -133,7 +155,7 @@ def check_handlers(new, recs, draws):
         want = [(item, FIRST_ICON[which] + i, FIRST_TEXT[which] + i) for i in range(n)] + [None]
         check(out == want, f'list {which}: draw {out}')
         cases = 0
-        values = sorted(set(range(mask + 1)) if mask < 0xff else set(range(256)))
+        values = list(range(mask + 1))
         for f in values:
             other = rnd.randrange(256)
             raw = (other & ~(mask << shift) & 0xff) | (f << shift)
@@ -159,9 +181,9 @@ def check_handlers(new, recs, draws):
         print(f'  list {which}: {n} values, {cases} set cases over {len(values)} field values')
 
 
-def check_views(new, off, recs):
+def check_views(new, off, recs, subrec):
     for which, ((byte, shift, mask, codes, names), rec) in enumerate(zip(LISTS, recs)):
-        for f in (0, codes[0], codes[-1], mask):
+        for f in sorted({0, codes[0], codes[-1], mask}):
             raw = f << shift
 
             def setup(e, this, rec=rec):
@@ -183,45 +205,49 @@ def check_views(new, off, recs):
             check(e.byte(0x70000000 + 0x1a6) == cur, f'list {which}, field {f}: cursor {e.byte(0x70000000 + 0x1a6)}')
         print(f'  list {which}: rows', [(c[2], c[3]) for c in items][:4], '...')
 
-    def sub_setup(e, this):
-        for o in (0x15c, 0x160, 0x164, 0x168, 0x16c, 0x170):
-            e.mu.mem_write(this + o, struct.pack('<I', 0x70700000 + o * 0x100))
-        e.mu.mem_write(this + 0x174, bytes([5]))
-        e.mu.mem_write(GN_BYTE, bytes([12]))
-        e.mu.mem_write(BYTE, bytes([1 | (6 << 1) | (1 << 5)]))
-        return 0x531e271c
-    e, seen = views(new, 0, sub_setup)
-    icons = [c[2] for c in e.calls if c[0] == 'sub-icon']
-    texts = [c[1] for c in seen if c[0] == hex(0x53583014)]
-    titles = [c[1] for c in seen if c[0] == hex(0x5357f2b0)]
-    check(texts == [127, 137, T0, T0 + 1, T0 + 2] and titles == [127], f'submenu: texts {texts} titles {titles}')
-    check(icons[-3:] == [I0 + GNS.index(12), I0 + 21 + 5, I0 + 30 + 3], f'submenu: value icons {icons}')
-    print('  submenu: title', titles, 'lines', texts, 'value icons', icons)
-    # Placed as the camera's own five-line submenu (record 10).
-    PLACE = {hex(0x535712b0), hex(0x5358304c), hex(0x53570a9c), hex(0x53582fb4), hex(0x53571788)}
-    out = []
-    for img, rec in ((new, 5), (off, 10)):
-        def setup(e, this, rec=rec):
+    def draw_sub(img, rec, gnb=0, dfb=0):
+        def setup(e, this):
             for o in (0x15c, 0x160, 0x164, 0x168, 0x16c, 0x170):
                 e.mu.mem_write(this + o, struct.pack('<I', 0x70700000 + o * 0x100))
             e.mu.mem_write(this + 0x174, bytes([rec]))
+            e.mu.mem_write(GN_BYTE, bytes([gnb]))
+            e.mu.mem_write(BYTE, bytes([dfb]))
             return 0x531e271c
         e, seen = views(img, 0, setup)
-        out.append([(c[0], c[1]) for c in seen if c[0] in PLACE])
-    print('  lines shown: ours', [c for c in out[0] if c[0] == hex(0x535712b0)], 'ADJ settings', [c for c in out[1] if c[0] == hex(0x535712b0)])
-    check(out[0] == out[1], 'submenu: lines placed differently from the five-line ADJ settings submenu')
+        icons = [c[2] for c in e.calls if c[0] == 'sub-icon']
+        texts = [c[1] for c in seen if c[0] == hex(0x53583014)]
+        titles = [c[1] for c in seen if c[0] == hex(0x5357f2b0)]
+        PLACE = {hex(0x535712b0), hex(0x5358304c), hex(0x53570a9c), hex(0x53582fb4), hex(0x53571788)}
+        return icons, texts, titles, [(c[0], c[1]) for c in seen if c[0] in PLACE]
+
+    # Flash Mode's submenu: three lines, the camera's two with their value icons, ours without.
+    icons, texts, titles, placed = draw_sub(new, 5, 0, 0)
+    o_icons, o_texts, _, _ = draw_sub(off, 5, 0, 0)
+    check(texts == [127, 137, T0] and titles == [127] and icons == o_icons, f'Flash submenu: texts {texts} titles {titles} icons {icons} vs {o_icons}')
+    _, _, _, wireless = draw_sub(off, 13)
+    check(placed == wireless, 'Flash submenu: lines placed differently from the three-line Wireless submenu')
+    print('  Flash submenu: title', titles, 'lines', texts, 'value icons', icons)
+    # Ours: four lines with their values' icons.
+    for gnb, dfb in ((0, 1), (64 | 12, 1 | (6 << 1) | (1 << 5)), (36, (9 << 1) | (7 << 5))):
+        icons, texts, titles, placed = draw_sub(new, subrec, gnb, dfb)
+        want = [FIRST_ICON[w] + expected_index(gnb if LISTS[w][0] == GN_BYTE else dfb, LISTS[w][1], LISTS[w][2], LISTS[w][3]) for w in range(4)]
+        check(texts == TITLES and titles == [T0] and icons == want, f'submenu ({gnb}, {dfb:#x}): texts {texts} titles {titles} icons {icons} want {want}')
+    _, _, _, smartphone = draw_sub(off, 14)
+    check(placed == smartphone, 'submenu: lines placed differently from the four-line Smartphone Link submenu')
+    print('  Direct Flash Settings: title', titles, 'lines', texts, 'value icons', icons)
 
 
 def check_texts_icons(new, earlier, png):
     for row, want in NAMES.items():
-        got = [text(new, row, T0 + k) for k in range(3)]
+        got = [text(new, row, T0 + k) for k in range(4)]
         check(got == want, f'line names, row {row}: {got}')
+    check([text(new, 19, FIRST_TEXT[3] + i) for i in range(2)] == PRIORITY_ZH, 'priority names (zh-CN)')
     for l in range(21):
-        for k in range(3):
+        for k in range(4):
             check(text(new, l, T0 + k), f'line name {k} missing in row {l}')
         for which, (_, _, _, codes, names) in enumerate(LISTS):
             got = [text(new, l, FIRST_TEXT[which] + i) for i in range(len(codes))]
-            check(got == names, f'value names {which}, row {l}: {got}')
+            check(all(got) and (which == 3 or got == names) and (which != 3 or l != 1 or got == names), f'value names {which}, row {l}: {got}')
         # Every text of a build without these lines kept in the widened rows.
         if earlier:
             lost = [t for t in range(0, 896) if text(new, l, t) != text(earlier, l, t)]
@@ -230,14 +256,14 @@ def check_texts_icons(new, earlier, png):
         check(text(new, 1, t) is not None or t == 853, f'text {t} lost')
     for low in (0x5323dbb4, 0x5323e40c):
         w = new.u32(low)
-        check((((w >> 4) & 0xf000) | (w & 0xfff)) >= I0 + 37, f'icon bound at {low:#x}')
+        check((((w >> 4) & 0xf000) | (w & 0xfff)) >= I0 + N_ICONS - 1, f'icon bound at {low:#x}')
     pics = []
-    for k in range(38):
+    for k in range(N_ICONS):
         d = new.u32(dm.ICON_CATALOG + (I0 + k) * 4)
         check(d != 0 and struct.unpack('<4H', new.rd(d, 8)) == (1, 40, 40, 0), f'icon {I0 + k} descriptor')
         pics.append(d)
-    print('  texts: rows 1 / 19:', [text(new, 1, T0 + k) for k in range(3)], [text(new, 19, T0 + k) for k in range(3)])
-    print('  values:', [text(new, 1, FIRST_TEXT[w]) + ' .. ' + text(new, 1, FIRST_TEXT[w] + len(LISTS[w][3]) - 1) for w in range(3)])
+    print('  texts: rows 1 / 19:', [text(new, 1, T0 + k) for k in range(4)], [text(new, 19, T0 + k) for k in range(4)])
+    print('  values:', [text(new, 1, FIRST_TEXT[w]) + ' .. ' + text(new, 1, FIRST_TEXT[w] + len(LISTS[w][3]) - 1) for w in range(4)])
     if png:
         render_icons(png)
 
@@ -300,13 +326,13 @@ def main():
     new, off = Image(sys.argv[1]), Image(sys.argv[2])
     OFF = off
     print('1. factory and SetCurrentMenu')
-    recs = check_factory_current(new, off)
-    print('2. Flash Mode submenu record')
-    draws = check_submenu_record(new, off)
+    recs, subrec = check_factory_current(new, off)
+    print('2. Flash Mode submenu record and the new submenu record')
+    draws = check_submenu_record(new, off, subrec)
     print('3. handlers')
     check_handlers(new, recs, draws)
     print('4. list building and submenu drawing')
-    check_views(new, off, recs)
+    check_views(new, off, recs, subrec)
     print('5. list constructor scan')
     dm.check_constructor_scan(new, off)
     print('6. texts and icons')

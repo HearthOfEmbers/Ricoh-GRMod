@@ -1,55 +1,70 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /**
- * Direct Flash's settings in the camera menu (0.8.4): three more lines in the Flash submenu of the
- * still shooting menu (SubMenuController record 5, "Flash Mode": Flash Mode, Flash Output), after
- * the camera's two:
+ * Direct Flash's settings in the camera menu (0.8.4). The Flash submenu of the still shooting menu
+ * (SubMenuController record 5, "Flash Mode": Flash Mode, Flash Output) gets a third line, "Direct
+ * Flash Settings", that opens a submenu of its own (as the camera's Wireless submenu opens Pairing)
+ * with four lines, each showing the icon of its current value and opening a list
+ * (SelectMenuController):
  *
- *   Direct Flash GN        GN 2 .. GN 36            the flash's guide number (ISO 100, metres)
- *   Direct Flash Background -0.3 EV .. -3.0 EV      how much darker than a correct exposure the
- *                                                    background (ambient light only) is
- *   Direct Flash Min Shutter 1/125 .. 1"            the slowest shutter speed
+ *   Guide Number            GN 2 .. GN 36           the flash's guide number (ISO 100, metres)
+ *   Background Brightness   -0.3 EV .. -3.0 EV      how much darker than a correct exposure the
+ *                                                   background (ambient light only) is
+ *   Minimum Shutter Speed   1/125 .. 1"             the slowest shutter speed (the camera's text)
+ *   Exposure Priority       Low ISO / Max Sync      Max Sync: where the flash-sync limit holds the
+ *                                                   shutter back, a smaller aperture and a higher
+ *                                                   ISO for a faster sync limit (the planner)
  *
- * Each line shows the icon of its current value and opens a list (SelectMenuController) of the
- * values. Where they are kept (see `tools/directflash/directflash.c`, which reads them):
- *  - the guide number: byte 0x99A of the user settings (padding the factory-defaults initialiser
- *    never writes, next to Direct Flash's byte 0x99B), the number itself; 0, what the byte is on
- *    every camera, is GN 3 (the GF-2's);
- *  - background and slowest shutter speed: bits 1..4 and 5..7 of byte 0x99B (bit 0: Direct Flash
- *    chosen, see `directflash.ts`); 0 is -1.0 EV and 1/30 s.
- * A value the lists do not have (a byte the official firmware or an earlier build left) shows as
- * the default; the planner reads it the same way (an unlisted guide number is used as it is).
+ * Where they are kept (see `tools/directflash/directflash.c`, which reads them):
+ *  - byte 0x99A of the user settings (padding the factory-defaults initialiser never writes, next
+ *    to Direct Flash's byte 0x99B): bits 0..5 the guide number itself (0, what the byte is on every
+ *    camera, is GN 3, the GF-2's), bit 6 Max Sync;
+ *  - bits 1..4 and 5..7 of byte 0x99B (bit 0: Direct Flash chosen, see `directflash.ts`): the
+ *    background and the slowest shutter speed; 0 is -1.0 EV and 1/30 s.
+ * A value the lists do not have (a byte an earlier build left) shows as the default; the planner
+ * reads it the same way (an unlisted guide number 1..63 is used as it is).
  *
  * What is changed, all found by reading the official 1.11 code:
- *  - submenu record 5 (in the table wherever it is now, see `datestamp-menu.ts`): line count 5, the
- *    three line texts, controller ids DF_GN_ID.., the value icon's x (540, as the two lines before)
- *    and value-draw functions; laid out as the camera's own five-line submenu (record 10, ADJ
- *    settings);
- *  - three list records (copied from Horizon Correction's) added to the list table, SetCurrentMenu
- *    mapping the three ids to them and the controller factory handing out the list controller for
- *    them (as for the date imprint's lists);
- *  - texts DF_TEXT_ID.. (the three line names in 21 languages, then the value names, the same in
- *    every language) and 40x40 icons DF_ICON_ID.. (one per value).
+ *  - submenu record 5 (in the table wherever it is now, see `datestamp-menu.ts`): a third line,
+ *    controller id DF_MENU_ID, value icon place 540 and no value icon, as the Wireless submenu's
+ *    (record 13) line that opens Pairing (record 12);
+ *  - a submenu record for DF_MENU_ID (`addSubmenuRecord`), laid out as the camera's four-line
+ *    Smartphone Link submenu (record 14);
+ *  - four list records (Horizon Correction's, `addListRecords`), SetCurrentMenu mapping their ids;
+ *  - the controller factory: the submenu controller for DF_MENU_ID, the list controller for the
+ *    four list ids (as for the date imprint's);
+ *  - texts DF_TEXT_ID.. (the submenu's name, three line names, the priority values in 21
+ *    languages; the other values the same in every language) and 40x40 icons DF_ICON_ID.. (one
+ *    per value).
  * Every list has at most 21 values: the list controller makes its rows for the longest list among
  * the camera's own records (21).
  */
 import { FirmwareError } from '../types';
 import { assembleWords, movImmediate, movWord } from './arm';
 import { ICON_CATALOG, LOOKUP_BOUNDS, LANGUAGES, Patch, TEXT_CATALOG, concat, expectWord, u16le, u32le, utf16z, widenTextRows } from './build';
-import { LIST_CONTROLLER_ID, LIST_SET_ITEM, SUB_RECORD, SUB_SET_ICON, addListRecords, hookControllerFactory, listTemplate, submenuTable } from './datestamp-menu';
+import {
+  LIST_CONTROLLER_ID, LIST_SET_ITEM, SUBMENU_CONTROLLER_ID, SUB_RECORD, SUB_SET_ICON, addListRecords, addSubmenuRecord, hookControllerFactory, listTemplate, submenuTable,
+} from './datestamp-menu';
 import { DIRECT_FLASH_BYTE, DIRECT_FLASH_GN_BYTE } from './directflash';
 
-/** Controller ids of the three lists (not used by the firmware). */
+/** Controller ids (not used by the firmware): the lists, the submenu. */
 export const DF_GN_ID = 0x020001b0;
 export const DF_BACKGROUND_ID = 0x020001b1;
 export const DF_SLOWEST_ID = 0x020001b2;
-/** Texts: the three line names, then the values' names (guide numbers, backgrounds, shutter speeds). */
+export const DF_MENU_ID = 0x020001b3;
+export const DF_PRIORITY_ID = 0x020001b4;
+/** Texts: the submenu's name, the line names (GN, background, priority), then the values' names. */
 export const DF_TEXT_ID = 910;
-/** Icons: one per value, guide numbers, backgrounds, shutter speeds. */
+/** The camera's own "Minimum Shutter Speed" (ISO submenu), the name of the shutter line. */
+export const TEXT_MIN_SHUTTER = 125;
+/** Icons: one per value, guide numbers, backgrounds, shutter speeds, priorities. */
 export const DF_ICON_ID = 663;
 
 /** Guide numbers of the list (ISO 100, metres); stored as the number, the default (3) as 0. */
 export const DF_GUIDE_NUMBERS: readonly number[] = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 16, 18, 20, 22, 25, 28, 32, 36];
 export const DF_GN_DEFAULT = 3;
+export const DF_GN_MASK = 0x3f;
+/** Bit 6 of byte 0x99A: Max Sync. */
+export const DF_PRIORITY_SHIFT = 6;
 /** Backgrounds: k / 3 EV darker, k = 1..9 (-0.3 .. -3.0 EV); stored as k, the default (-1.0 EV, k = 3) as 0. */
 export const DF_BACKGROUND_THIRDS: readonly number[] = [1, 2, 3, 4, 5, 6, 7, 8, 9];
 export const DF_BACKGROUND_DEFAULT = 3;
@@ -62,28 +77,47 @@ export const DF_BACKGROUND_SHIFT = 1;
 export const DF_SLOWEST_SHIFT = 5;
 
 /** In `LANGS` order (cs da en fi fr de el hu it ja ko nl pl pt ru zh-CN es sv th zh-TW tr). */
+export const DF_MENU_NAMES: readonly string[] = [
+  'Nastavení přímého blesku', 'Direkte blitz-indstillinger', 'Direct Flash Settings', 'Suoran salaman asetukset', 'Réglages flash direct',
+  'Direktblitz-Optionen', 'Ρυθμίσεις άμεσου φλας', 'Közvetlen vaku beáll.', 'Impostazioni flash diretto', 'ダイレクト発光設定', '다이렉트 플래시 설정',
+  'Instell. directe flits', 'Ustawienia błysku bezp.', 'Config. flash direto', 'Настр. прямой вспышки', '直闪设置', 'Ajustes flash directo',
+  'Direktblixtinställningar', 'ตั้งค่าแฟลชตรง', '直閃設定', 'Doğrudan flaş ayarları',
+];
 export const DF_GN_NAMES: readonly string[] = [
-  'Přímý blesk GN', 'Direkte blitz GN', 'Direct Flash GN', 'Suora salama GN', 'Flash direct GN', 'Direktblitz GN', 'Άμεσο φλας GN',
-  'Közvetlen vaku GN', 'Flash diretto GN', 'ダイレクト GN', '다이렉트 GN', 'Directe flits GN', 'Błysk bezpośredni GN', 'Flash direto GN',
-  'Прямая вспышка GN', '直闪 GN', 'Flash directo GN', 'Direktblixt GN', 'แฟลชตรง GN', '直閃 GN', 'Doğrudan flaş GN',
+  'Směrné číslo', 'Ledetal', 'Guide Number', 'Ohjeluku', 'Nombre guide', 'Leitzahl', 'Αριθμός οδηγός',
+  'Kulcsszám', 'Numero guida', 'ガイドナンバー', '가이드 번호', 'Richtgetal', 'Liczba przewodnia', 'Número guia',
+  'Ведущее число', '闪光指数', 'Número guía', 'Ledtal', 'ไกด์นัมเบอร์', '閃光指數', 'Kılavuz sayısı',
 ];
 export const DF_BACKGROUND_NAMES: readonly string[] = [
-  'Přímý blesk: pozadí', 'Direkte blitz: baggrund', 'Direct Flash Background', 'Suora salama: tausta', 'Flash direct : fond', 'Direktblitz: Hintergrund', 'Άμεσο φλας: φόντο',
-  'Közvetlen vaku: háttér', 'Flash diretto: sfondo', 'ダイレクト 背景明るさ', '다이렉트 배경', 'Directe flits: achtergr.', 'Błysk bezpośr.: tło', 'Flash direto: fundo',
-  'Прямая вспышка: фон', '直闪背景亮度', 'Flash directo: fondo', 'Direktblixt: bakgrund', 'แฟลชตรง: พื้นหลัง', '直閃背景亮度', 'Doğrudan flaş: arka plan',
+  'Jas pozadí', 'Baggrundens lysstyrke', 'Background Brightness', 'Taustan kirkkaus', 'Luminosité arrière-plan', 'Hintergrundhelligkeit', 'Φωτεινότητα φόντου',
+  'Háttér fényereje', 'Luminosità sfondo', '背景の明るさ', '배경 밝기', 'Helderheid achtergrond', 'Jasność tła', 'Brilho do fundo',
+  'Яркость фона', '背景亮度', 'Brillo del fondo', 'Bakgrundens ljusstyrka', 'ความสว่างพื้นหลัง', '背景亮度', 'Arka plan parlaklığı',
 ];
-export const DF_SLOWEST_NAMES: readonly string[] = [
-  'Přímý blesk: min. čas', 'Direkte blitz: min. lukker', 'Direct Flash Min Shutter', 'Suora salama: suljin min.', 'Flash direct : vit. min.', 'Direktblitz: min. Zeit', 'Άμεσο φλας: ελάχ. ταχ.',
-  'Közvetlen vaku: min. idő', 'Flash diretto: posa min.', 'ダイレクト 低速限界', '다이렉트 저속한계', 'Directe flits: min. tijd', 'Błysk bezpośr.: min. czas', 'Flash direto: vel. mín.',
-  'Прям. всп.: мин. выд.', '直闪最低快门', 'Flash directo: obt. mín.', 'Direktblixt: min. slutare', 'แฟลชตรง: ชัตเตอร์ต่ำสุด', '直閃最低快門', 'Doğrudan flaş: min. enst.',
+export const DF_PRIORITY_NAMES: readonly string[] = [
+  'Priorita expozice', 'Eksponeringsprioritet', 'Exposure Priority', 'Valotuksen etusija', 'Priorité exposition', 'Belichtungspriorität', 'Προτεραιότητα έκθεσης',
+  'Expozíciós prioritás', 'Priorità esposizione', '露出優先', '노출 우선', 'Belichtingsprioriteit', 'Priorytet ekspozycji', 'Prioridade exposição',
+  'Приоритет экспозиции', '曝光优先', 'Prioridad exposición', 'Exponeringsprioritet', 'ลำดับการรับแสง', '曝光優先', 'Pozlama önceliği',
+];
+/** The two priorities, in `LANGS` order. */
+export const DF_LOW_ISO_NAMES: readonly string[] = [
+  'Nízké ISO', 'Lav ISO', 'Low ISO', 'Matala ISO', 'ISO bas', 'Niedrige ISO', 'Χαμηλό ISO',
+  'Alacsony ISO', 'ISO basso', '低ISO優先', '저 ISO 우선', 'Lage ISO', 'Niskie ISO', 'ISO baixo',
+  'Низкая ISO', '低 ISO 优先', 'ISO bajo', 'Låg ISO', 'ISO ต่ำ', '低 ISO 優先', 'Düşük ISO',
+];
+export const DF_MAX_SYNC_NAMES: readonly string[] = [
+  'Max. synchronizace', 'Maks. synk.', 'Max Sync Speed', 'Maks. synkronointi', 'Synchro max.', 'Max. Synchronzeit', 'Μέγ. συγχρονισμός',
+  'Max. szinkron', 'Sincro max.', '同調上限優先', '동조 상한 우선', 'Max. synchronisatie', 'Maks. synchronizacja', 'Sincronização máx.',
+  'Макс. синхронизация', '同步上限优先', 'Sincro. máx.', 'Max. synk', 'ซิงค์สูงสุด', '同步上限優先', 'Maks. senkron',
 ];
 
 export const dfBackgroundName = (k: number): string => `-${(k / 3).toFixed(1)} EV`;
 export const dfGuideNumberName = (gn: number): string => `GN ${gn}`;
+const same = (text: string): string[] => Array(LANGUAGES).fill(text) as string[];
 
 /** One list: values (menu order) and how each is stored in a field of a setting byte. */
 export interface DfList {
   id: number;
+  /** Line name and list title. */
   title: number;
   byte: number;
   shift: number;
@@ -92,36 +126,41 @@ export interface DfList {
   codes: readonly number[];
   /** List position shown for a field value no position has. */
   fallback: number;
-  names: readonly string[];
+  /** Per value, the name in the 21 languages (`LANGS` order). */
+  names: readonly (readonly string[])[];
   firstText: number;
   firstIcon: number;
   icons: readonly Uint8Array[];
 }
 
+/** The four lists, in the submenu's order. */
 export function directFlashLists(): DfList[] {
   const gnCodes = DF_GUIDE_NUMBERS.map((g) => (g === DF_GN_DEFAULT ? 0 : g));
   const bgCodes = DF_BACKGROUND_THIRDS.map((k) => (k === DF_BACKGROUND_DEFAULT ? 0 : k));
-  let text = DF_TEXT_ID + 3;
+  let text = DF_TEXT_ID + 4;
   let icon = DF_ICON_ID;
-  const make = (id: number, title: number, byte: number, shift: number, mask: number, codes: number[], names: string[], icons: Uint8Array[]): DfList => {
+  const make = (id: number, title: number, byte: number, shift: number, mask: number, codes: number[], names: string[][], icons: Uint8Array[]): DfList => {
     const l: DfList = { id, title, byte, shift, mask, codes, fallback: codes.indexOf(0), names, firstText: text, firstIcon: icon, icons };
     text += codes.length;
     icon += codes.length;
     return l;
   };
   return [
-    make(DF_GN_ID, DF_TEXT_ID, DIRECT_FLASH_GN_BYTE, 0, 0xff, gnCodes, DF_GUIDE_NUMBERS.map(dfGuideNumberName), DF_GUIDE_NUMBERS.map((g) => drawValueIcon('GN', String(g)))),
-    make(DF_BACKGROUND_ID, DF_TEXT_ID + 1, DIRECT_FLASH_BYTE, DF_BACKGROUND_SHIFT, 15, bgCodes, DF_BACKGROUND_THIRDS.map(dfBackgroundName),
+    make(DF_GN_ID, DF_TEXT_ID + 1, DIRECT_FLASH_GN_BYTE, 0, DF_GN_MASK, gnCodes, DF_GUIDE_NUMBERS.map((g) => same(dfGuideNumberName(g))),
+      DF_GUIDE_NUMBERS.map((g) => drawValueIcon('GN', String(g)))),
+    make(DF_BACKGROUND_ID, DF_TEXT_ID + 2, DIRECT_FLASH_BYTE, DF_BACKGROUND_SHIFT, 15, bgCodes, DF_BACKGROUND_THIRDS.map((k) => same(dfBackgroundName(k))),
       DF_BACKGROUND_THIRDS.map((k) => drawValueIcon('EV', `-${(k / 3).toFixed(1)}`))),
-    make(DF_SLOWEST_ID, DF_TEXT_ID + 2, DIRECT_FLASH_BYTE, DF_SLOWEST_SHIFT, 7, DF_SLOWEST.map((x) => x.code), DF_SLOWEST.map((x) => x.name),
+    make(DF_SLOWEST_ID, TEXT_MIN_SHUTTER, DIRECT_FLASH_BYTE, DF_SLOWEST_SHIFT, 7, DF_SLOWEST.map((x) => x.code), DF_SLOWEST.map((x) => same(x.name)),
       DF_SLOWEST.map((x) => (x.name.startsWith('1/') ? drawValueIcon('1/', x.name.slice(2)) : drawValueIcon('SEC', '1')))),
+    make(DF_PRIORITY_ID, DF_TEXT_ID + 3, DIRECT_FLASH_GN_BYTE, DF_PRIORITY_SHIFT, 1, [0, 1], [[...DF_LOW_ISO_NAMES], [...DF_MAX_SYNC_NAMES]],
+      [drawValueIcon('LOW', 'ISO'), drawValueIcon('MAX', 'TV')]),
   ];
 }
 
 // --------------------------------------------------------------------------------------------
 // Icons: the tile of the camera's menu icons (grey border, dark fill), a small label over the value.
 
-/** 5x7 glyphs (narrower for 1 - . /), '#' = ink. */
+/** 5x7 glyphs (narrower for 1 I - . /), '#' = ink. */
 const GLYPHS: Record<string, readonly string[]> = {
   '0': ['.###.', '#...#', '#..##', '#.#.#', '##..#', '#...#', '.###.'],
   '1': ['.#.', '##.', '.#.', '.#.', '.#.', '.#.', '###'],
@@ -142,6 +181,14 @@ const GLYPHS: Record<string, readonly string[]> = {
   V: ['#...#', '#...#', '#...#', '#...#', '.#.#.', '.#.#.', '..#..'],
   S: ['.####', '#....', '#....', '.###.', '....#', '....#', '####.'],
   C: ['.###.', '#...#', '#....', '#....', '#....', '#...#', '.###.'],
+  I: ['###', '.#.', '.#.', '.#.', '.#.', '.#.', '###'],
+  O: ['.###.', '#...#', '#...#', '#...#', '#...#', '#...#', '.###.'],
+  L: ['#....', '#....', '#....', '#....', '#....', '#....', '#####'],
+  W: ['#...#', '#...#', '#...#', '#.#.#', '#.#.#', '##.##', '#...#'],
+  M: ['#...#', '##.##', '#.#.#', '#.#.#', '#...#', '#...#', '#...#'],
+  A: ['.###.', '#...#', '#...#', '#####', '#...#', '#...#', '#...#'],
+  X: ['#...#', '#...#', '.#.#.', '..#..', '.#.#.', '#...#', '#...#'],
+  T: ['#####', '..#..', '..#..', '..#..', '..#..', '..#..', '..#..'],
 };
 
 export const DF_ICON_W = 40;
@@ -273,8 +320,12 @@ function installIcons(patch: Patch, iconbin: Uint8Array, icons: readonly { id: n
   return concat(parts);
 }
 
+/** The Smartphone Link submenu (record 14), the model of the new submenu: four lines with value icons. */
+const MODEL_SUBMENU = 14;
+const MODEL_LINE_IDS = [0x020000dc, 0x02000124, 0x020000dd, 0x020000de];
+
 /**
- * Install the three lines. Runs after every other camera-menu addition that copies the submenu or
+ * Install the settings. Runs after every other camera-menu addition that copies the submenu or
  * list table (date imprint, power-off pictures). Returns the ICONBIN data with the icons appended.
  */
 export function installDirectFlashMenu(patch: Patch, iconbin: Uint8Array): Uint8Array {
@@ -285,10 +336,11 @@ export function installDirectFlashMenu(patch: Patch, iconbin: Uint8Array): Uint8
 
   // --- Texts and icons.
   installTexts(patch, [
-    { id: DF_TEXT_ID, names: DF_GN_NAMES },
-    { id: DF_TEXT_ID + 1, names: DF_BACKGROUND_NAMES },
-    { id: DF_TEXT_ID + 2, names: DF_SLOWEST_NAMES },
-    ...lists.flatMap((l) => l.names.map((name, i) => ({ id: l.firstText + i, names: Array(LANGUAGES).fill(name) as string[] }))),
+    { id: DF_TEXT_ID, names: DF_MENU_NAMES },
+    { id: DF_TEXT_ID + 1, names: DF_GN_NAMES },
+    { id: DF_TEXT_ID + 2, names: DF_BACKGROUND_NAMES },
+    { id: DF_TEXT_ID + 3, names: DF_PRIORITY_NAMES },
+    ...lists.flatMap((l) => l.names.map((names, i) => ({ id: l.firstText + i, names }))),
   ]);
   const icons = installIcons(patch, iconbin, lists.flatMap((l) => l.icons.map((px, i) => ({ id: l.firstIcon + i, px }))));
 
@@ -339,11 +391,33 @@ export function installDirectFlashMenu(patch: Patch, iconbin: Uint8Array): Uint8
     records.push({ id: l.id, record: r });
   }
   addListRecords(patch, records, 'Direct Flash settings');
+  const listIds = lists.map((l) => l.id);
+  if (Math.min(...listIds) !== DF_GN_ID || Math.max(...listIds) !== DF_PRIORITY_ID || DF_MENU_ID <= DF_GN_ID || DF_MENU_ID >= DF_PRIORITY_ID) fail('internal', 'Direct Flash ids');
   hookControllerFactory(patch, `movw ip, #${lo(DF_GN_ID)}; movt ip, #${hi(DF_GN_ID)}
-     sub ip, r1, ip; cmp ip, #${lists.length - 1}; bhi prior
-     movw r1, #${lo(LIST_CONTROLLER_ID)}; movt r1, #${hi(LIST_CONTROLLER_ID)}`, 'Direct Flash settings: list controller');
+     sub ip, r1, ip; cmp ip, #${DF_PRIORITY_ID - DF_GN_ID}; bhi prior
+     cmp ip, #${DF_MENU_ID - DF_GN_ID}
+     movweq r1, #${lo(SUBMENU_CONTROLLER_ID)}; movteq r1, #${hi(SUBMENU_CONTROLLER_ID)}
+     movwne r1, #${lo(LIST_CONTROLLER_ID)}; movtne r1, #${hi(LIST_CONTROLLER_ID)}`, 'Direct Flash settings: submenu and list controllers');
 
-  // --- Flash Mode's submenu: three more lines.
+  // --- The submenu: Smartphone Link's record with our title, lines, ids and value icons.
+  const model = patch.read(submenuTable(patch) + MODEL_SUBMENU * SUB_RECORD, SUB_RECORD);
+  const mv = new DataView(model.buffer);
+  if (model[6] !== 4 || MODEL_LINE_IDS.some((id, k) => mv.getUint32(0x14 + 4 * k, true) !== id) || mv.getUint32(0x24, true) !== 0x10000000
+    || [0, 1, 2, 3].some((k) => mv.getUint32(0x28 + 4 * k, true) !== VALUE_X) || mv.getUint32(0x38, true) !== 0 || mv.getUint16(16, true) !== 0) {
+    fail('unexpected-layout', 'Smartphone Link submenu record is not as expected');
+  }
+  const sub = model.slice();
+  const sv = new DataView(sub.buffer);
+  sv.setUint16(2, DF_TEXT_ID, true);
+  lists.forEach((l, k) => {
+    sv.setUint16(8 + 2 * k, l.title, true);
+    sv.setUint32(0x14 + 4 * k, l.id, true);
+    sv.setUint32(0x3c + 8 * k, lineDraws[k], true);
+    sv.setUint32(0x40 + 8 * k, 0, true);
+  });
+  addSubmenuRecord(patch, DF_MENU_ID, sub, 'Direct Flash settings');
+
+  // --- Flash Mode's submenu: a third line that opens it (no value icon, as Wireless > Pairing).
   const rec = submenuTable(patch) + FLASH_SUBMENU * SUB_RECORD;
   const old = patch.read(rec, SUB_RECORD);
   const ov = new DataView(old.buffer);
@@ -355,19 +429,14 @@ export function installDirectFlashMenu(patch: Patch, iconbin: Uint8Array): Uint8
   }
   const r = old.slice();
   const v = new DataView(r.buffer);
-  r[6] = 5;
-  lists.forEach((l, k) => {
-    v.setUint16(12 + 2 * k, l.title, true);
-    v.setUint32(0x1c + 4 * k, l.id, true);
-    v.setUint32(0x30 + 4 * k, VALUE_X, true);
-    v.setUint32(0x4c + 8 * k, lineDraws[k], true);
-    v.setUint32(0x50 + 8 * k, 0, true);
-  });
-  v.setUint16(18, 0, true);
+  r[6] = 3;
+  v.setUint16(12, DF_TEXT_ID, true);
+  v.setUint32(0x1c, DF_MENU_ID, true);
+  v.setUint32(0x30, VALUE_X, true);
   // Word by word: the record may be the official one (no other addition copied the table).
   for (let o = 0; o < SUB_RECORD; o += 4) {
     const w = v.getUint32(o, true);
-    if (w !== ov.getUint32(o, true)) patch.setWord(rec + o, w, 'Direct Flash settings: Flash Mode submenu lines');
+    if (w !== ov.getUint32(o, true)) patch.setWord(rec + o, w, 'Direct Flash settings: Flash Mode submenu line');
   }
   return icons;
 }
