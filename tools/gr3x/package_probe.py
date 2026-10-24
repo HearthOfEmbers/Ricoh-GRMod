@@ -159,7 +159,7 @@ def verify(original,new,manifest,build,reference):
         if manifest.get('dateImprint') and manifest['dateImprint'].get('form')=='submenu':expected['dateMenu']='submenu'
         if manifest.get('pictures'):expected['pictures']=build['pictures']
         if manifest.get('pictures') and manifest['pictures'].get('form')=='submenu':expected.update(pictureMenu='submenu',pictureIds=manifest['pictures']['choices'])
-        if r7:expected['round']=8 if r8 else 7
+        if r7:expected['round']=9 if r9 else 8 if r8 else 7
         if r8 and manifest.get('lookLayout'):expected['lookLayout']=manifest['lookLayout']
         assert recipe==expected,recipe
         padding=start+length

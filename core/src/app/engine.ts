@@ -794,7 +794,13 @@ export class Engine {
       // The second (post-curve) matrix, as on GR IV: GR III's matrix module has the stage (films only).
       const post = options.post !== false;
       const c = kind === 'xmp' ? convertGr3xXmp(text, { onProgress, post }) : convertGr3xCube(text, { onProgress, post, refine: options.refine === true, legacyFit: options.legacyFit === true });
-      return { ...c, ...quantizeSlot(c.params, this.mStdQ13) };
+      const q = quantizeSlot(c.params, this.mStdQ13);
+      // A (toned) black-and-white fit has equal rows; rounding each row to 8192 on its own diagonal
+      // can leave them 1 apart: the camera gets the first row three times (still black and white,
+      // and recognised as such by the date imprint's black-and-white test).
+      if (!q.postQ9 && c.params.M1.every(r => r.every((v, k) => v === c.params.M1[0][k])))
+        for (let r = 1; r < 3; r++) for (let k = 0; k < 3; k++) q.matrixQ13[r * 3 + k] = q.matrixQ13[k];
+      return { ...c, ...q };
     }
     if (this.layout === null || !this.info.capabilities.presets) requireGr3xPort('preset conversion');
     const post = options.post !== false;

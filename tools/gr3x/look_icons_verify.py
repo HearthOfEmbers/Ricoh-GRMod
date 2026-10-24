@@ -99,7 +99,10 @@ def verify(data, base, manifest):
         coloured = sum(tile[i+3] != 0 and max(tile[i:i+3]) - min(tile[i:i+3]) >= 24 for i in range(0, 6400, 4))
         hashes.append(dict(id=slot['id'], name=slot['name'], sha256=hashlib.sha256(tile).hexdigest(), coloured_pixels=coloured))
         calls += 3
-    if len(hashes) == 9:
+    # The nine named T6 films (Provia 100F ..., each with its own coloured icon): nine different
+    # coloured tiles. Builds with the app's default names keep the camera's film icon or the
+    # user's own, which need not be coloured.
+    if len(hashes) == 9 and not any(h['name'] == f'Film {k + 1}' for k, h in enumerate(hashes)):
         assert len({h['sha256'] for h in hashes}) == 9
         assert all(h['coloured_pixels'] >= 200 for h in hashes)
     return dict(schema=1, native_calls=calls, original_byte_domain_preserved=True,

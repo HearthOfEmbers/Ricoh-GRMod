@@ -89,7 +89,7 @@ describe.skipIf(!input)('GR IIIx official 1.60 integration', () => {
     expect(await engine.inspect(raw)).toMatchObject({ kind: 'official', verified: true });
   });
   it('blocks every unported mutation even when invoked directly, without the UI', async () => {
-    await expect(engine.buildFirmware([], [{ name: '65:24', ratio: '65:24' }], [], { dateStamp: true })).rejects.toMatchObject({ code: 'gr3x-unsupported' });
+    await expect(engine.buildFirmware([], [{ name: '65:24', ratio: '65:24' }], [], { extraSlots: [{} as never] })).rejects.toMatchObject({ code: 'gr3x-unsupported' });
     await expect(engine.bridgeFirmware()).rejects.toMatchObject({ code: 'gr3x-port-incomplete' });
     expect(() => engine.convertPreset('cube', '')).toThrow('LUT_3D_SIZE');
     expect(() => engine.convertPreset('xmp', '')).toThrow('not an XML document');

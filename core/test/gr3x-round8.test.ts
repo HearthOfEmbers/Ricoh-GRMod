@@ -9,6 +9,8 @@ import { encodeGr3xRatioRecipe, readGr3xBuildRecipe } from '../src/fw/gr3x/ratio
 import { GR3X_FACTORY_LOOK_NAMES } from '../src/fw/gr3x/datestamp';
 import { openGr3xOfficial } from '../src/fw/gr3x/profile';
 import { Firmware, sectionsOf } from '../src/fw/container';
+import { GR3X_CAMERA } from '../src/color/gr3x-camera';
+import { monoLook } from '../src/fw/aspect/lookstash';
 import { GR3X_SLOTS_NATIVE } from '../src/fw/gr3x/slots-native';
 import { GR3X_SLOTS2_NATIVE } from '../src/fw/gr3x/slots2-native';
 import { GR3X_SLOTS3_NATIVE } from '../src/fw/gr3x/slots3-native';
@@ -119,6 +121,18 @@ describe.skipIf(!input)('GR III round 8: as GR IV 0.8.4', () => {
     expect(t8.manifest).toMatchObject({ round8: true });
     expect((t8.manifest as Record<string, any>).dateImprint).toMatchObject({ orient: expect.any(Number), shortName: expect.any(Number), iconLongName: expect.any(Number) });
   }, 900000);
+  it('gives a black-and-white preset equal matrix rows, recognised as black and white (round 9)', async () => {
+    const n = 9, lines = ['LUT_3D_SIZE 9'];
+    for (let b = 0; b < n; b++) for (let g = 0; g < n; g++) for (let r = 0; r < n; r++) {
+      const S = GR3X_CAMERA.S, Si = GR3X_CAMERA.Sinv, t = S(0.3 * Si(r / 8) + 0.6 * Si(g / 8) + 0.1 * Si(b / 8)).toFixed(6);
+      lines.push(`${t} ${t} ${t}`);
+    }
+    const p = engine.convertPreset('cube', lines.join('\n'));
+    expect(p.postQ9).toBeUndefined();
+    for (let r = 1; r < 3; r++) expect(Array.from(p.matrixQ13.slice(r * 3, r * 3 + 3))).toEqual(Array.from(p.matrixQ13.slice(0, 3)));
+    expect(p.matrixQ13[0] + p.matrixQ13[1] + p.matrixQ13[2]).toBe(8192);
+    expect(monoLook(Array.from(p.matrixQ13), p.curves.map(c => Array.from(c)))).toBe(true);
+  });
   it('builds and reads back the Image Control order, with and without films', async () => {
     const order = [65, 64, 11, 12, 13, 14, 15, 16, 22, 17, 18, 19, 20, 21];
     const built = await engine.buildFirmware([], ratios, [], { filmCount: 2, dateStamp: true, lookLayout: { order, hidden: [18, 64] } });

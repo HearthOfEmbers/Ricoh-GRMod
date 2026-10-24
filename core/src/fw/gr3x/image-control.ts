@@ -33,6 +33,8 @@ import { GR3X_STASH_FILM, gr3xRawDevelopmentWords } from './datestamp';
 
 /** The live view's change detection reads the frame's look here (round 9: unmapped). */
 const GR3X_LIVE_LOOK_READ = 0x536dc998;
+/** The change detection's last flag store of its partial set-up (`strb r1,[r4,#0x1a5]`), before it returns. */
+const GR3X_LIVE_FLAGS_END = 0x536dd0b4;
 import { quantizeSlot } from '../../color/camera';
 import type { SlotParams } from '../../color/camera';
 import type { QuantizedSlot } from '../../color/camera';
@@ -302,6 +304,18 @@ export async function buildGr3xImageControls(raw: Uint8Array, options: Gr3xLookO
       [0x536dcb6c, 0xe5d431a8], [0x536dcdf4, 0xe55b2034], [0x536dcdfc, 0xe5c421a8], [0x536daf64, 0xe5c431a8]];
     for (const [at, w] of live) if (u32(at) !== w) throw new FirmwareError('unexpected-instruction', `IIIx live view look comparison at ${at.toString(16)}`);
   }
+  // Round 9: a changed look marks the matrix and second matrix (obj+5, +6) but not the gamma
+  // module (obj+0xe), whose curves a film brings (the curve hook at 0x536f028c below); the
+  // camera's own looks do not change the gamma. At the end of the change detection's partial
+  // set-up (the full one marks everything), "the look changed" ([fp,#-0xcc], written at
+  // 0x536dcb80 on every path to it) also marks the gamma.
+  const liveGamma = round9 ? (() => {
+    const tail: readonly (readonly [number, number])[] = [[0x536dcb80, 0xe50b30cc], [GR3X_LIVE_FLAGS_END, 0xe5c411a5], [GR3X_LIVE_FLAGS_END + 4, 0xe24bd028], [GR3X_LIVE_FLAGS_END + 8, 0xe89daff0]];
+    for (const [at, w] of tail) if (u32(at) !== w) throw new FirmwareError('unexpected-instruction', `IIIx live view flags at ${at.toString(16)}`);
+    const stub = code(`strb r1,[r4,#0x1a5];ldr r1,[fp,#-0xcc];cmp r1,#0;movne r1,#1;strbne r1,[r4,#0xe];b #${GR3X_LIVE_FLAGS_END + 4};`);
+    patch(GR3X_LIVE_FLAGS_END, 0xe5c411a5, branchWord(GR3X_LIVE_FLAGS_END, stub), 'films: a look change also marks the live view\'s gamma (curves)');
+    return stub;
+  })() : undefined;
   const adapters = GR3X_TONE_READS.filter(([at]) => !(round9 && at === GR3X_LIVE_LOOK_READ)).map(([at, word]) => {
     const dst = (word >>> 12) & 15, src = (word >>> 16) & 15;
     const scratch = [0,1,2,3].find(r => r !== dst && r !== src)!;
@@ -510,7 +524,7 @@ export async function buildGr3xImageControls(raw: Uint8Array, options: Gr3xLookO
     ...menu, kind: 'gr3x-image-control-patchset' as const, sites,
     append: { address: menu.append.address, bytes: hex(payload) },
     addedLooks: slots, renderingImplemented: true as const,
-    lookEntries: { aggregate, rawEnum, restriction, enforce, descriptor, gamma, defaults, adapters, setters, activeChecks, activeChecksSet0,
+    lookEntries: { aggregate, rawEnum, restriction, enforce, descriptor, gamma, defaults, adapters, setters, activeChecks, activeChecksSet0, ...(liveGamma ? { liveGamma } : {}),
       ...(own ? { ownParameters: own } : {}), ...(postMatrix ? { postMatrix } : {}), ...(jpeg ? { jpeg } : {}),
       ...(halationScreen ? { halationScreen } : {}), ...(halationRows ? { halationRows } : {}) },
     ...(round6 ? { filmCount: capacity, halationInCamera: true } : {}),

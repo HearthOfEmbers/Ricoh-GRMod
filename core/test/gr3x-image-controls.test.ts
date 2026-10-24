@@ -93,7 +93,7 @@ describe.skipIf(!input)('IIIx T5 additive film/replica firmware', () => {
   it('rejects ambiguous names, malformed LUT bytes and unported features before export', async () => {
     // names per camera language are allowed; a character outside that language's font is not
     await expect(engine.buildFirmware([{ slot: 'CY', names: { en: 'One', ja: '曝光' + '\u{1F600}' } }], ratios)).rejects.toMatchObject({ code: 'bad-name' });
-    await expect(engine.buildFirmware([], ratios, soft, { dateStamp: true })).rejects.toMatchObject({ code: 'gr3x-unsupported' });
+    await expect(engine.buildFirmware([], ratios, soft, { extraSlots: [{} as never] })).rejects.toMatchObject({ code: 'gr3x-unsupported' });
     await expect(buildGr3xImageControls(raw, { films: [{ name: 'Broken', preset: { matrixQ13: [1], curves: [[],[],[]] } }] }))
       .rejects.toMatchObject({ code: 'bad-edit' });
     expect(() => engine.convertPreset('xmp', '<x/>')).toThrow('no rdf:RDF element');
