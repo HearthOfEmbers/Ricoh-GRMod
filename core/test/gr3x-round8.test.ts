@@ -8,7 +8,7 @@ import { gr3xFactoryLookOrder, gr3xLookLists, isGr3xFactoryLayout, validateGr3xL
 import { encodeGr3xRatioRecipe, readGr3xBuildRecipe } from '../src/fw/gr3x/ratio-recipe';
 import { GR3X_FACTORY_LOOK_NAMES } from '../src/fw/gr3x/datestamp';
 import { openGr3xOfficial } from '../src/fw/gr3x/profile';
-import { sectionsOf } from '../src/fw/container';
+import { Firmware, sectionsOf } from '../src/fw/container';
 import { GR3X_SLOTS_NATIVE } from '../src/fw/gr3x/slots-native';
 import { GR3X_SLOTS2_NATIVE } from '../src/fw/gr3x/slots2-native';
 import { GR3X_SLOTS3_NATIVE } from '../src/fw/gr3x/slots3-native';
@@ -46,6 +46,9 @@ describe('GR III round 8 helpers', () => {
     expect(back.round7).toBe(true);
     expect(back.round8).toBe(true);
     expect(back.lookLayout).toEqual(layout);
+    expect(back.round9).toBe(false);
+    const r9 = readGr3xBuildRecipe(encodeGr3xRatioRecipe([], { round7: true, round8: true, round9: true, lookLayout: layout }))!;
+    expect(r9).toMatchObject({ round7: true, round8: true, round9: true, lookLayout: layout });
     const r7 = readGr3xBuildRecipe(encodeGr3xRatioRecipe([], { round7: true }))!;
     expect(r7.round8).toBe(false);
     expect(r7.lookLayout).toBeUndefined();
@@ -100,15 +103,21 @@ describe.skipIf(!input)('GR III native modules (as GR Mod 0.8.4\'s strict check)
 describe.skipIf(!input)('GR III round 8: as GR IV 0.8.4', () => {
   let raw: Uint8Array, engine: Engine;
   beforeAll(async () => { raw = new Uint8Array(readFileSync(input!)); engine = await Engine.open(raw); });
-  it('builds round 8 by default, round 7 on request, and recognises both', async () => {
-    const r8 = await engine.buildFirmware([], ratios, [], { filmCount: 2, dateStamp: true, adjSoftFocus: true });
+  it('builds round 9 by default, rounds 8 and 7 on request, and recognises each', async () => {
+    const r9 = await engine.buildFirmware([], ratios, [], { filmCount: 2, dateStamp: true, adjSoftFocus: true });
+    const r8 = await engine.buildFirmware([], ratios, [], { filmCount: 2, dateStamp: true, adjSoftFocus: true, gr3Round: 8 });
     const r7 = await engine.buildFirmware([], ratios, [], { filmCount: 2, dateStamp: true, adjSoftFocus: true, gr3Round: 7 });
-    expect(r8.sha256).not.toBe(r7.sha256);
+    expect(new Set([r9.sha256, r8.sha256, r7.sha256]).size).toBe(3);
+    // Round 9: the live view's look comparison reads the look itself (the camera's own instruction
+    // at 0x536dc998); round 8 maps it to the film's native base there.
+    const word = (file: Uint8Array) => { const d = new Firmware(file).decoded, s = sectionsOf(d).find(x => x.name === 'RTOS')!; return new DataView(d.buffer, d.byteOffset + s.offset).getUint32(0x536dc998 - 0x53000000, true); };
+    expect(word(r9.file)).toBe(0xe5d5c77c);
+    expect(word(r8.file)).not.toBe(0xe5d5c77c);
+    for (const b of [r9, r8, r7]) expect(await (await Engine.open(raw)).inspect(b.file)).toMatchObject({ verified: true, dateStamp: true });
     const t8 = await buildGr3xTestFirmware(raw, [], { displayRevision: 3, ownParameters: true, filmCount: 2, films: [{ name: 'Film 1' }, { name: 'Film 2' }] }, undefined,
       { adjSoftFocus: true, dateImprint: true, dateMenu: 'submenu', round7: true, round8: true });
     expect(t8.manifest).toMatchObject({ round8: true });
     expect((t8.manifest as Record<string, any>).dateImprint).toMatchObject({ orient: expect.any(Number), shortName: expect.any(Number), iconLongName: expect.any(Number) });
-    for (const b of [r8, r7]) expect(await (await Engine.open(raw)).inspect(b.file)).toMatchObject({ verified: true, dateStamp: true });
   }, 900000);
   it('builds and reads back the Image Control order, with and without films', async () => {
     const order = [65, 64, 11, 12, 13, 14, 15, 16, 22, 17, 18, 19, 20, 21];

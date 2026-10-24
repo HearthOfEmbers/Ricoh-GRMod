@@ -112,11 +112,12 @@ def verify(original,new,manifest,build,reference):
     assert struct.unpack_from('<I',old,part['start']+16+4+4*16)[0]==0x1800000
     assert icon_new['end']-(icon_new['start']+16)<=0x1800000-0x40000
     revision=build.get('revision','T4-SF1' if soft else 'T4')
-    assert revision in ('research','T4','T4-SF1','T5','T5-L1','T6','T7','T8')
+    assert revision in ('research','T4','T4-SF1','T5','T5-L1','T6','T7','T8','T9')
     # Round 7 (T7) and round 8 (T8, as GR Mod 0.8.4): with films (an image-control build, T6's film
     # recipe) or without (ADJ layer only).
-    r8=revision=='T8';assert r8==bool(manifest.get('round8'))
-    r7=revision in ('T7','T8');assert r7==bool(manifest.get('round7'))
+    r9=revision=='T9';assert r9==bool(manifest.get('round9'))
+    r8=revision in ('T8','T9');assert r8==bool(manifest.get('round8'))
+    r7=revision in ('T7','T8','T9');assert r7==bool(manifest.get('round7'))
     looks=revision.startswith('T5') or revision=='T6' or (r7 and manifest['kind']=='gr3x-image-control-patchset')
     if looks:assert manifest['kind']=='gr3x-image-control-patchset'
     if r7 and looks:assert manifest.get('filmCount')
@@ -131,10 +132,10 @@ def verify(original,new,manifest,build,reference):
         assert dec[padding:padding+len(magic)]==magic
         length=struct.unpack_from('<I',dec,padding+len(magic))[0]
         films=manifest.get('filmCount')   # round 6: 1..20 films (recipe up to 1.5 MB)
-        assert length<=((1500000 if films else 512000) if revision in ('T6','T7','T8') else 256000)
+        assert length<=((1500000 if films else 512000) if revision in ('T6','T7','T8','T9') else 256000)
         start=padding+len(magic)+4
         recipe=json.loads(dec[start:start+length])
-        if revision in ('T6','T7','T8'):
+        if revision in ('T6','T7','T8','T9'):
             assert recipe['schema']==3 and len(recipe['films'])<=(films or 9) and recipe['monoReplicas'] is False
             assert recipe.get('filmCount')==films and (films is None or 1<=films<=20 and recipe.get('ownParameters') is True)
             assert len(manifest['addedLooks'])==(films or 9)

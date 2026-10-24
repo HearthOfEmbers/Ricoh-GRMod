@@ -10,6 +10,7 @@ import { deltaE2000Lab, deltaELab, lab, mean, percentile } from './math';
 import { GR3X_CAMERA } from './gr3x-camera';
 import { parseXmp } from './xmp';
 import { FullLook } from './look';
+import { KN, KNOTS } from './camera';
 import type { SlotParams } from './camera';
 
 export interface Gr3xCubeImport {
@@ -53,6 +54,91 @@ export async function previewGr3xCube(source: Gr3xCubeImport, rgb: Float64Array)
   return applyCube(parseCube(source.sourceText), rgb);
 }
 
+/**
+ * Black-and-white and toned black-and-white looks (a Leica Selenium, Sepia or Blue, a Lightroom B&W
+ * profile): the colour of the output depends only on one brightness of the input. GR III's format
+ * holds such a look exactly as one row of weights for all three channels (the same brightness for
+ * R, G and B) and a curve per channel (the toning), without a second matrix. The general fit does
+ * not keep the rows equal, and colours then come out tinted (magenta or brown on a Selenium look).
+ *
+ * A look counts as such when, grouped by output brightness, every channel varies by less than
+ * TONED_RMS (rms) around its group's mean: then the weights are fitted on the neutral target and the
+ * three curves by least squares on the brightness the camera computes with them.
+ */
+const TONED_RMS = 0.012;
+
+/** True when every output channel is (nearly) a function of the output brightness. */
+export function isTonedMonochrome(target: Float64Array): boolean {
+  const n = target.length / 3, BINS = 96;
+  const sum = new Float64Array(BINS * 3), sq = new Float64Array(BINS * 3), cnt = new Float64Array(BINS);
+  for (let i = 0; i < n; i++) {
+    const y = (target[i * 3] + target[i * 3 + 1] + target[i * 3 + 2]) / 3;
+    const b = Math.min(BINS - 1, Math.max(0, Math.floor(y * BINS)));
+    cnt[b]++;
+    for (let c = 0; c < 3; c++) { const v = target[i * 3 + c]; sum[b * 3 + c] += v; sq[b * 3 + c] += v * v; }
+  }
+  let ss = 0;
+  for (let b = 0; b < BINS; b++) if (cnt[b]) for (let c = 0; c < 3; c++) { const m = sum[b * 3 + c] / cnt[b]; ss += sq[b * 3 + c] - cnt[b] * m * m; }
+  return Math.sqrt(Math.max(0, ss) / (n * 3)) < TONED_RMS;
+}
+
+/** The fit of a toned black-and-white look: equal matrix rows, a curve per channel, no second matrix. */
+export function fitTonedMonochrome(P: Float64Array, target: Float64Array, onProgress?: (f: number) => void): SlotParams {
+  const n = P.length / 3;
+  // The weights: the general fit of the look's brightness alone, its rows averaged (each sums to 1).
+  const neutral = new Float64Array(target.length);
+  for (let i = 0; i < n; i++) { const y = (target[i * 3] + target[i * 3 + 1] + target[i * 3 + 2]) / 3; neutral[i * 3] = neutral[i * 3 + 1] = neutral[i * 3 + 2] = y; }
+  const grey = fitSlot(P, neutral, { camera: GR3X_CAMERA, maxIterations: 250, post: false, onProgress: f => onProgress?.(f * 0.9) });
+  const w = [0, 1, 2].map(k => (grey.M1[0][k] + grey.M1[1][k] + grey.M1[2][k]) / 3);
+  const ws = w[0] + w[1] + w[2]; w[0] += 1 - ws;
+  // The brightness the camera computes with these weights (as slotApply: S^-1, the row, clipped, S).
+  const xmax = 255 / 256;
+  const t = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    let l = 0;
+    for (let k = 0; k < 3; k++) l += w[k] * GR3X_CAMERA.Sinv(P[i * 3 + k]);
+    t[i] = GR3X_CAMERA.S(l < 0 ? 0 : l > xmax ? xmax : l);
+  }
+  // Each channel's curve: least squares on the 17 knots (piecewise linear in t) with a light
+  // second-difference smoothing where samples are few; kept in 0..1 and non-decreasing.
+  const ck = [0, 1, 2].map(c => {
+    const A = Array.from({ length: KNOTS }, () => new Float64Array(KNOTS)), rhs = new Float64Array(KNOTS);
+    for (let i = 0; i < n; i++) {
+      const b = Math.min(1, Math.max(0, t[i])), y = target[i * 3 + c];
+      const k = Math.min(KNOTS - 2, Math.floor(b * (KNOTS - 1))), f = (b - KN[k]) / (KN[k + 1] - KN[k]);
+      const idx = [k, k + 1], wt = [1 - f, f];
+      for (let a = 0; a < 2; a++) { rhs[idx[a]] += wt[a] * y; for (let d = 0; d < 2; d++) A[idx[a]][idx[d]] += wt[a] * wt[d]; }
+    }
+    const lambda = 1e-3 * n / KNOTS;
+    for (let k = 1; k < KNOTS - 1; k++) {
+      const idx = [k - 1, k, k + 1], cf = [1, -2, 1];
+      for (let a = 0; a < 3; a++) for (let d = 0; d < 3; d++) A[idx[a]][idx[d]] += lambda * cf[a] * cf[d];
+    }
+    const x = solve(A, rhs);
+    const out = new Float64Array(KNOTS);
+    let run = 0;
+    for (let k = 0; k < KNOTS; k++) { const v = Math.min(1, Math.max(0, x[k])); run = Math.max(run, v); out[k] = run; }
+    return out;
+  });
+  onProgress?.(1);
+  return { M1: [w.slice(), w.slice(), w.slice()], ck };
+}
+
+/** Gaussian elimination with partial pivoting (small dense systems). */
+function solve(A: Float64Array[], b: Float64Array): Float64Array {
+  const n = b.length, M = A.map(r => Float64Array.from(r)), v = Float64Array.from(b);
+  for (let i = 0; i < n; i++) {
+    let p = i;
+    for (let r = i + 1; r < n; r++) if (Math.abs(M[r][i]) > Math.abs(M[p][i])) p = r;
+    [M[i], M[p]] = [M[p], M[i]]; [v[i], v[p]] = [v[p], v[i]];
+    const d = M[i][i] || 1e-12;
+    for (let r = i + 1; r < n; r++) { const f = M[r][i] / d; if (!f) continue; for (let c = i; c < n; c++) M[r][c] -= f * M[i][c]; v[r] -= f * v[i]; }
+  }
+  const x = new Float64Array(n);
+  for (let i = n - 1; i >= 0; i--) { let s = v[i]; for (let c = i + 1; c < n; c++) s -= M[i][c] * x[c]; x[i] = s / (M[i][i] || 1e-12); }
+  return x;
+}
+
 /** Fit display-referred sRGB CUBE data to IIIx's actual matrix/curve format.
  * The reference curve comes from IIIx native code; no GR IV calibration is used.
  * Independent validation samples estimate approximation error, not camera accuracy.
@@ -66,13 +152,20 @@ export function convertGr3xCube(text: string, options: ConvertOptions & { legacy
   const base = syntheticSamples(2200, 160, 4), extra = options.legacyFit ? new Float64Array(0) : extraFitSamples();
   const P = new Float64Array(base.length + extra.length);
   P.set(base, 0); P.set(extra, base.length);
-  const refine = options.refine === true && !options.legacyFit;
   options.onProgress?.(0.05);
-  const fit = fitSlot(P, applyCube(cube, P), {
-    camera: GR3X_CAMERA, maxIterations: 250, post: options.post === true,
-    onProgress: f => options.onProgress?.(0.05 + f * (refine ? 0.5 : 0.9)),
-  });
-  let params: SlotParams = fit.P2 ? { M1: fit.M1, ck: fit.ck, P2: fit.P2 } : { M1: fit.M1, ck: fit.ck };
+  const target = applyCube(cube, P);
+  // Black-and-white and toned black-and-white looks: equal rows, a curve per channel (see above).
+  const toned = !options.legacyFit && isTonedMonochrome(target);
+  const refine = options.refine === true && !options.legacyFit && !toned;
+  let params: SlotParams;
+  if (toned) params = fitTonedMonochrome(P, target, f => options.onProgress?.(0.05 + f * 0.9));
+  else {
+    const fit = fitSlot(P, target, {
+      camera: GR3X_CAMERA, maxIterations: 250, post: options.post === true,
+      onProgress: f => options.onProgress?.(0.05 + f * (refine ? 0.5 : 0.9)),
+    });
+    params = fit.P2 ? { M1: fit.M1, ck: fit.ck, P2: fit.P2 } : { M1: fit.M1, ck: fit.ck };
+  }
   let refined: boolean | undefined;
   if (refine) {
     const r = guardedRefine(cube, params, f => options.onProgress?.(0.55 + f * 0.4), GR3X_CAMERA);
@@ -103,10 +196,12 @@ export function convertGr3xXmp(text: string, options: ConvertOptions = {}): Conv
   const full = new FullLook(look);
   const P = syntheticSamples(2200, 160, 4);
   options.onProgress?.(0.05);
-  const fit = fitSlot(P, full.apply(P), {
-    camera: GR3X_CAMERA, maxIterations: 250, post: options.post === true,
-    onProgress: f => options.onProgress?.(0.05 + f * 0.9),
-  });
+  const target = full.apply(P);
+  const fit: SlotParams = isTonedMonochrome(target) ? fitTonedMonochrome(P, target, f => options.onProgress?.(0.05 + f * 0.9))
+    : fitSlot(P, target, {
+      camera: GR3X_CAMERA, maxIterations: 250, post: options.post === true,
+      onProgress: f => options.onProgress?.(0.05 + f * 0.9),
+    });
   const validation = syntheticSamples(1100, 161, 1);
   const got = lab(GR3X_CAMERA.slotApply(fit, validation)), want = lab(full.apply(validation));
   const errors = deltaELab(got, want), errors00 = deltaE2000Lab(got, want);

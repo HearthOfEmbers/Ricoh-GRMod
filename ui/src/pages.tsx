@@ -183,7 +183,7 @@ function PreviewPane({ below, belowH = 0 }: { below?: ReactNode; belowH?: number
 
 function SlotCard({ id }: { id: SlotId }) {
   const slot = useStore((s) => s.slots[id]);
-  // The experimental GR III build: Halation is set in the camera; here only the preview level.
+  // GR III / IIIx: Halation is set in the camera; here only the preview level.
   const choosable = useStore((s) => filmCountChoosable(s));
   const info = useStore((s) => s.info)!;
   const lang = useStore((s) => s.lang);
@@ -242,7 +242,7 @@ function SlotCard({ id }: { id: SlotId }) {
   );
 }
 
-/** The experimental GR III build: how many films are added (0 to maxFilms), laid out as GR IV's added slots (ExtrasHead). */
+/** GR III / IIIx: how many films are added (0 to maxFilms), laid out as GR IV's added slots (ExtrasHead). */
 function FilmCountHead() {
   const n = useStore((s) => s.filmCount);
   const max = useStore((s) => s.info?.features.maxFilms ?? 9);
@@ -851,7 +851,7 @@ export function ImageControlPage() {
   const touring = useStore((s) => s.tour?.id === 'ic');
   useEffect(() => { if (touring) setView('slots'); }, [touring]);
   const views = !!info && info.capabilities.presets && model !== 'MONO';
-  // The menu order is a view of its own where the firmware has it (GR IV; the experimental GR III build).
+  // The menu order is a view of its own where the firmware has it (GR IV; GR III / IIIx).
   const orderView = useStore((s) => lookOrderAvailable(s));
   return (
     <DropZone className="page" accept={isFirmware} onFiles={(f) => { void loadFirmwareFile(f[0]); }}>

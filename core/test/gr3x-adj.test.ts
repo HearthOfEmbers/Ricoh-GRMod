@@ -60,18 +60,18 @@ describe.skipIf(!input)('IIIx ADJ research container integrity and isolation', (
     expect(candidate.report).toMatchObject({ rawFullFrame: true, rawDefaultCrop: [6000, 4000], faceDetectionModeInitialized: true, wideDevelopmentApertureUsesNative3x2Width: true, wideLiveViewHeightAlignment: 4 });
     const engine = await Engine.open(raw);
     const ratios = GFX_RATIOS.filter(r => r !== '3:2' && r !== '1:1').map(r => ({ ratio: r, name: r }));
-    const built = await engine.buildFirmware([], ratios);
+    const built = await engine.buildFirmware([], ratios, [], { guard: false });
     expect(built.sha256).toBe(candidate.report.outputSha256);
     expect(await sha256Hex(built.file)).toBe(candidate.report.outputSha256);
     expect(await engine.inspect(built.file)).toMatchObject({ kind: 'modified', verified: true });
     const damaged = built.file.slice(); damaged[damaged.length - 100] ^= 1;
     expect(await engine.inspect(damaged)).toMatchObject({ kind: 'unknown', verified: false });
-    await expect(engine.buildFirmware([], ratios, [], { dateStamp: true })).rejects.toMatchObject({ code: 'gr3x-unsupported' });
+    await expect(engine.buildFirmware([], ratios, [], { extraSlots: [{} as never] })).rejects.toMatchObject({ code: 'gr3x-unsupported' });
     // Another order is another (custom) menu, not the tested T4 one.
     expect((await engine.buildFirmware([], ratios.slice().reverse())).sha256).not.toBe(candidate.report.outputSha256);
     // Consumers cannot mutate the cached candidate through the returned file.
     built.file[0] ^= 1;
-    expect(await sha256Hex((await engine.buildFirmware([], ratios)).file)).toBe(candidate.report.outputSha256);
+    expect(await sha256Hex((await engine.buildFirmware([], ratios, [], { guard: false })).file)).toBe(candidate.report.outputSha256);
   });
   it('rejects an altered official baseline before creating an offline package', async () => {
     const altered = raw.slice(); altered[0x10000] ^= 1;

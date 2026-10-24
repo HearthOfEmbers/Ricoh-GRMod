@@ -63,7 +63,7 @@ export interface State {
   wall: WallItem[];
   ratios: RatioItem[]; activeRatio?: string; ratioBackdrop: RatioBackdrop;
   soft: boolean; dateStamp: boolean; monoUnlock: boolean;
-  /** GR III (experimental): how many films the build has (1..info.features.maxFilms). */
+  /** GR III / IIIx: how many films the build has (1..info.features.maxFilms). */
   filmCount: number;
   previewMode: PreviewMode; photoRev: number; activeSlot: SlotKey;
   /** Added Image Control slots, in the camera's order (none by default). */
@@ -71,7 +71,7 @@ export interface State {
   /** Image Control menu order (`f11`..`f30`, or an added slot's key) and hidden keys. Empty = factory order, nothing hidden. */
   lookOrder: string[];
   lookHidden: string[];
-  /** GR III (experimental, round 8): its order (`g11`..`g22`, films `g64`..) and hidden keys, kept apart from GR IV's. */
+  /** GR III / IIIx (round 8): its order (`g11`..`g22`, films `g64`..) and hidden keys, kept apart from GR IV's. */
   lookOrder3: string[];
   lookHidden3: string[];
   volumes: Volume[]; showAll: boolean; volumeId?: string; role?: card.CardRole;
@@ -85,11 +85,11 @@ export interface State {
 }
 
 const SLOT_IDS: readonly SlotId[] = GR3X_FILM_IDS;
-/** GR IIIx 1.60 and GR III 2.10 (experimental): one program, one code path in GR Mod. */
+/** GR IIIx 1.60 and GR III 2.10: one program, one code path in GR Mod. */
 export const isGr3 = (m?: CameraModel): boolean => m === 'GR3X_HDF' || m === 'GR3_HDF';
-/** The film count can be chosen (the experimental GR III build: 1..20, each film with Halation in the camera). */
+/** The film count can be chosen (GR III / IIIx: 1..20, each film with Halation in the camera). */
 export const filmCountChoosable = (s: State = state): boolean => s.info?.family === 'gr3x' && (s.info.features.maxFilms ?? 9) > 9;
-/** The slots of the open firmware the page shows: on the experimental GR III build the first `filmCount`. */
+/** The slots of the open firmware the page shows: on GR III / IIIx the first `filmCount`. */
 export const shownSlots = (s: State = state): FirmwareInfo['slots'] => (s.info ? (filmCountChoosable(s) ? s.info.slots.slice(0, s.filmCount) : s.info.slots) : []);
 const availableSlots = (s: State = state): SlotId[] => s.info ? shownSlots(s).map(slot => slot.id) : (isGr3(s.model) ? [...GR3X_FILM_IDS] : ['CY', 'CG']);
 const emptySlot = (): SlotState => ({ names: {}, icon: { mode: 'keep', text: '', style: 'film' } });
@@ -371,7 +371,7 @@ export function endTour(): void {
 
 // ------------------------------------------------------------------ settings
 export function setPage(page: Page): void {
-  if (page === 'wall' && isGr3(state.model) && !state.info?.capabilities.menuPictures) return; // power-off pictures: GR III experimental build only
+  if (page === 'wall' && isGr3(state.model) && !state.info?.capabilities.menuPictures) return; // power-off pictures: GR III / IIIx with the End Screen menu
   set({ page }); scheduleSave(); if (page === 'copies') void refreshCopies();
 }
 export function setLang(lang: LangCode): void { set({ lang }); scheduleSave(); }
@@ -521,7 +521,7 @@ const FACTORY_LOOK_NAMES: Record<number, { zh: string; en: string }> = {
   26: { zh: '柔和（单色）', en: 'Soft (mono)' }, 27: { zh: '高对比度（单色）', en: 'High Contrast (mono)' }, 28: { zh: '颗粒感（单色）', en: 'Grainy (mono)' },
   29: { zh: '无颗粒感（单色）', en: 'Solid (mono)' }, 30: { zh: 'HDR色调（单色）', en: 'HDR Tone (mono)' },
 };
-/** GR III (experimental, round 8): its twelve looks in the camera's menu order, their numbers and names (the camera's texts). */
+/** GR III / IIIx (round 8): its twelve looks in the camera's menu order, their numbers and names (the camera's texts). */
 const GR3_LOOK_IDS: readonly number[] = [11, 12, 13, 14, 15, 16, 22, 17, 18, 19, 20, 21];
 const GR3_LOOK_NAMES: Record<number, { zh: string; en: string }> = {
   11: { zh: '标准', en: 'Standard' }, 12: { zh: '鲜艳', en: 'Vivid' }, 13: { zh: '单色', en: 'Monotone' },
@@ -536,11 +536,11 @@ const gr3LookKey = (id: number): string => `g${id}`;
 export const KEEP_VISIBLE = ['f11', 'f25', 'g11'];
 /** Added slots are not built on the Monochrome camera (it has no colour looks), so they are not in the order either. */
 function lookExtras(s: State): ExtraSlot[] { return s.model === 'MONO' ? [] : s.extras; }
-/** The order and hidden looks of the open camera family: GR III (experimental) keeps its own. */
+/** The order and hidden looks of the open camera family: GR III / IIIx keeps its own. */
 const gr3Order = (s: State): boolean => (s.info ? s.info.family === 'gr3x' : isGr3(s.model));
 /** GR III: the films of the build (looks 64..), when they are built. */
 function gr3Films(s: State): number { return filmCountChoosable(s) ? s.filmCount : 0; }
-/** The menu order can be set: GR IV, and the experimental GR III build (round 8). */
+/** The menu order can be set: GR IV, and GR III / IIIx (round 8). */
 export function lookOrderAvailable(s: State = state): boolean {
   return !gr3Order(s) || (s.info?.family === 'gr3x' && s.info.capabilities.lookLayout === true);
 }
@@ -987,7 +987,7 @@ export function removeRatio(id: string): void {
   set((s) => { const ratios = s.ratios.filter((r) => r.id !== id); return { ratios, activeRatio: s.activeRatio === id ? ratios[0]?.id : s.activeRatio }; });
   ratiosChanged(true);
 }
-/** The experimental GR III build: how many films (1..maxFilms); the active slot stays among them. */
+/** GR III / IIIx: how many films (1..maxFilms); the active slot stays among them. */
 export function setFilmCount(n: number): void {
   const max = state.info?.features.maxFilms ?? 9;
   const want = Math.max(0, Math.min(max, Math.round(n)));
@@ -1074,7 +1074,7 @@ export function pendingChanges(s: State = state): SlotChange[] {
       if (v && v !== off.names[lang].text && !nameProblem(s.info, id, lang, v)) names[lang] = v;
     }
     if (Object.keys(names).length) { req.names = names; parts.push(`${t('name')} ${Object.values(names).join(' / ')}`); labels.push(`${t('name')} “${Object.values(names)[0]}”`); }
-    // GR III / IIIx: every film has Halation. The experimental build sets it in the camera (the level
+    // GR III / IIIx: every film has Halation. Builds with a film count set it in the camera (the level
     // here is the preview's); legacy builds without a film count fix it in the build (Weak, or Strong
     // for the preview's Medium / Strong).
     if (s.info.family === 'gr3x') {
@@ -1158,7 +1158,7 @@ export async function outputFirmware(dest: Dest, stock = false): Promise<void> {
   if (!stock && (hasNameErrors() || hasRatioErrors())) return;
   if (!stock && hasExtraErrors()) { toast(t('extraIncomplete'), 'error'); return; }
   const extras = stock ? [] : extraSpecs();
-  // GR III / IIIx: power-off pictures only on the experimental GR III build (End Screen › Picture, as
+  // GR III / IIIx: power-off pictures only on GR III / IIIx (End Screen › Picture, as
   // GR IV); elsewhere pictures left from a GR IV project are not sent.
   const noPictures = stock || (state.info?.family === 'gr3x' && !state.info.capabilities.menuPictures);
   if (!noPictures && state.wall.length > 0 && !menuReady()) { toast(t('wallMenuIncomplete'), 'error'); return; }

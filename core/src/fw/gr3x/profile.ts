@@ -17,9 +17,9 @@ export interface Gr3Profile {
   readonly ramSource: number; readonly ramBase: number; readonly ramLength: number;
   readonly factoryRatios: readonly ['3:2', '1:1'];
   readonly buildEnabled: boolean; readonly buildRecipe: string;
-  /** Every GR III feature (up to 20 films with Halation in the camera, the date imprint, End Screen
-   * pictures, the Image Control order; first made and tested on GR III 2.10). GR IIIx 1.60 keeps its
-   * set of the ratios, nine films and ADJ soft focus. */
+  /** Every feature (up to 20 films with Halation in the camera, the date imprint, End Screen pictures,
+   * the Image Control order): made and tested on GR III 2.10, the same program as GR IIIx 1.60
+   * (core/test/gr3-equivalence.test.ts builds every one of them for both and compares). */
   readonly fullFeatures: boolean;
 }
 
@@ -33,7 +33,7 @@ export const GR3X_160 = {
   project: 609, product: 78490, rtosOffset: 0x10870, rtosLength: 17520064, rtosBase: 0x53000000,
   ramSource: 0x5407b540, ramBase: 0x55000000, ramLength: 0x3a080,
   factoryRatios: ['3:2', '1:1'],
-  buildEnabled: true, buildRecipe: 'fixed-adj9-T4', fullFeatures: false,
+  buildEnabled: true, buildRecipe: 'fixed-adj9-T4', fullFeatures: true,
 } as const satisfies Gr3Profile;
 
 /** GR III 2.10 (fwdc239b.bin). Layout fields must equal GR3X_160's: they are asserted below and in

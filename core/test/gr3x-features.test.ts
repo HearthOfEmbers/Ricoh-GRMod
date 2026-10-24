@@ -17,8 +17,10 @@ describe.skipIf(!input)('IIIx additional features from the verified original', (
   let raw: Uint8Array; let engine: Engine;
   beforeAll(async () => { raw = new Uint8Array(readFileSync(input!)); engine = await Engine.open(raw); });
   it('keeps the hardware-tested T4 exact when optional features are off', async () => {
-    const result = await engine.buildFirmware([], ratios);
+    // Without the settings guard (every build since round 7 has it, on GR IIIx as on GR III): T4 itself.
+    const result = await engine.buildFirmware([], ratios, [], { guard: false });
     expect(result.sha256).toBe('799304fa1866352e68041aa430deed027cece2e64a26ac6b54dd69931c77d004');
+    expect((await engine.buildFirmware([], ratios)).sha256).not.toBe(result.sha256);
   });
   it('changes only the selected gain rows plus the release record/checksum relative to T4', async () => {
     const base = await buildGr3xTestFirmware(raw);

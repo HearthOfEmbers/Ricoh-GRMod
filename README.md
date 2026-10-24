@@ -8,7 +8,9 @@ HDF (firmware 2.10) and the GR IIIx HDF (firmware 1.60). Not a Ricoh product.
 One program for both families: GR IV files are built exactly as by GR Mod 0.8.4 (GR IV's code is
 shared and unchanged; `core/test/gr4-unchanged.test.ts` pins its outputs), and the GR III / IIIx code
 (`core/src/fw/gr3x`, `tools/gr3x`) is used only for the exact official GR III 2.10 / IIIx 1.60
-files. Each family keeps its own work: GR IV's in `project.json` as before, GR III / IIIx's in
+files; both get every GR III feature (GR III 2.10 is the IIIx 1.60 program, and
+`core/test/gr3-equivalence.test.ts` builds every feature for both and compares them byte for byte
+but for the identity bytes). Each family keeps its own work: GR IV's in `project.json` as before, GR III / IIIx's in
 `project-gr3.json` with its presets `gr3-preset-…` (`ui/src/store.ts`). The GR III test builds
 (0.8.0-gr3exp.1 .. 0.8.4-gr3exp.1) kept a data folder of their own (`GRMod-GR3-Experimental`); a
 release takes its GR III work over once (`shell/migrate.go`). A version containing `exp` is still a
@@ -43,7 +45,14 @@ dial takes the list's length instead of its own fixed twelve (0x53283c08); a hid
 Standard, a hidden film keeps its parameters, `native/slots3.c -DHIDDEN_FILMS`). Halation is 光晕 in
 Chinese again (GR III's fonts are GR IV's and have the glyph). The orientation byte and the frame's
 look share the End Screen mode word's upper bytes (0x5580437d, 0x5580437e). #7's fitting is used for
-films. Round 8 probes: `look_layout_probe.py`, `datestamp8_probe.py` (orientation, names, RAW
+films. Round 9 (the default; `gr3Round: 8` builds round 8): the live view's change detection
+(0x536dc860) reads the look itself at 0x536dc998 instead of a film's native base, so changing from one
+film to another (or Standard to a film) computes the matrix, second matrix and curves again; up to
+round 8 the live view kept the previous film's colour until a parameter changed
+(`tools/gr3x/live_refresh_probe.py` runs it). Black-and-white and toned black-and-white presets
+(output colour a function of brightness only) are fitted with equal matrix rows and a curve per
+channel, no second matrix (`isTonedMonochrome`, `fitTonedMonochrome` in `core/src/color/gr3x-import.ts`):
+they stay neutral (or toned) at any saturation setting. Round 8 probes: `look_layout_probe.py`, `datestamp8_probe.py` (orientation, names, RAW
 development, and every picture case against GR IV's 0.8.4 module), `list_width_probe.py`. Added ratios narrower than 1:1 stay allowed
 on GR III (3:4 was tested there); GR IV refuses them from 0.8.2. The GR IV Monochrome looks are
 not ported.

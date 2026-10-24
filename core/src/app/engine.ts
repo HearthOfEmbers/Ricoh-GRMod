@@ -243,8 +243,8 @@ export interface BuildOptions {
   /** Image Control menu order and hidden looks (factory ids 11..30 plus added styles 34..;
    * GR III: the camera's 11..22 plus films 64..). */
   lookLayout?: LookLayout;
-  /** GR III 2.10: 7 builds round 7's files (GR Mod 0.8.2, camera-tested T7) instead of round 8's. */
-  gr3Round?: 7 | 8;
+  /** GR III / IIIx: 7 or 8 build round 7's or round 8's files (camera-tested T7, T8) instead of round 9's (the default). */
+  gr3Round?: 7 | 8 | 9;
   /** Power-off pictures (1 to 8) chosen in the camera's End Screen menu; see `encodeShutdownPicture`. */
   shutdownPictures?: ShutdownPictureSpec[];
   /**
@@ -343,14 +343,14 @@ export class Engine {
   private gr3xCandidates = new Map<string, Promise<FirmwareBuild>>();
 
   private fixedGr3x(softFocus: readonly SoftFocusRequest[] = [], looks?: Gr3xLookOptions, menu: readonly Gr3xMenuRatio[] = GR3X_T4_MENU, adjSoftFocus = false, dateImprint = false, pictures: readonly Gr3xPictureSpec[] = [], dateMenu: 'list' | 'submenu' = 'submenu', pictureMenu: 'list' | 'submenu' = 'submenu',
-    round: { round7?: boolean; round8?: boolean; lookLayout?: Gr3xLookLayout } = {}): Promise<FirmwareBuild> {
+    round: { round7?: boolean; round8?: boolean; round9?: boolean; lookLayout?: Gr3xLookLayout } = {}): Promise<FirmwareBuild> {
     const requests = [...softFocus].sort((a, b) => a.level - b.level);
-    const round7 = round.round7 === true, round8 = round7 && round.round8 === true, lookLayout = round8 ? round.lookLayout : undefined;
-    const key = JSON.stringify({ requests, looks, menu, adjSoftFocus, dateImprint, dateMenu, pictureMenu, round7, round8, lookLayout, pictures: pictures.map(p => ({ id: p.id, name: p.name, jpeg: Array.from(p.jpeg) })) });
+    const round7 = round.round7 === true, round8 = round7 && round.round8 === true, round9 = round8 && round.round9 === true, lookLayout = round8 ? round.lookLayout : undefined;
+    const key = JSON.stringify({ requests, looks, menu, adjSoftFocus, dateImprint, dateMenu, pictureMenu, round7, round8, round9, lookLayout, pictures: pictures.map(p => ({ id: p.id, name: p.name, jpeg: Array.from(p.jpeg) })) });
     let candidate = this.gr3xCandidates.get(key);
     if (candidate) return candidate;
     candidate = buildGr3xTestFirmware(this.raw, requests, looks, menu, { adjSoftFocus, ...(dateImprint ? { dateImprint, dateMenu } : {}), ...(pictures.length ? { pictures, pictureMenu } : {}), ...(round7 ? { round7 } : {}),
-      ...(round8 ? { round8 } : {}), ...(lookLayout ? { lookLayout } : {}) }).then(r => ({
+      ...(round8 ? { round8 } : {}), ...(round9 ? { round9 } : {}), ...(lookLayout ? { lookLayout } : {}) }).then(r => ({
       file: r.bytes, sha256: r.report.outputSha256, decodedSha256: r.decodedSha256,
       changedFrames: r.changedFrames, changedBytes: r.changedBytes,
       ranges: r.report.ranges, checks: r.report.checks, features: { ...(looks?.monoReplicas ? { monoUnlock: true } : {}), ...(adjSoftFocus ? { adjSoftFocus: true } : {}), ...(dateImprint ? { dateStamp: true } : {}),
@@ -398,9 +398,8 @@ export class Engine {
         factoryRatios: [...profile.factoryRatios],
         // Power-off images and the factory-menu entry reached the camera through a start-up script.
         // GR Mod 0.8 dropped that route, and it was never tested on these cameras: not offered.
-        // Power-off pictures: GR III 2.10 only (made and tested there first).
+        // Power-off pictures, the date imprint, 20 films, the menu order: GR III 2.10 and GR IIIx 1.60 (one program).
         capabilities: { build: true, presets: true, wallpaper: false, factoryEntry: false, bridge: false, menuPictures: profile.fullFeatures, lookLayout: profile.fullFeatures },
-        // The date imprint: GR III 2.10 only (made and tested there first).
         features: { softFocus: 'adj', dateStamp: profile.fullFeatures, monoUnlock: false, maxFilms: profile.fullFeatures ? GR3X_MAX_FILMS : 9 },
         version: profile.version, sha256: profile.sha256, bridge: false,
         slots: GR3X_FILM_IDS.slice(0, profile.fullFeatures ? GR3X_MAX_FILMS : 9).map((id, i) => ({
@@ -485,7 +484,7 @@ export class Engine {
       let pictures: Gr3xPictureSpec[] = [];
       let dateMenu: 'list' | 'submenu' = 'list';
       let pictureMenu: 'list' | 'submenu' = 'list';
-      let round7 = false, round8 = false;
+      let round7 = false, round8 = false, round9 = false;
       let lookLayout: Gr3xLookLayout | undefined;
       if (!official) try {
         // Read only recognized negative gain rows, rebuild from the verified
@@ -500,7 +499,7 @@ export class Engine {
           const build = readGr3xBuildRecipe(appended);
           if (build) {
             menu = planGr3xMenu(build.ratios); adjSoftFocus = build.adjSoftFocus; dateImprint = build.dateImprint; dateMenu = build.dateMenu; pictureMenu = build.pictureMenu; round7 = build.round7;
-            round8 = build.round8; lookLayout = build.lookLayout;
+            round8 = build.round8; round9 = build.round9; lookLayout = build.lookLayout;
             // Power-off pictures: the names from the recipe, the JPEGs from the file's own RES section.
             if (build.pictures.length) {
               if (build.pictures.length > GR3X_MAX_PICTURES) throw new FirmwareError('bad-edit', 'IIIx picture recipe');
@@ -515,7 +514,7 @@ export class Engine {
         }
         const changes = clarityChanges(decoded, GR3X_CLARITY_OFFSET);
         if (changes.every(c => SOFT_FOCUS_LEVELS.includes(c.level as SoftFocusLevel) && c.strength !== 'custom')) {
-          candidate = await this.fixedGr3x(changes as SoftFocusRequest[], looks ?? undefined, menu, adjSoftFocus, dateImprint, pictures, dateMenu, pictureMenu, { round7, round8, ...(lookLayout ? { lookLayout } : {}) });
+          candidate = await this.fixedGr3x(changes as SoftFocusRequest[], looks ?? undefined, menu, adjSoftFocus, dateImprint, pictures, dateMenu, pictureMenu, { round7, round8, round9, ...(lookLayout ? { lookLayout } : {}) });
           softFocus = changes;
         }
       } catch { /* unrecognized input remains non-writable */ }
@@ -826,16 +825,16 @@ export class Engine {
       if (Object.entries(options).some(([k, v]) => k !== 'monoUnlock' && k !== 'adjSoftFocus' && k !== 'dateStamp' && k !== 'shutdownPictures' && k !== 'filmCount' && k !== 'guard' && k !== 'lookLayout' && k !== 'gr3Round' && v !== undefined && v !== false && !(Array.isArray(v) && !v.length)))
         throw new FirmwareError('gr3x-unsupported', 'added Image Control slots and the test settings of the date imprint are not ported to GR III / IIIx');
       if (options.shutdownPictures?.length && !this.info.capabilities.menuPictures)
-        throw new FirmwareError('gr3x-unsupported', 'power-off pictures are tested on the GR III build first');
+        throw new FirmwareError('gr3x-unsupported', 'this GR III / IIIx file has no End Screen pictures');
       if (options.dateStamp && !this.info.features.dateStamp)
-        throw new FirmwareError('gr3x-unsupported', 'the date imprint is tested on the GR III build first');
+        throw new FirmwareError('gr3x-unsupported', 'this GR III / IIIx file has no date imprint');
       // 1..7 added ratios; the T4 seven keep the tested T4 menu (see planGr3xMenu).
       const menu = planGr3xMenu(ratios.map(r => ({ ratio: r.ratio, name: r.name })));
       // 0: no films (as when nothing is chosen).
       const filmCount = options.filmCount || undefined;
       if (options.filmCount === 0 && requests.length) throw new FirmwareError('bad-edit', 'film changes without films');
       if (filmCount !== undefined && (options.monoUnlock || !Number.isInteger(filmCount) || filmCount < 1 || filmCount > (this.info.features.maxFilms ?? 9) || filmCount > GR3X_MAX_FILMS || (this.info.features.maxFilms ?? 9) < GR3X_MAX_FILMS))
-        throw new FirmwareError('bad-edit', 'the number of films is 1..20 (GR III 2.10)');
+        throw new FirmwareError('bad-edit', 'the number of films is 1..20');
       // Legacy replica builds remain reproducible, but T6 uses all nine slots for films (round 6: filmCount).
       const ids = options.monoUnlock ? GR3X_FILM_IDS.slice(0, 2) : GR3X_FILM_IDS.slice(0, filmCount ?? 9);
       if (requests.length > ids.length || new Set(requests.map(r => r.slot)).size !== requests.length ||
@@ -868,12 +867,14 @@ export class Engine {
       // for round 7's files (camera-tested T7).
       const round7 = options.guard !== false && !options.monoUnlock && (this.info.features.maxFilms ?? 9) >= GR3X_MAX_FILMS && (!looks || looks.filmCount !== undefined);
       const round8 = round7 && options.gr3Round !== 7;
-      if (options.lookLayout && !round8) throw new FirmwareError('bad-look-layout', 'the Image Control order needs a round 8 build (GR III 2.10)');
+      // Round 9 (the default): round 8 with the live view refreshed between films; `gr3Round: 8` builds round 8's files.
+      const round9 = round8 && options.gr3Round !== 8;
+      if (options.lookLayout && !round8) throw new FirmwareError('bad-look-layout', 'the Image Control order needs a round 8 build');
       const lookLayout = options.lookLayout && !isGr3xFactoryLayout(options.lookLayout, filmCount ?? 0) ? options.lookLayout : undefined;
       if (options.lookLayout) validateGr3xLookLayout(options.lookLayout, filmCount ?? 0);
       const r = await this.fixedGr3x(softFocus, looks, menu, !!options.adjSoftFocus, !!options.dateStamp,
         (options.shutdownPictures ?? []).map(p => ({ id: p.id, name: p.name, jpeg: p.jpeg })), 'submenu', 'submenu',
-        { round7, round8, ...(lookLayout ? { lookLayout } : {}) });
+        { round7, round8, round9, ...(lookLayout ? { lookLayout } : {}) });
       return { ...r, file: r.file.slice() };
     }
     if (this.layout === null || !this.info.capabilities.build) requireGr3xPort('custom firmware');

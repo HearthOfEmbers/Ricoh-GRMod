@@ -87,6 +87,9 @@ export interface Gr3xAdjFeatures {
    * wide as the row allows), and with films the Image Control order and hidden looks
    * (image-control.ts). Absent: the files of round 7, byte for byte as before. */
   round8?: boolean;
+  /** Round 9 (needs round 8): with films, the live view's change detection sees each film as a look
+   * of its own (image-control.ts); without films only the recorded round differs from round 8. */
+  round9?: boolean;
   /** Round 8: the Image Control order and hidden looks (look-layout.ts; the camera's order with
    * nothing hidden is the same as none). */
   lookLayout?: Gr3xLookLayout;
@@ -105,6 +108,8 @@ export async function buildGr3xAdjResearch(raw: Uint8Array, ratioMenu: readonly 
   const softFocus = features.adjSoftFocus === true, dateImprint = features.dateImprint === true, round7 = features.round7 === true;
   const round8 = features.round8 === true;
   if (round8 && !round7) fail('IIIx round 8 builds on round 7');
+  const round9 = features.round9 === true;
+  if (round9 && !round8) fail('IIIx round 9 builds on round 8');
   if (features.lookLayout && !round8) fail('IIIx look layout: round 8');
   if (round7 && dateImprint && features.dateMenu !== 'submenu') fail('IIIx round 7: the date imprint submenu');
   const dateForm: Gr3xDateForm = features.dateMenu === 'submenu' ? 'submenu' : 'list';
@@ -369,7 +374,7 @@ export async function buildGr3xAdjResearch(raw: Uint8Array, ratioMenu: readonly 
     adjSoftFocus: softFocus,
     dateImprint: dateImprint ? { ...dateIds, form: dateForm, ...(round7 ? { iconOff: 296, iconOn: 297 } : {}), ...(lookNames ? { names: lookNames } : {}) } : undefined,
     round7,
-    ...(round8 ? { round8 } : {}),
+    ...(round8 ? { round8 } : {}), ...(round9 ? { round9 } : {}),
     ...(round8 && !layer.looksFollow && features.lookLayout && !isGr3xFactoryLayout(features.lookLayout, 0) ? { lookLayout: { order: [...features.lookLayout.order], hidden: [...features.lookLayout.hidden] } } : {}),
     pictures: pictureCount ? (pictureSub ? { form: 'submenu' as const, count: pictureCount, ...endIds, names: pictures.map((_, k) => endIds.factoryText + 1 + k),
       factoryIcons: [...endIds.factoryIcons], icons: [...endIds.icons], choices: pictures.map(x => x.id!) }

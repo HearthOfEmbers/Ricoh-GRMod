@@ -30,6 +30,9 @@ import { sectionsOf } from '../container';
 import { gr3xOffset } from './profile';
 import { GR3X_TONING_SCALE } from './halation-screen';
 import { GR3X_STASH_FILM, gr3xRawDevelopmentWords } from './datestamp';
+
+/** The live view's change detection reads the frame's look here (round 9: unmapped). */
+const GR3X_LIVE_LOOK_READ = 0x536dc998;
 import { quantizeSlot } from '../../color/camera';
 import type { SlotParams } from '../../color/camera';
 import type { QuantizedSlot } from '../../color/camera';
@@ -173,6 +176,14 @@ export async function buildGr3xImageControls(raw: Uint8Array, options: Gr3xLookO
   const round8 = features.round8 === true;
   if (round8 && !round7) throw new FirmwareError('bad-edit', 'IIIx round 8 builds on round 7');
   const round8Date = round8 && features.dateImprint === true;
+  // Round 9: the live view's change detection (0x536dc860) reads the look at 0x536dc998 only to
+  // compare it with the one it saw last ([r4,#0x1a8]) and to remember it; up to round 8 that read
+  // gave a film's native base (Standard), so going from one film to another (or Standard to a
+  // film) changed nothing it compared: the live view kept the previous film's matrix, second
+  // matrix and curves until a parameter changed (a colour film shown black and white after a
+  // black-and-white one). From round 9 it reads the look itself (no adapter there).
+  const round9 = features.round9 === true;
+  if (round9 && !round8) throw new FirmwareError('bad-edit', 'IIIx round 9 builds on round 8');
   if (round6 && (!extended || options.ownParameters !== true || options.jpegDiagnostics || !Number.isInteger(options.filmCount) ||
       options.filmCount! < 1 || options.filmCount! > GR3X_MAX_FILMS || options.films?.some(f => f.halation !== undefined)))
     throw new FirmwareError('bad-edit', 'IIIx film count: 1..20 films with their own parameters (Halation is set in the camera)');
@@ -284,7 +295,14 @@ export async function buildGr3xImageControls(raw: Uint8Array, options: Gr3xLookO
   const map = (r: number) => mapped.map(s => `cmp r${r},#${s.id};moveq r${r},#${s.nativeBase};`).join('');
   // Translate on read without modifying shared state, pointer provenance, flags
   // or another register. Keep these adapters specific to the audited IIIx image.
-  const adapters = GR3X_TONE_READS.map(([at, word]) => {
+  if (round9) {
+    // The read and the only uses of its value (the frame slot fp-0x34, the remembered byte
+    // [r4,#0x1a8], written at start-up by 0x536daf64), as audited: nothing else may read them.
+    const live: readonly (readonly [number, number])[] = [[GR3X_LIVE_LOOK_READ, 0xe5d5c77c], [0x536dc9a0, 0xe50bc034], [0x536dcb64, 0xe51b2034],
+      [0x536dcb6c, 0xe5d431a8], [0x536dcdf4, 0xe55b2034], [0x536dcdfc, 0xe5c421a8], [0x536daf64, 0xe5c431a8]];
+    for (const [at, w] of live) if (u32(at) !== w) throw new FirmwareError('unexpected-instruction', `IIIx live view look comparison at ${at.toString(16)}`);
+  }
+  const adapters = GR3X_TONE_READS.filter(([at]) => !(round9 && at === GR3X_LIVE_LOOK_READ)).map(([at, word]) => {
     const dst = (word >>> 12) & 15, src = (word >>> 16) & 15;
     const scratch = [0,1,2,3].find(r => r !== dst && r !== src)!;
     const entry = at === GR3X_DEVELOP_LOOK_READ && round6 ? (() => {
@@ -497,6 +515,7 @@ export async function buildGr3xImageControls(raw: Uint8Array, options: Gr3xLookO
       ...(halationScreen ? { halationScreen } : {}), ...(halationRows ? { halationRows } : {}) },
     ...(round6 ? { filmCount: capacity, halationInCamera: true } : {}),
     ...(round7 ? { round7: true, monoFilms } : {}),
+    ...(round9 ? { round9: true } : {}),
     ...(round8 ? { round8: true, ...(features.lookLayout && !isGr3xFactoryLayout(features.lookLayout, capacity) ? { lookLayout: { order: [...features.lookLayout.order], hidden: [...features.lookLayout.hidden] } } : {}) } : {}),
     // sharedParameters: films use Standard's storage (T6c). ownParameters: on top of it, each film's
     // values are swapped into that storage when it is selected (T6d).

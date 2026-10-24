@@ -21,6 +21,7 @@ import { Firmware, sectionsOf, sum32 } from '../src/fw/container';
 import { GR3_210, GR3X_160, gr3ProfileOf, openGr3xOfficial } from '../src/fw/gr3x/profile';
 import { readGr3xFactoryEntry } from '../src/fw/gr3x/factory';
 import { buildGr3xTestFirmware } from '../src/fw/gr3x/research-package';
+import { encodeGr3xPicture } from '../src/fw/gr3x/shutdown';
 import { gr3xFilmIcon, T6_FILM_NAMES } from '../src/fw/gr3x/film-icons';
 import { GR3X_FILM_IDS } from '../src/fw/gr3x/look-resources';
 import { GFX_RATIOS, planGr3xMenu } from '../src/fw/gr3x/geometry';
@@ -135,6 +136,67 @@ describe.skipIf(!xPath || !iiiPath)('GR III 2.10 is the IIIx 1.60 program', () =
     }
   }, 600_000);
 
+  /**
+   * Every feature of GR Mod's GR III builds (rounds 6..8: twenty films with presets and names, the
+   * date imprint, End Screen pictures, the settings guard, the Image Control order) built through
+   * the app's engine for both cameras: per section, the GR III file is the IIIx file but for the
+   * identity bytes of the two official images (RTOS header, epoch-year function, identity getters,
+   * one copyright year; CPU, SRIC), the build marker and the RTOS checksum word. RES (with the
+   * pictures inserted) and ICONBIN are byte for byte the same.
+   */
+  it('every full-feature build (rounds 6..8) is the same on both cameras but for the identity bytes', async () => {
+    const eX = await Engine.open(rawX), e3 = await Engine.open(raw3);
+    expect(eX.info.features).toMatchObject({ dateStamp: true, maxFilms: 20 });
+    expect(eX.info.capabilities).toMatchObject({ menuPictures: true, lookLayout: true });
+    const curve = Array.from({ length: 256 }, (_, i) => Math.min(16383, Math.round(16383 * Math.pow(i / 255, 0.8))));
+    const preset = { matrixQ13: Int16Array.from([9100, -600, -308, -300, 8800, -308, -100, -700, 8992]), curves: [Uint16Array.from(curve), Uint16Array.from(curve), Uint16Array.from(curve)] as [Uint16Array, Uint16Array, Uint16Array] };
+    const rgb = new Uint8Array(720 * 480 * 3).map((_, i) => (i * 7 + (i >> 11)) & 255);
+    const pictures = [{ id: 0x1007, name: 'Equal Test', jpeg: encodeGr3xPicture(rgb) }];
+    const ratios = [{ ratio: '2.39:1', name: 'Scope' }, { ratio: '4:3', name: '4:3' }];
+    const requests = GR3X_FILM_IDS.slice(0, 20).map((slot, i) => ({ slot, names: { en: `Film ${i + 1}` }, ...(i % 4 === 0 ? { preset } : {}) }));
+    const order = [64, 11, 12, 13, 14, 15, 16, 22, 17, 18, 19, 20, 21, ...Array.from({ length: 19 }, (_, k) => 65 + k)];
+    const cases: [string, Parameters<Engine['buildFirmware']>][] = [
+      ['round 8: 20 films, date, pictures, order', [requests, ratios, [], { filmCount: 20, adjSoftFocus: true, dateStamp: true, shutdownPictures: pictures, lookLayout: { order, hidden: [18, 83] } }]],
+      ['round 7: 20 films, date', [requests, ratios, [], { filmCount: 20, adjSoftFocus: true, dateStamp: true, gr3Round: 7 }]],
+      ['round 6: 9 films, no guard', [requests.slice(0, 9), ratios, [], { filmCount: 9, dateStamp: true, guard: false }]],
+      ['date imprint and pictures without films', [[], ratios, [], { dateStamp: true, shutdownPictures: pictures }]],
+    ];
+    const rtosRanges = (va: number) => (va >= 0x53002000 && va < 0x53002090) || (va >= 0x536b62ec && va < 0x536b6578) ||
+      (va >= 0x5381fe4c && va < 0x5381fea0) || (va >= 0x53d62314 && va < 0x53d62320);
+    const secX = sectionsOf(decX), sec3o = sectionsOf(dec3);
+    for (const [name, args] of cases) {
+      const bX = await eX.buildFirmware(...args), b3 = await e3.buildFirmware(...args);
+      expect(Object.values(bX.checks).every(v => v), name).toBe(true);
+      expect(Object.values(b3.checks).every(v => v), name).toBe(true);
+      const oX = new Firmware(bX.file).decoded, o3 = new Firmware(b3.file).decoded;
+      expect(o3.length, name).toBe(oX.length);
+      const sX = sectionsOf(oX), s3 = sectionsOf(o3);
+      expect(s3.map(x => [x.name, x.offset, x.size]), name).toEqual(sX.map(x => [x.name, x.offset, x.size]));
+      // Bytes outside the sections (container header of the payload, padding): the official images' differences only.
+      for (const sec of sX) {
+        const a = oX.subarray(sec.offset, sec.offset + sec.size), b = o3.subarray(sec.offset, sec.offset + sec.size);
+        const d: number[] = [];
+        for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) d.push(i);
+        if (sec.name === 'RTOS') {
+          // the identity bytes, then the marker and checksum word at the end of the grown RTOS
+          const tail = sec.size - 4 - 64;
+          expect(d.filter(i => !rtosRanges(GR3X_160.rtosBase + i) && i < tail).map(i => (GR3X_160.rtosBase + i).toString(16)), `${name} RTOS`).toEqual([]);
+          expect(d.filter(i => rtosRanges(GR3X_160.rtosBase + i)).length, name).toBeLessThan(40);
+        } else if (sec.name === 'CPU' || sec.name === 'SRIC') {
+          const o = sec3o.find(x => x.name === sec.name)!, ox = secX.find(x => x.name === sec.name)!;
+          expect(o.size).toBe(ox.size); expect(sec.size, name).toBe(ox.size);
+          const official = new Set(diff.filter(i => i >= ox.offset && i < ox.offset + ox.size).map(i => i - ox.offset));
+          expect(d.filter(i => !official.has(i)), `${name} ${sec.name}`).toEqual([]);
+        } else {
+          expect(d.length, `${name} ${sec.name}`).toBe(0);
+        }
+      }
+      // And each file is recognised (verified) only by its own camera's engine.
+      expect(await (await Engine.open(rawX)).inspect(bX.file), name).toMatchObject({ verified: true });
+      expect(await (await Engine.open(raw3)).inspect(b3.file), name).toMatchObject({ verified: true });
+    }
+  }, 1_800_000);
+
   it('the GR III container keeps GR III\'s own header, version and model records', async () => {
     const b3 = await buildGr3xTestFirmware(raw3, [...soft]);
     const head = (b: Uint8Array) => Array.from(b.subarray(0, 0x80));
@@ -156,7 +218,7 @@ describe.skipIf(!xPath || !iiiPath)('GR III 2.10 is the IIIx 1.60 program', () =
       features: { dateStamp: true, maxFilms: 20 } });
     expect(e3.info).not.toHaveProperty('experimental');
     expect(eX.info).toMatchObject({ filename: 'fwdc243b.bin', models: ['GR3X_HDF'], version: '1.60',
-      capabilities: { menuPictures: false, lookLayout: false }, features: { dateStamp: false, maxFilms: 9 } });
+      capabilities: { menuPictures: true, lookLayout: true }, features: { dateStamp: true, maxFilms: 20 } });
     expect(e3.info.factoryEntry.modeSetName).toBe('00078350.588');
     expect(readGr3xFactoryEntry(dec3, GR3_210).modeSetName).toBe('00078350.588');
     expect(() => readGr3xFactoryEntry(dec3, GR3X_160)).toThrow();
