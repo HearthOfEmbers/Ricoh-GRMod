@@ -4,9 +4,9 @@
     python3 check.py BUILT-RTOS OFFICIAL-RTOS
 
 BUILT-RTOS / OFFICIAL-RTOS: RTOS sections (decoded). Needs the Python package unicorn. The guide
-number comes from the camera's choice byte (0x99A) through the file's table (one entry, GF-2's 3);
-the check also puts a second entry (GN 12) in the emulator's copy and selects it, as a camera-menu
-choice will.
+number (byte 0x99A, 0 = 3), the background and the slowest shutter speed (bits 1..4 and 5..7 of
+byte 0x99B) are the camera-menu choices (`directflash-menu.ts`, checked by menu_check.py); the
+exposure is checked with the defaults and with other choices.
 
  1. The exposure: the wrapper at 0x5367AAA8 calls the flash program (stubbed) and then the module
     with the exposure object; the module, run on exposure records filled for 2000+ situations
@@ -14,10 +14,11 @@ choice will.
     exposure program and mode, flash kind), leaves exactly what a straightforward Python version of
     the rule computes, within 1/1000 EV, and the camera's own flash-sync function (0x536792E0) is
     what limits the shutter. Every result is inside f/2.8..f/16, the ISO range, the sync limit and
-    1/32 s; with Flash Output 1/4 the plan is two stops brighter; where Direct Flash does not apply
+    the slowest shutter speed chosen; the subject (flash + ambient light) is correctly exposed and
+    the background as dark as chosen wherever the limits allow; with Flash Output 1/4 the plan is two stops brighter; where Direct Flash does not apply
     the record is left alone.
  2. The menus: the two menu lists, the ADJ lever and the Fn list, with and without slow sync, for
-    every value index, setting byte (0, 1, other) and Flash Mode (0..3): count, text, icon, row draw,
+    every value index, setting byte (bit 0 off / on, other bits kept) and Flash Mode (0..3): count, text, icon, row draw,
     is-current and set; the other values reach the camera's own handlers with the same arguments.
  3. The current value's icon at its three places.
  4. Text 882 in all 21 languages and icon 733 (catalog entry, lookup bounds).
@@ -164,11 +165,22 @@ def sync_rule(av, hs):
     return f32(11.666667) if av <= f32(4.6668) else 12.0
 
 
-def reference(s, gn, bg=1.0, flip=False):
+def choices(s):
+    """(GN, background EV darker, slowest Tv) from the two setting bytes, as the camera menu keeps them."""
+    gn = s['gnb'] or 3
+    k = (s['byte'] >> 1) & 15
+    if k == 0 or k > 9:
+        k = 3
+    n = s['byte'] >> 5
+    return gn, k / 3, 5.0 if n == 0 else float(5 - n) if n <= 5 else float(n)
+
+
+def reference(s, flip=False):
     """The rule, straightforwardly. Returns (tv, av, sv, nd, err, background) or None when Direct
-    Flash does not apply. bg: the background balance, EV darker than a correct exposure."""
-    if s['byte'] != 1 or s['fm'] != 0 or s['program'] > 4 or s['mode'] == 7 or 1 <= s['kind'] <= 4 or s['mm'] == 0:
+    Flash does not apply."""
+    if not s['byte'] & 1 or s['fm'] != 0 or s['program'] > 4 or s['mode'] == 7 or 1 <= s['kind'] <= 4 or s['mm'] == 0:
         return None
+    gn, bg, slowest = choices(s)
     mm = min(max(s['mm'], 100), 8000)
     f0 = 2 * math.log2(gn) - 2 * math.log2(mm / 1000)
     if s['output'] == 2:
@@ -183,7 +195,7 @@ def reference(s, gn, bg=1.0, flip=False):
         sv_lo = sv_hi = min(max(s['fixed'], sv_lo), sv_hi)
     av_lo, av_hi = max(s['av_min'], 2.9708536), min(s['av_max'], 8.0)
     av_lo = min(av_lo, av_hi)
-    tv_lo, tv_hi = max(s['tv_min'], 5.0), s['tv_max']
+    tv_lo, tv_hi = slowest, s['tv_max']   # (the camera's own minimum, tv_min, is not for Direct Flash)
     tv_lo = min(tv_lo, tv_hi)
     c = bg + math.log2(1 - 2 ** -bg)
 
@@ -216,7 +228,7 @@ def reference(s, gn, bg=1.0, flip=False):
 
 
 def situations():
-    base = dict(byte=1, fm=0, program=0, mode=0, kind=0x10, mm=1000, output=1, isoauto=1, auto_lo=5.0, auto_hi=10.0,
+    base = dict(byte=1, gnb=0, fm=0, program=0, mode=0, kind=0x10, mm=1000, output=1, isoauto=1, auto_lo=5.0, auto_hi=10.0,
                 fixed=7.0, sv_min=5.0, sv_max=15.0, av_min=2.9708536, av_max=8.0, tv_min=-5.0, tv_max=14.0, ev=5.0,
                 nd=2, hs=0)
     yield dict(base)
@@ -234,42 +246,28 @@ def situations():
                                 s = dict(base, mm=mm, isoauto=iso[0], auto_lo=iso[1] or 5.0, auto_hi=iso[2] or 10.0, fixed=fixed,
                                          output=output, nd=nd, ev=ev, program=program)
                                 yield s
-    for k in [dict(byte=0), dict(byte=2), dict(fm=1), dict(fm=3), dict(program=5), dict(program=6), dict(mode=7), dict(kind=1),
+    for k in [dict(byte=0), dict(byte=2), dict(byte=0xfe), dict(byte=0xff), dict(byte=0x1f), dict(gnb=1), dict(gnb=200), dict(fm=1), dict(fm=3), dict(program=5), dict(program=6), dict(mode=7), dict(kind=1),
               dict(kind=2), dict(kind=4), dict(kind=0), dict(mm=0), dict(hs=1, ev=15.0), dict(auto_lo=10.0, auto_hi=5.0),
               dict(av_min=3.5, av_max=7.0), dict(tv_min=6.0)]:
         yield dict(base, **k)
 
 
-def check_exposure(img, gn, bg=1.0):
+def check_exposure(img, gnb=0, high=0):
+    """gnb: byte 0x99A; high: bits 1..7 of byte 0x99B, ORed into every situation's byte."""
     wrapper = img.branch(CALL_SITE)
     check(wrapper != FLASH_PROGRAM and wrapper >= BASE + 0x13d2ac0, 'the flash program call does not go to the wrapper')
     # The wrapper: push; mov r4,r0; bl flash program; mov r0,r4; movw/movt r1,ctx; pop; b module.
     check(img.branch(wrapper + 8) == FLASH_PROGRAM, 'the wrapper does not call the flash program first')
     ctx = img.movw_movt(wrapper + 16)
     module = img.branch(wrapper + 28)
-    words = [img.u32(ctx + 4 * k) for k in range(9)]
-    check(words[:5] == [BYTE, LIVE_FM, OUTPUT, SYNC, GN_BYTE] and words[6] == 1 and words[8] == 1, f'module context {[hex(w) for w in words]}')
-    table = words[5]
-    bal = words[7]
-    check(img.u32(bal) == 0, f'background balance 0 in the file {img.u32(bal):#x} (expected 1 EV: offset 0.0)')
-    gn_built = 2 ** (struct.unpack('<f', struct.pack('<I', img.u32(table)))[0] / 2)
-    check(abs(gn_built - 3) < 1e-4, f'guide number 0 in the file {gn_built} (expected 3)')
-    print(f'  wrapper {wrapper:#x}, module {module:#x}, context {ctx:#x}, GN table {table:#x}: {gn_built:.3f}')
+    words = [img.u32(ctx + 4 * k) for k in range(6)]
+    check(words[:5] == [BYTE, LIVE_FM, OUTPUT, SYNC, GN_BYTE], f'module context {[hex(w) for w in words]}')
+    gn_default = 2 ** (struct.unpack('<f', struct.pack('<I', words[5]))[0] / 2)
+    check(abs(gn_default - 3) < 1e-4, f'default guide number in the file {gn_default} (expected 3)')
+    print(f'  wrapper {wrapper:#x}, module {module:#x}, context {ctx:#x}: default GN {gn_default:.3f}; byte 0x99A {gnb}, 0x99B bits {high:#x}')
 
     e = Emu(img)
     e.stubs[FLASH_PROGRAM] = ('flash program', None)
-    # As a camera-menu choice will: a second table entry (GN 12), selected by the choice byte.
-    choice = 0
-    if gn != 3:
-        e.mu.mem_write(table + 4, struct.pack('<f', 2 * math.log2(gn)))
-        e.w32(ctx + 24, 2)
-        choice |= 1
-    # The same for the background balance (bits 4..7 of the byte), entry 2 of its table.
-    if bg != 1.0:
-        e.mu.mem_write(bal + 8, struct.pack('<f', bg + math.log2(1 - 2 ** -bg)))
-        e.w32(ctx + 32, 3)
-        choice |= 2 << 4
-    e.w8(GN_BYTE, choice)
     ae, diag, apex, info = 0x70000000, 0x70001000, 0x70002000, 0x70003000
     e.w32(ae + 4, diag)
     e.w32(ae + 0x28, info)
@@ -279,9 +277,11 @@ def check_exposure(img, gn, bg=1.0):
     worst = 0.0
     sync_seen = set()
     for s in situations():
+        s = dict(s, byte=s['byte'] | high, gnb=s['gnb'] or gnb)
         n += 1
         e.mu.mem_write(info, bytes(0x600))
         e.w8(BYTE, s['byte'])
+        e.w8(GN_BYTE, s['gnb'])
         e.w8(LIVE_FM, s['fm'])
         e.w8(OUTPUT, s['output'])
         e.w8(info + 0x39, s['program'])
@@ -309,12 +309,12 @@ def check_exposure(img, gn, bg=1.0):
         check(e.calls[:1] == [('flash program', ae, e.calls[0][2] if e.calls else 0, e.calls[0][3] if e.calls else 0)],
               'the wrapper did not call the flash program with the exposure object')
         got = (e.rf(info + 0xd0), e.rf(info + 0xd4), e.rf(info + 0xd8), e.r8(info + 0x560))
-        ref = reference(s, gn, bg)
+        ref = reference(s)
         if ref is None:
             check(got == (99.0, 98.0, 97.0, 0x77), f'record changed where Direct Flash does not apply: {s} -> {got}')
             continue
         applied += 1
-        alt = reference(s, gn, bg, flip=True)
+        alt = reference(s, flip=True)
         if alt != ref and alt[3] == got[3]:
             ref = alt  # right at the ND Auto threshold: either choice
             borderline += 1
@@ -328,7 +328,8 @@ def check_exposure(img, gn, bg=1.0):
         check(lo - 1e-4 <= sv <= max(lo, hi) + 1e-4, f'ISO outside the range: {s} -> {got}')
         sync = sync_rule(av, s['hs'])
         sync_seen.add(round(sync, 3))
-        check(tv <= sync + 1e-4 and tv >= min(max(s['tv_min'], 5.0), sync) - 1e-4, f'shutter outside 1/32 s .. sync: {s} -> {got}')
+        gn, bg, slowest = choices(s)
+        check(tv <= sync + 1e-4 and tv >= min(slowest, sync, s['tv_max']) - 1e-4, f'shutter outside the slowest .. sync: {s} -> {got}')
         if s['nd'] == 2:
             check(nd == 0, f'ND used with ND Off: {s}')
         # The physics, independently of the rule: flash and ambient shares of the subject's light.
@@ -344,7 +345,7 @@ def check_exposure(img, gn, bg=1.0):
         else:
             check(abs(total - ref[4]) < 2e-3, f'error {total} vs rule {ref[4]}: {s}')
         # (At a sync limit, also one of a wider aperture: the rule's limits jump with the aperture.)
-        tv_free = (min(max(s['tv_min'], 5.0), s['tv_max']) + 1e-3 < tv < min(sync, s['tv_max']) - 1e-3
+        tv_free = (min(slowest, s['tv_max']) + 1e-3 < tv < min(sync, s['tv_max']) - 1e-3
                    and all(abs(tv - f32(v)) > 1e-3 for v in (11.333333, 11.666667, 12.0, 14.0)))
         if tv_free and not at_limit:
             check(abs(math.log2(amb) + bg) < 2e-3, f'background {math.log2(amb):+.3f} EV, not {-bg}: {s} -> {got}')
@@ -353,14 +354,15 @@ def check_exposure(img, gn, bg=1.0):
     pairs = 0
     for mm in (500, 1000, 2000, 3000, 5000, 8000):
         q = dict(next(situations()), mm=mm, isoauto=0, fixed=7.0, ev=-5.0)  # dark: the flash alone
-        a = reference(dict(q, output=1), gn, bg)
-        b = reference(dict(q, output=2), gn, bg)
+        a = reference(dict(q, output=1, byte=1 | high, gnb=gnb))
+        b = reference(dict(q, output=2, byte=1 | high, gnb=gnb))
         if 2.98 < b[1] and a[1] < 7.99:
             pairs += 1
             check(abs((a[1] - b[1]) - 2) < 1e-2, f'1/4 is not two stops: {a} {b}')
     check(pairs > 0, 'no distance to compare 1/1 and 1/4 at')
     print(f'  exposure: {n} situations, {applied} with Direct Flash, largest difference {worst:.2e} EV ({borderline} right at the ND Auto threshold), sync limits seen {sorted(sync_seen)}')
-    print(f'  subject correctly exposed in all {physics} not at an aperture / ISO limit; background {-bg:+} EV in all {balanced} with a free shutter speed')
+    gn, bg, slowest = choices(dict(byte=1 | high, gnb=gnb))
+    print(f'  subject correctly exposed in all {physics} not at an aperture / ISO limit; background {-bg:+.2f} EV in all {balanced} with a free shutter speed')
     # The camera's own sync function, called as the module does, is the rule above.
     for av in (2.97, 3.5, 4.0, 4.3, 4.7, 5.5, 8.0):
         for hs in (0, 1):
@@ -372,32 +374,10 @@ def check_exposure(img, gn, bg=1.0):
     # A table of what to expect on the camera (dim room, ND off, Flash Output 1/1).
     print('  distance  ISO Auto 100-3200          fixed ISO 400')
     for mm in (500, 1000, 2000, 3000, 5000):
-        r1 = reference(dict(next(situations()), mm=mm), gn, bg)
-        r2 = reference(dict(next(situations()), mm=mm, isoauto=0, fixed=7.0), gn, bg)
+        r1 = reference(dict(next(situations()), mm=mm, byte=1 | high, gnb=gnb))
+        r2 = reference(dict(next(situations()), mm=mm, isoauto=0, fixed=7.0, byte=1 | high, gnb=gnb))
         fmt = lambda r: f'f/{2 ** (r[1] / 2):4.1f} ISO {100 * 2 ** (r[2] - 5):5.0f} 1/{2 ** r[0]:4.0f}s'
         print(f'  {mm / 1000:4.1f} m    {fmt(r1)}    {fmt(r2)}')
-
-
-def check_beyond(img):
-    """A choice byte beyond the table (an earlier firmware's, or none) plans with entry 0."""
-    wrapper = img.branch(CALL_SITE)
-    e = Emu(img)
-    e.stubs[FLASH_PROGRAM] = ('flash program', None)
-    ae, diag, apex, info = 0x70000000, 0x70001000, 0x70002000, 0x70003000
-    e.w32(ae + 4, diag); e.w32(ae + 0x28, info); e.w32(diag + 4, apex); e.w32(apex + 4, info)
-    s = next(situations())
-    out = []
-    for choice in (0, 1, 200):
-        e.w8(GN_BYTE, choice)
-        e.w8(BYTE, 1); e.w8(LIVE_FM, 0); e.w8(OUTPUT, 1)
-        e.mu.mem_write(info, bytes(0x600))
-        for o, v in ((0x10, 15.0), (0x14, 5.0), (0x64, 5.0), (0x70, 14.0), (0x74, -5.0), (0xa0, 5.0), (0xa4, 10.0), (0xec, 2.97), (0xf0, 8.0)):
-            e.wf(info + o, v)
-        e.w8(info + 0x9c, 1); e.w16(info + 0x3e, 0x10); e.w8(info + 0x55d, 2); e.w32(info + 0x584, 2000)
-        e.call(wrapper, ae)
-        out.append((e.rf(info + 0xd4), e.rf(info + 0xd8)))
-    check(out[0] == out[1] == out[2], f'choice beyond the table: {out}')
-    print(f'  choice 0 / 1 / 200 (table of 1): {out[0]}')
 
 
 # --- 2./3. Menus ------------------------------------------------------------------------------
@@ -446,9 +426,9 @@ def check_menus(img):
             N = h['fixed'] if flag is None else (4 if flag else 2)
             e.calls.clear()
             check(e.call(handler['count'], this) == N + 1, f'{name}: count with flag {flag}')
-            for byte in (0, 1, 7):
+            for byte in (0, 1, 7, 0x2c, 0xd3):
                 for fm in (0, 1, 2, 3):
-                    active = byte == 1 and fm == 0
+                    active = bool(byte & 1) and fm == 0
                     for i in range(N + 1):
                         cases += 1
                         e.w8(BYTE, byte)
@@ -466,9 +446,9 @@ def check_menus(img):
                         e.calls.clear()
                         e.call(handler['set'], this, i)
                         if i == N:
-                            check(e.r8(BYTE) == 1 and ('SetFlashMode', CURRENT, 0) == e.calls[-1][:3], f'{name}: set({i}) -> byte {e.r8(BYTE)} calls {e.calls}')
+                            check(e.r8(BYTE) == byte | 1 and ('SetFlashMode', CURRENT, 0) == e.calls[-1][:3], f'{name}: set({i}) -> byte {e.r8(BYTE)} calls {e.calls}')
                         else:
-                            check(e.r8(BYTE) == 0 and ('official set', this, i) == e.calls[-1][:3], f'{name}: set({i}) -> byte {e.r8(BYTE)} calls {e.calls}')
+                            check(e.r8(BYTE) == byte & ~1 and ('official set', this, i) == e.calls[-1][:3], f'{name}: set({i}) -> byte {e.r8(BYTE)} calls {e.calls}')
                         e.w8(BYTE, byte)
                         # draw / text / icon
                         if 'draw' in handler:
@@ -500,17 +480,17 @@ def check_menus(img):
         check(t != FLASH_ICON, f'{site:#x} still goes to the official icon function')
         check(target is None or t == target, 'the three sites do not share one function')
         target = t
-    for byte in (0, 1, 2):
+    for byte in (0, 1, 2, 0x3b):
         for value in (0, 1, 2, 3):
             for variant in (0, 1):
                 e.w8(BYTE, byte)
                 e.calls.clear()
                 r = e.call(target, 0x7000d000, value, variant)
-                if byte == 1 and value == 0 and variant == 0:
+                if byte & 1 and value == 0 and variant == 0:
                     check(r == ICON_ID and not e.calls, f'icon of current: byte {byte} value {value} -> {r}')
                 else:
                     check(r == 0x13e and e.calls == [('official icon of value', 0x7000d000, value, variant)], f'icon of current: byte {byte} value {value} variant {variant} -> {r} {e.calls}')
-    print('  icon of the current value: 24 cases')
+    print('  icon of the current value: 32 cases')
 
 
 # --- 4. Text and icon -------------------------------------------------------------------------
@@ -534,13 +514,15 @@ def check_resources(img):
 
 def main():
     new = Image(sys.argv[1])
-    print('1. exposure (GN 3: choice 0, as on every camera)')
-    check_exposure(new, 3.0)
-    print('1b. exposure (GN 12: a second choice)')
-    check_exposure(new, 12.0)
-    print('1c. exposure (background 2 EV darker: a third balance choice, with GN 12)')
-    check_exposure(new, 12.0, 2.0)
-    check_beyond(new)
+    print('1. exposure (bytes 0: GN 3, background -1.0 EV, slowest 1/30 s, as on every camera)')
+    check_exposure(new)
+    print('1b. exposure (GN 12, background -2.0 EV, slowest 1/15 s)')
+    check_exposure(new, 12, (6 << 1) | (1 << 5))
+    print('1c. exposure (GN 36, background -0.3 EV, slowest 1/125 s)')
+    check_exposure(new, 36, (1 << 1) | (7 << 5))
+    print('1d. exposure (GN 2, background -3.0 EV, slowest 1 s; an unlisted GN 50)')
+    check_exposure(new, 2, (9 << 1) | (5 << 5))
+    check_exposure(new, 50, (12 << 1) | (3 << 5))
     print('2./3. menus')
     check_menus(new)
     print('4. text and icon')

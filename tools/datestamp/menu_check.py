@@ -58,6 +58,8 @@ NAME_WORDS = ['Název', 'Navn', 'Name', 'Nimi', 'Nom', 'Name', 'Όνομα', 'N�
 COUNTS = [2, 4, 2]
 # Flash Mode's list records, whose handlers Direct Flash replaces (0.8.4).
 DIRECT_FLASH_RECORDS = (11, 12)
+# Flash Mode's submenu record, to which Direct Flash adds its settings (0.8.4).
+DIRECT_FLASH_SUBMENU = 5
 TEXT_CATALOG, ICON_CATALOG = 0x543d4ac0, 0x543d3ac0
 NAMES = ['Vkopírování data', 'Datostempel', 'Date Imprint', 'Päiväysleima', 'Impression date', 'Datumseinbelichtung',
          'Αποτύπωση ημ/νίας', 'Dátumbélyegző', 'Stampa data', '日付写し込み', '날짜 각인', 'Datumafdruk', 'Nadruk daty',
@@ -314,7 +316,11 @@ def check_records(new, off):
     check(len(subs) == 1 and len(sels) == 1, 'relocated tables: sites disagree')
     st, lt = subs.pop(), sels.pop()
     check(st >= BASE + OFFICIAL_LEN and lt >= BASE + OFFICIAL_LEN, 'relocated tables are not in the appended area')
-    check(new.rd(st, 19 * 0x64) == off.rd(0x53da6718, 19 * 0x64), 'submenu table: official records changed')
+    # Direct Flash (0.8.4, directflash-menu.ts) adds three lines to record 5 (Flash Mode): checked
+    # by tools/directflash/menu_check.py, left out here.
+    sub_new, sub_off = bytearray(new.rd(st, 19 * 0x64)), bytearray(off.rd(0x53da6718, 19 * 0x64))
+    sub_new[DIRECT_FLASH_SUBMENU * 0x64:(DIRECT_FLASH_SUBMENU + 1) * 0x64] = sub_off[DIRECT_FLASH_SUBMENU * 0x64:(DIRECT_FLASH_SUBMENU + 1) * 0x64]
+    check(sub_new == sub_off, 'submenu table: official records changed')
     # Direct Flash (0.8.4, directflash.ts) replaces the count / draw / set / is-current handlers of
     # records 11 and 12 (Flash Mode) in place before the table is copied: those 8 words may differ.
     table_new, table_off = bytearray(new.rd(lt, 125 * 0x4c)), bytearray(off.rd(0x53da2d20, 125 * 0x4c))

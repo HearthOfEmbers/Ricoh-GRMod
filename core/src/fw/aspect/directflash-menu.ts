@@ -1,0 +1,373 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/**
+ * Direct Flash's settings in the camera menu (0.8.4): three more lines in the Flash submenu of the
+ * still shooting menu (SubMenuController record 5, "Flash Mode": Flash Mode, Flash Output), after
+ * the camera's two:
+ *
+ *   Direct Flash GN        GN 2 .. GN 36            the flash's guide number (ISO 100, metres)
+ *   Direct Flash Background -0.3 EV .. -3.0 EV      how much darker than a correct exposure the
+ *                                                    background (ambient light only) is
+ *   Direct Flash Min Shutter 1/125 .. 1"            the slowest shutter speed
+ *
+ * Each line shows the icon of its current value and opens a list (SelectMenuController) of the
+ * values. Where they are kept (see `tools/directflash/directflash.c`, which reads them):
+ *  - the guide number: byte 0x99A of the user settings (padding the factory-defaults initialiser
+ *    never writes, next to Direct Flash's byte 0x99B), the number itself; 0, what the byte is on
+ *    every camera, is GN 3 (the GF-2's);
+ *  - background and slowest shutter speed: bits 1..4 and 5..7 of byte 0x99B (bit 0: Direct Flash
+ *    chosen, see `directflash.ts`); 0 is -1.0 EV and 1/30 s.
+ * A value the lists do not have (a byte the official firmware or an earlier build left) shows as
+ * the default; the planner reads it the same way (an unlisted guide number is used as it is).
+ *
+ * What is changed, all found by reading the official 1.11 code:
+ *  - submenu record 5 (in the table wherever it is now, see `datestamp-menu.ts`): line count 5, the
+ *    three line texts, controller ids DF_GN_ID.., the value icon's x (540, as the two lines before)
+ *    and value-draw functions; laid out as the camera's own five-line submenu (record 10, ADJ
+ *    settings);
+ *  - three list records (copied from Horizon Correction's) added to the list table, SetCurrentMenu
+ *    mapping the three ids to them and the controller factory handing out the list controller for
+ *    them (as for the date imprint's lists);
+ *  - texts DF_TEXT_ID.. (the three line names in 21 languages, then the value names, the same in
+ *    every language) and 40x40 icons DF_ICON_ID.. (one per value).
+ * Every list has at most 21 values: the list controller makes its rows for the longest list among
+ * the camera's own records (21).
+ */
+import { FirmwareError } from '../types';
+import { assembleWords, movImmediate, movWord } from './arm';
+import { ICON_CATALOG, LOOKUP_BOUNDS, LANGUAGES, Patch, TEXT_CATALOG, concat, expectWord, u16le, u32le, utf16z, widenTextRows } from './build';
+import { LIST_CONTROLLER_ID, LIST_SET_ITEM, SUB_RECORD, SUB_SET_ICON, addListRecords, hookControllerFactory, listTemplate, submenuTable } from './datestamp-menu';
+import { DIRECT_FLASH_BYTE, DIRECT_FLASH_GN_BYTE } from './directflash';
+
+/** Controller ids of the three lists (not used by the firmware). */
+export const DF_GN_ID = 0x020001b0;
+export const DF_BACKGROUND_ID = 0x020001b1;
+export const DF_SLOWEST_ID = 0x020001b2;
+/** Texts: the three line names, then the values' names (guide numbers, backgrounds, shutter speeds). */
+export const DF_TEXT_ID = 910;
+/** Icons: one per value, guide numbers, backgrounds, shutter speeds. */
+export const DF_ICON_ID = 663;
+
+/** Guide numbers of the list (ISO 100, metres); stored as the number, the default (3) as 0. */
+export const DF_GUIDE_NUMBERS: readonly number[] = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 16, 18, 20, 22, 25, 28, 32, 36];
+export const DF_GN_DEFAULT = 3;
+/** Backgrounds: k / 3 EV darker, k = 1..9 (-0.3 .. -3.0 EV); stored as k, the default (-1.0 EV, k = 3) as 0. */
+export const DF_BACKGROUND_THIRDS: readonly number[] = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+export const DF_BACKGROUND_DEFAULT = 3;
+/** Slowest shutter speeds: name, stored code (bits 5..7 of 0x99B), Tv. */
+export const DF_SLOWEST: readonly { name: string; code: number; tv: number }[] = [
+  { name: '1/125', code: 7, tv: 7 }, { name: '1/60', code: 6, tv: 6 }, { name: '1/30', code: 0, tv: 5 }, { name: '1/15', code: 1, tv: 4 },
+  { name: '1/8', code: 2, tv: 3 }, { name: '1/4', code: 3, tv: 2 }, { name: '1/2', code: 4, tv: 1 }, { name: '1"', code: 5, tv: 0 },
+];
+export const DF_BACKGROUND_SHIFT = 1;
+export const DF_SLOWEST_SHIFT = 5;
+
+/** In `LANGS` order (cs da en fi fr de el hu it ja ko nl pl pt ru zh-CN es sv th zh-TW tr). */
+export const DF_GN_NAMES: readonly string[] = [
+  'Přímý blesk GN', 'Direkte blitz GN', 'Direct Flash GN', 'Suora salama GN', 'Flash direct GN', 'Direktblitz GN', 'Άμεσο φλας GN',
+  'Közvetlen vaku GN', 'Flash diretto GN', 'ダイレクト GN', '다이렉트 GN', 'Directe flits GN', 'Błysk bezpośredni GN', 'Flash direto GN',
+  'Прямая вспышка GN', '直闪 GN', 'Flash directo GN', 'Direktblixt GN', 'แฟลชตรง GN', '直閃 GN', 'Doğrudan flaş GN',
+];
+export const DF_BACKGROUND_NAMES: readonly string[] = [
+  'Přímý blesk: pozadí', 'Direkte blitz: baggrund', 'Direct Flash Background', 'Suora salama: tausta', 'Flash direct : fond', 'Direktblitz: Hintergrund', 'Άμεσο φλας: φόντο',
+  'Közvetlen vaku: háttér', 'Flash diretto: sfondo', 'ダイレクト 背景明るさ', '다이렉트 배경', 'Directe flits: achtergr.', 'Błysk bezpośr.: tło', 'Flash direto: fundo',
+  'Прямая вспышка: фон', '直闪背景亮度', 'Flash directo: fondo', 'Direktblixt: bakgrund', 'แฟลชตรง: พื้นหลัง', '直閃背景亮度', 'Doğrudan flaş: arka plan',
+];
+export const DF_SLOWEST_NAMES: readonly string[] = [
+  'Přímý blesk: min. čas', 'Direkte blitz: min. lukker', 'Direct Flash Min Shutter', 'Suora salama: suljin min.', 'Flash direct : vit. min.', 'Direktblitz: min. Zeit', 'Άμεσο φλας: ελάχ. ταχ.',
+  'Közvetlen vaku: min. idő', 'Flash diretto: posa min.', 'ダイレクト 低速限界', '다이렉트 저속한계', 'Directe flits: min. tijd', 'Błysk bezpośr.: min. czas', 'Flash direto: vel. mín.',
+  'Прям. всп.: мин. выд.', '直闪最低快门', 'Flash directo: obt. mín.', 'Direktblixt: min. slutare', 'แฟลชตรง: ชัตเตอร์ต่ำสุด', '直閃最低快門', 'Doğrudan flaş: min. enst.',
+];
+
+export const dfBackgroundName = (k: number): string => `-${(k / 3).toFixed(1)} EV`;
+export const dfGuideNumberName = (gn: number): string => `GN ${gn}`;
+
+/** One list: values (menu order) and how each is stored in a field of a setting byte. */
+export interface DfList {
+  id: number;
+  title: number;
+  byte: number;
+  shift: number;
+  mask: number;
+  /** Stored field value per list position. */
+  codes: readonly number[];
+  /** List position shown for a field value no position has. */
+  fallback: number;
+  names: readonly string[];
+  firstText: number;
+  firstIcon: number;
+  icons: readonly Uint8Array[];
+}
+
+export function directFlashLists(): DfList[] {
+  const gnCodes = DF_GUIDE_NUMBERS.map((g) => (g === DF_GN_DEFAULT ? 0 : g));
+  const bgCodes = DF_BACKGROUND_THIRDS.map((k) => (k === DF_BACKGROUND_DEFAULT ? 0 : k));
+  let text = DF_TEXT_ID + 3;
+  let icon = DF_ICON_ID;
+  const make = (id: number, title: number, byte: number, shift: number, mask: number, codes: number[], names: string[], icons: Uint8Array[]): DfList => {
+    const l: DfList = { id, title, byte, shift, mask, codes, fallback: codes.indexOf(0), names, firstText: text, firstIcon: icon, icons };
+    text += codes.length;
+    icon += codes.length;
+    return l;
+  };
+  return [
+    make(DF_GN_ID, DF_TEXT_ID, DIRECT_FLASH_GN_BYTE, 0, 0xff, gnCodes, DF_GUIDE_NUMBERS.map(dfGuideNumberName), DF_GUIDE_NUMBERS.map((g) => drawValueIcon('GN', String(g)))),
+    make(DF_BACKGROUND_ID, DF_TEXT_ID + 1, DIRECT_FLASH_BYTE, DF_BACKGROUND_SHIFT, 15, bgCodes, DF_BACKGROUND_THIRDS.map(dfBackgroundName),
+      DF_BACKGROUND_THIRDS.map((k) => drawValueIcon('EV', `-${(k / 3).toFixed(1)}`))),
+    make(DF_SLOWEST_ID, DF_TEXT_ID + 2, DIRECT_FLASH_BYTE, DF_SLOWEST_SHIFT, 7, DF_SLOWEST.map((x) => x.code), DF_SLOWEST.map((x) => x.name),
+      DF_SLOWEST.map((x) => (x.name.startsWith('1/') ? drawValueIcon('1/', x.name.slice(2)) : drawValueIcon('SEC', '1')))),
+  ];
+}
+
+// --------------------------------------------------------------------------------------------
+// Icons: the tile of the camera's menu icons (grey border, dark fill), a small label over the value.
+
+/** 5x7 glyphs (narrower for 1 - . /), '#' = ink. */
+const GLYPHS: Record<string, readonly string[]> = {
+  '0': ['.###.', '#...#', '#..##', '#.#.#', '##..#', '#...#', '.###.'],
+  '1': ['.#.', '##.', '.#.', '.#.', '.#.', '.#.', '###'],
+  '2': ['.###.', '#...#', '....#', '...#.', '..#..', '.#...', '#####'],
+  '3': ['####.', '....#', '....#', '.###.', '....#', '....#', '####.'],
+  '4': ['...#.', '..##.', '.#.#.', '#..#.', '#####', '...#.', '...#.'],
+  '5': ['#####', '#....', '####.', '....#', '....#', '#...#', '.###.'],
+  '6': ['..##.', '.#...', '#....', '####.', '#...#', '#...#', '.###.'],
+  '7': ['#####', '....#', '...#.', '..#..', '.#...', '.#...', '.#...'],
+  '8': ['.###.', '#...#', '#...#', '.###.', '#...#', '#...#', '.###.'],
+  '9': ['.###.', '#...#', '#...#', '.####', '....#', '...#.', '.##..'],
+  '-': ['...', '...', '...', '###', '...', '...', '...'],
+  '.': ['.', '.', '.', '.', '.', '.', '#'],
+  '/': ['..#', '..#', '.#.', '.#.', '.#.', '#..', '#..'],
+  G: ['.###.', '#...#', '#....', '#.###', '#...#', '#...#', '.###.'],
+  N: ['#...#', '##..#', '#.#.#', '#..##', '#...#', '#...#', '#...#'],
+  E: ['#####', '#....', '#....', '####.', '#....', '#....', '#####'],
+  V: ['#...#', '#...#', '#...#', '#...#', '.#.#.', '.#.#.', '..#..'],
+  S: ['.####', '#....', '#....', '.###.', '....#', '....#', '####.'],
+  C: ['.###.', '#...#', '#....', '#....', '#....', '#...#', '.###.'],
+};
+
+export const DF_ICON_W = 40;
+export const DF_ICON_H = 40;
+
+/** 40x40 RGBA: `label` (small, light grey) over `value` (twice as large, white). */
+export function drawValueIcon(label: string, value: string): Uint8Array {
+  const W = DF_ICON_W;
+  const H = DF_ICON_H;
+  const ink = new Uint8Array(W * H);
+  const draw = (text: string, scale: number, y0: number, colour: number): void => {
+    const glyphs = [...text].map((c) => {
+      const g = GLYPHS[c];
+      if (!g) throw new FirmwareError('internal', `no icon glyph for ${c}`);
+      return g;
+    });
+    // One pixel of space between glyphs (the large row's glyphs are two pixels per column).
+    const space = (k: number): number => (k < glyphs.length - 1 ? (scale === 1 ? 1 : 2 - Number(text[k] === '.' || text[k + 1] === '.')) : 0);
+    const width = glyphs.reduce((n, g, k) => n + g[0].length * scale + space(k), 0);
+    if (width > 32) throw new FirmwareError('internal', `icon text too wide: ${text}`);
+    let x = Math.floor((W - width) / 2);
+    glyphs.forEach((g, k) => {
+      for (let r = 0; r < 7; r++) {
+        for (let c = 0; c < g[r].length; c++) {
+          if (g[r][c] !== '#') continue;
+          for (let dy = 0; dy < scale; dy++) for (let dx = 0; dx < scale; dx++) ink[(y0 + r * scale + dy) * W + x + c * scale + dx] = colour;
+        }
+      }
+      x += g[0].length * scale + space(k);
+    });
+  };
+  draw(label, 1, 6, 1);
+  draw(value, 2, 18, 2);
+  const px = new Uint8Array(W * H * 4);
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const i = (y * W + x) * 4;
+      if (x < 1 || y < 1 || x > 38 || y > 38) px.set([255, 255, 255, 0], i);
+      else if (x === 1 || y === 1 || x === 38 || y === 38) px.set([128, 128, 128, 255], i);
+      else px.set(ink[y * W + x] === 2 ? [255, 255, 255, 255] : ink[y * W + x] === 1 ? [190, 190, 190, 255] : [53, 53, 54, 255], i);
+    }
+  }
+  return px;
+}
+
+// --------------------------------------------------------------------------------------------
+
+function fail(code: string, message: string): never {
+  throw new FirmwareError(code, message);
+}
+const lo = (v: number): number => v & 0xffff;
+const hi = (v: number): number => v >>> 16;
+
+/** Flash Mode's submenu (record 5) as the official firmware has it. */
+const FLASH_SUBMENU = 5;
+const FLASH_MODE_LINE_ID = 0x020000f3;
+const FLASH_OUTPUT_LINE_ID = 0x020000f6;
+const TEXT_FLASH_MODE = 127;
+const TEXT_FLASH_OUTPUT = 137;
+const VALUE_X = 540;
+
+/** ip = the list position of the stored field (or the fallback); r0, r2, r3 change. */
+function indexAsm(l: DfList, table: number): string {
+  return `movw r2, #${lo(l.byte)}; movt r2, #${hi(l.byte)}; ldrb r3, [r2]
+    ${l.shift ? `mov r3, r3, lsr #${l.shift}` : ''}
+    and r3, r3, #${l.mask}
+    movw r2, #${lo(table)}; movt r2, #${hi(table)}
+    mov ip, #0
+    idx_loop: ldrb r0, [r2, ip]; cmp r0, r3; beq idx_done
+    add ip, ip, #1; cmp ip, #${l.codes.length}; blo idx_loop
+    mov ip, #${l.fallback}
+    idx_done:`;
+}
+
+function installTexts(patch: Patch, entries: readonly { id: number; names: readonly string[] }[]): void {
+  const upper = Math.max(...entries.map((x) => x.id));
+  widenTextRows(patch, upper);
+  for (const { id, names } of entries) {
+    if (names.length !== LANGUAGES) fail('internal', 'a text needs all 21 languages');
+    const descriptors = names.map((text) => {
+      const encoded = utf16z(text);
+      const units = encoded.length / 2;
+      if (!(units > 1 && units < 256) || text.includes('\n')) fail('internal', 'bad menu text');
+      const address = patch.append(encoded, 4);
+      // {u8 units including the terminator, u8 lines = 1, u16 0, u32 text address}
+      return patch.append(concat([Uint8Array.from([units, 1, 0, 0]), u32le([address])]), 4);
+    });
+    for (let l = 0; l < LANGUAGES; l++) {
+      const row = patch.word(TEXT_CATALOG + l * 4);
+      if (patch.word(row + id * 4) !== 0) fail('unexpected-layout', 'text number already in use');
+      patch.write(row + id * 4, u32le([descriptors[langIndex(patch, l)]]));
+    }
+  }
+}
+
+/** The `LANGS` index of language row l (as the program indexes languages). */
+const FIRST_TABLE_RAM = 0x55000000 + (0x5437d7b0 - 0x5437b640);
+const TABLE_STRIDE = 0xd14;
+const NATIVE_TEXT_ROOTS = 0x55002118;
+function langIndex(patch: Patch, l: number): number {
+  const root = new DataView(patch.readMapped(NATIVE_TEXT_ROOTS + l * 4, 4).buffer).getUint32(0, true);
+  const k = (root + 4 - FIRST_TABLE_RAM) / TABLE_STRIDE;
+  if (!(Number.isInteger(k) && k >= 0 && k < LANGUAGES)) fail('unexpected-layout', 'language tables are not where they were expected');
+  return k;
+}
+
+function installIcons(patch: Patch, iconbin: Uint8Array, icons: readonly { id: number; px: Uint8Array }[]): Uint8Array {
+  const parts: Uint8Array[] = [iconbin];
+  let length = iconbin.length;
+  for (const { id, px } of icons) {
+    if (patch.word(ICON_CATALOG + id * 4) !== 0) fail('unexpected-layout', 'icon number already in use');
+    const pad = (4 - (length % 4)) % 4;
+    if (pad) {
+      parts.push(new Uint8Array(pad));
+      length += pad;
+    }
+    const offset = length;
+    parts.push(px);
+    length += px.length;
+    // {u16 kind = 1, u16 width, u16 height, u16 flags = 0, u32 offset in 4-byte units}
+    const descriptor = patch.append(concat([u16le([1, DF_ICON_W, DF_ICON_H, 0]), u32le([offset / 4])]), 16);
+    patch.write(ICON_CATALOG + id * 4, u32le([descriptor]));
+  }
+  const upper = Math.max(...icons.map((x) => x.id));
+  for (const [site, register] of LOOKUP_BOUNDS) {
+    if ((patch.word(site) & 0xfff0f000) >>> 0 !== (0xe3000000 | (register << 12)) >>> 0) fail('unexpected-layout', 'icon bound is not a MOVW');
+    patch.setWord(site, movWord(register, Math.max(upper, movImmediate(patch.word(site)))), 'icon upper bound');
+  }
+  return concat(parts);
+}
+
+/**
+ * Install the three lines. Runs after every other camera-menu addition that copies the submenu or
+ * list table (date imprint, power-off pictures). Returns the ICONBIN data with the icons appended.
+ */
+export function installDirectFlashMenu(patch: Patch, iconbin: Uint8Array): Uint8Array {
+  const lists = directFlashLists();
+  for (const l of lists) if (l.codes.length > 21 || l.fallback < 0) fail('internal', 'Direct Flash list');
+  expectWord(patch, SUB_SET_ICON, 0xe1a0c00d);
+  expectWord(patch, LIST_SET_ITEM, 0xe1a0c00d);
+
+  // --- Texts and icons.
+  installTexts(patch, [
+    { id: DF_TEXT_ID, names: DF_GN_NAMES },
+    { id: DF_TEXT_ID + 1, names: DF_BACKGROUND_NAMES },
+    { id: DF_TEXT_ID + 2, names: DF_SLOWEST_NAMES },
+    ...lists.flatMap((l) => l.names.map((name, i) => ({ id: l.firstText + i, names: Array(LANGUAGES).fill(name) as string[] }))),
+  ]);
+  const icons = installIcons(patch, iconbin, lists.flatMap((l) => l.icons.map((px, i) => ({ id: l.firstIcon + i, px }))));
+
+  // --- Lists (this = r0; draw: item = r1, value = r2; set / is current: value = r1) and the
+  // submenu lines' value icons (line = r1).
+  const template = listTemplate(patch);
+  const records: { id: number; record: Uint8Array }[] = [];
+  const lineDraws: number[] = [];
+  for (const l of lists) {
+    const n = l.codes.length;
+    const table = patch.append(Uint8Array.from(l.codes), 4);
+    const count = patch.append((at) => assembleWords(`mov r0, #${n}; bx lr`, at), 16);
+    const draw = patch.append((at) => assembleWords(
+      `cmp r2, #${n}; bxhs lr
+       mov r0, r1
+       movw r1, #${l.firstIcon}; add r1, r1, r2
+       movw r3, #${l.firstText}; add r2, r3, r2
+       b #${LIST_SET_ITEM}`, at), 16);
+    const set = patch.append((at) => assembleWords(
+      `cmp r1, #${n}; bxhs lr
+       movw r2, #${lo(table)}; movt r2, #${hi(table)}; ldrb r3, [r2, r1]
+       movw r2, #${lo(l.byte)}; movt r2, #${hi(l.byte)}; ldrb ip, [r2]
+       bic ip, ip, #${l.mask << l.shift}
+       orr ip, ip, r3, lsl #${l.shift}
+       strb ip, [r2]; bx lr`, at), 16);
+    const current = patch.append((at) => assembleWords(
+      `push {r4, lr}
+       mov r4, r1
+       ${indexAsm(l, table)}
+       cmp ip, r4; moveq r0, #1; movne r0, #0
+       pop {r4, pc}`, at), 16);
+    lineDraws.push(patch.append((at) => assembleWords(
+      `push {r4, lr}
+       mov r4, r1
+       ${indexAsm(l, table)}
+       mov r0, r4
+       movw r1, #${l.firstIcon}; add r1, r1, ip
+       pop {r4, lr}
+       b #${SUB_SET_ICON}`, at), 16));
+    const r = template.slice();
+    const v = new DataView(r.buffer);
+    v.setUint16(4, l.title, true);
+    v.setUint32(0x0c, count, true);
+    v.setUint32(0x14, draw, true);
+    v.setUint32(0x24, set, true);
+    v.setUint32(0x2c, current, true);
+    for (const off of [0x10, 0x18, 0x28, 0x30]) v.setUint32(off, 0, true);
+    records.push({ id: l.id, record: r });
+  }
+  addListRecords(patch, records, 'Direct Flash settings');
+  hookControllerFactory(patch, `movw ip, #${lo(DF_GN_ID)}; movt ip, #${hi(DF_GN_ID)}
+     sub ip, r1, ip; cmp ip, #${lists.length - 1}; bhi prior
+     movw r1, #${lo(LIST_CONTROLLER_ID)}; movt r1, #${hi(LIST_CONTROLLER_ID)}`, 'Direct Flash settings: list controller');
+
+  // --- Flash Mode's submenu: three more lines.
+  const rec = submenuTable(patch) + FLASH_SUBMENU * SUB_RECORD;
+  const old = patch.read(rec, SUB_RECORD);
+  const ov = new DataView(old.buffer);
+  if (ov.getUint16(2, true) !== TEXT_FLASH_MODE || old[6] !== 2 || ov.getUint16(8, true) !== TEXT_FLASH_MODE || ov.getUint16(10, true) !== TEXT_FLASH_OUTPUT
+    || ov.getUint16(12, true) !== 0 || ov.getUint32(0x14, true) !== FLASH_MODE_LINE_ID || ov.getUint32(0x18, true) !== FLASH_OUTPUT_LINE_ID
+    || ov.getUint32(0x1c, true) !== 0x10000000 || ov.getUint32(0x28, true) !== VALUE_X || ov.getUint32(0x2c, true) !== VALUE_X || ov.getUint32(0x30, true) !== 0
+    || ov.getUint32(0x4c, true) !== 0) {
+    fail('unexpected-layout', 'Flash Mode submenu record is not as expected');
+  }
+  const r = old.slice();
+  const v = new DataView(r.buffer);
+  r[6] = 5;
+  lists.forEach((l, k) => {
+    v.setUint16(12 + 2 * k, l.title, true);
+    v.setUint32(0x1c + 4 * k, l.id, true);
+    v.setUint32(0x30 + 4 * k, VALUE_X, true);
+    v.setUint32(0x4c + 8 * k, lineDraws[k], true);
+    v.setUint32(0x50 + 8 * k, 0, true);
+  });
+  v.setUint16(18, 0, true);
+  // Word by word: the record may be the official one (no other addition copied the table).
+  for (let o = 0; o < SUB_RECORD; o += 4) {
+    const w = v.getUint32(o, true);
+    if (w !== ov.getUint32(o, true)) patch.setWord(rec + o, w, 'Direct Flash settings: Flash Mode submenu lines');
+  }
+  return icons;
+}

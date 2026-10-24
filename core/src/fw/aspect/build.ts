@@ -29,6 +29,7 @@ import { RATIO_ICON_BYTES, RATIO_ICON_H, RATIO_ICON_W, drawRatioIcon } from './i
 import { linkNative } from './native-link';
 import { installAdjSoftFocus } from './softfocus';
 import { installDirectFlash } from './directflash';
+import { installDirectFlashMenu } from './directflash-menu';
 import { DATESTAMP_BYTE, installDateStamp, lookNames } from './datestamp';
 import { installDateStampMenu } from './datestamp-menu';
 import { installMonoUnlock } from './monounlock';
@@ -173,6 +174,8 @@ export class Patch {
   textBoundSites: number[] = [];
   /** Records of the relocated submenu table (0 while it is the official one; see `datestamp-menu.ts`). */
   submenuRecords = 0;
+  /** List records (SelectMenuController) in the list table so far, once it is copied (see `datestamp-menu.ts`); 0 = the official table. */
+  listRecords = 0;
 
   constructor(official: Uint8Array) {
     this.buf = new Uint8Array(official.length + 0x80000);
@@ -386,6 +389,23 @@ function installIcons(patch: Patch, iconbin: Uint8Array, ratios: readonly RatioE
 
 // --------------------------------------------------------------------------------------------
 // crop_registry.py install_menu
+
+/**
+ * Make every language row of the relocated text catalog hold text numbers up to `upper` (copies
+ * the rows, every entry kept, when they are narrower) and raise the text lookup bound to it.
+ */
+export function widenTextRows(patch: Patch, upper: number): void {
+  let prior = TEXT_CAPACITY;
+  for (const site of patch.textBoundSites) prior = Math.max(prior, movImmediate(patch.word(site)) + 1);
+  if (upper + 1 > prior) {
+    for (let l = 0; l < LANGUAGES; l++) {
+      const row = new Uint8Array((upper + 1) * 4);
+      row.set(patch.read(patch.word(TEXT_CATALOG + l * 4), prior * 4));
+      patch.setWord(TEXT_CATALOG + l * 4, patch.append(row, 16), 'language row, wider');
+    }
+  }
+  for (const site of patch.textBoundSites) patch.setWord(site, movWord(3, Math.max(upper, movImmediate(patch.word(site)))), 'text upper bound');
+}
 
 export function utf16z(text: string): Uint8Array {
   const out = new Uint8Array((text.length + 1) * 2);
@@ -1061,6 +1081,8 @@ export function installExtensions(rtos: Uint8Array, iconbin: Uint8Array, ratios:
   }
   if (halation.length > 0) icons = installHalation(patch, icons, halation);
   if (shutdown) icons = installShutdownMenu(patch, icons, shutdown.pictures, shutdown.factory);
+  // After every other addition that copies the submenu or list table.
+  if (features.directFlash) icons = installDirectFlashMenu(patch, icons);
   // Last: wraps every other settings save/load and user-mode recall hook.
   if (features.guard) installSettingsGuard(patch, { slots: slots.length, ratios: ratios.length > 0, adjSoftFocus: !!features.adjSoftFocus, ...(features.lookLayout ? { hiddenLooks: features.lookLayout.hidden } : {}) });
   if (patch.length % 4 !== 0) fail('internal', 'image length is not a multiple of 4');

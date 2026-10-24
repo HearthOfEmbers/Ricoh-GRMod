@@ -30,17 +30,15 @@ typedef unsigned int u32;
 typedef int s32;
 
 struct ctx {
-  const volatile u8 *direct;        /* setting byte: 1 = Direct Flash chosen (with Flash On) */
+  const volatile u8 *direct;        /* setting byte (0x99B), 0 on every camera: bit 0 Direct Flash
+                                     * chosen (with Flash On); bits 1..4 the background, bits 5..7
+                                     * the slowest shutter speed (camera-menu choices, see below) */
   const volatile u8 *flash_mode;    /* live Flash Mode: 0 Flash On */
   const volatile u8 *flash_output;  /* Flash Output setting: 0 Auto, 1 1/1, 2 1/4 */
   float (*sync_tv)(void *apex, u32 flag, float av); /* 0x536792E0: fastest Tv the flash syncs with */
-  const volatile u8 *choice;        /* setting byte, for camera-menu choices (0 on every camera):
-                                     * bits 0..3 the guide number, bits 4..7 the background balance */
-  const float *gn_table;            /* per choice: 2 log2(GN), GN at ISO 100 in metres, full power */
-  u32 gn_count;                     /* entries in gn_table (at least 1); a choice beyond is 0 */
-  const float *bal_table;           /* per choice: the shutter offset c of a background balance (see
-                                     * `solve`): b + log2(1 - 2^-b) for a background b EV darker */
-  u32 bal_count;                    /* entries in bal_table (at least 1); a choice beyond is 0 */
+  const volatile u8 *gn;            /* setting byte (0x99A): the guide number (ISO 100, metres, full
+                                     * power), 0 = the default below */
+  float gn_default;                 /* 2 log2(GN) of the default guide number */
 #ifdef DIAG
   /* Test builds only: a RAM word (zero at start) that holds a buffer, allocated with `alloc` on the
    * first call, where every call leaves what it saw and decided (see `diag_record`); the date
@@ -57,7 +55,13 @@ struct ctx {
 
 #define AV_F28 2.9708536f   /* f/2.8 */
 #define AV_F16 8.0f         /* f/16 */
-#define TV_SLOWEST 5.0f     /* 1/32 s: no slower than this for a flash picture */
+/*
+ * Camera-menu choices in the setting byte `direct` (0: the default):
+ *  background, bits 1..4: k, the background k/3 EV darker than a correct exposure; 1..9 (-0.3 ..
+ *    -3.0 EV); 0 or any other value: 3 (-1.0 EV);
+ *  slowest shutter speed, bits 5..7: 0 1/30 s (Tv 5), 1..5 1/15 .. 1 s (Tv 4 .. 0), 6 1/60 s, 7 1/125 s.
+ */
+#define BG_DEFAULT 3u
 
 /* log2(x) for x > 0, to well within 1/100 EV. */
 static float log2_(float x)
@@ -121,9 +125,9 @@ struct limits {
  * background, lit by the ambient light only, is exposed at A. A background b EV darker than a
  * correct exposure (A = 2^-b, F = 1 - 2^-b) is Tv = Ev - f0 + c, c = b + log2(1 - 2^-b): c = 0 for
  * b = 1, the flash and the ambient light half each.
- * Then Tv within its limits: in a dim place no slower than 1/32 s, the flash giving what the ambient
- * light does not (all of it in the dark); in a bright one no faster than the flash syncs with, the
- * ambient light giving more and the flash filling in. Av - Sv as above, with the lowest ISO that
+ * Then Tv within its limits: in a dim place no slower than the slowest speed chosen (1/30 s by
+ * default), the flash giving what the ambient light does not (all of it in the dark); in a bright
+ * one no faster than the flash syncs with, the ambient light giving more and the flash filling in. Av - Sv as above, with the lowest ISO that
  * gets an aperture of f/2.8 or smaller, within the limits.
  */
 static void solve(const struct limits *l, float f0, int nd, struct plan *p)
@@ -199,7 +203,7 @@ void df_plan(u8 *ae, const struct ctx *k)
   void *apex;
   struct limits l;
   struct plan p, q;
-  u32 mm, kind, nd_mode, i;
+  u32 mm, kind, nd_mode, i, setting;
   float f0, a, b;
   int nd;
 #ifdef DIAG
@@ -207,7 +211,8 @@ void df_plan(u8 *ae, const struct ctx *k)
 #endif
 
   REC(D_REASON, 1);
-  if (*k->direct != 1 || *k->flash_mode != 0) return;
+  setting = *k->direct;
+  if (!(setting & 1u) || *k->flash_mode != 0) return;
   REC(D_REASON, 2);
   info = *(u8 **)(ae + 0x28);
   if (!info || !*(u8 **)(ae + 4)) return;
@@ -243,16 +248,16 @@ void df_plan(u8 *ae, const struct ctx *k)
   if (mm < 100) mm = 100;
   if (mm > 8000) mm = 8000;          /* as the camera's own use of it */
 
-  i = *k->choice & 15u;
-  if (i >= k->gn_count) i = 0;
-  f0 = k->gn_table[i] - 2.0f * (log2_((float)mm) - 9.965784284662087f); /* - 2 log2(mm / 1000) */
+  i = *k->gn;
+  f0 = (i ? 2.0f * log2_((float)i) : k->gn_default) - 2.0f * (log2_((float)mm) - 9.965784284662087f); /* - 2 log2(mm / 1000) */
   if (*k->flash_output == 2) f0 -= 2.0f; /* 1/4 power */
 
   l.k = k;
   l.apex = apex;
-  i = *k->choice >> 4;
-  if (i >= k->bal_count) i = 0;
-  l.c = k->bal_table[i];
+  i = (setting >> 1) & 15u;
+  if (i == 0 || i > 9) i = BG_DEFAULT;
+  a = (float)i * (1.0f / 3.0f);          /* the background a EV darker */
+  l.c = a + log2_(1.0f - exp2_(-a));
   l.ev = F(0x64);
   l.sv_lo = F(0x14);
   l.sv_hi = F(0x10);
@@ -271,9 +276,10 @@ void df_plan(u8 *ae, const struct ctx *k)
   if (l.av_lo < AV_F28) l.av_lo = AV_F28;
   if (l.av_hi > AV_F16) l.av_hi = AV_F16;
   if (l.av_lo > l.av_hi) l.av_lo = l.av_hi;
-  l.tv_lo = F(0x74);
   l.tv_hi = F(0x70);
-  if (l.tv_lo < TV_SLOWEST) l.tv_lo = TV_SLOWEST;
+  i = setting >> 5;                      /* the slowest shutter speed chosen (the camera's own setting of
+                                          * a minimum shutter speed is not for Direct Flash) */
+  l.tv_lo = i == 0 ? 5.0f : i <= 5 ? (float)(5 - (int)i) : (float)i;
   if (l.tv_lo > l.tv_hi) l.tv_lo = l.tv_hi;
 
   nd_mode = B(0x55d);

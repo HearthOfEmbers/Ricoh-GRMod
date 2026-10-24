@@ -8,21 +8,19 @@
  * (what was dialled in for Tv, Av and M is overridden). Not in bulb / time, not in Snap Distance
  * Priority, not for movies; a flash that communicates with the camera (P-TTL) works as Flash On.
  * Limits: f/2.8..f/16 (and the camera's own), the ISO range the user set (ISO Auto) or the ISO set,
- * shutter speeds the flash syncs with (the camera's own rule, 0x536792E0) and not slower than 1/32 s.
+ * shutter speeds the flash syncs with (the camera's own rule, 0x536792E0) and not slower than the
+ * slowest shutter speed chosen (1/30 s by default).
  * Flash Output 1/4 (the GF-2's quarter power, which the camera sets itself) is planned two stops
  * lower; an ND filter in front of the lens takes two stops of the flash as well.
  *
- * Guide number: chosen in the camera, not in GR Mod. Byte 0x99A of the live user settings (padding
- * next to the Direct Flash byte, see below) holds the choice, an index into a table of guide numbers
- * in the firmware; 0, what the byte is on every camera, is the GF-2's (3: 9.8 ft / 3 m at ISO 100).
- * This build's table has that one entry; a camera-menu list of guide numbers (to come) only needs to
- * add entries and the list, the exposure module reads whatever the table holds.
- *
  * Flash and ambient light add up on the subject, so the exposure is planned for the two together:
  * the shutter speed sets how they share it (the background, lit by the ambient light only, gets the
- * ambient share), aperture and ISO make the sum right. The share is a background balance, 1 EV
- * darker than a correct exposure by default (half each); a camera-menu choice of it (to come) is
- * bits 4..7 of the same byte 0x99A and a second table, like the guide number's.
+ * ambient share), aperture and ISO make the sum right.
+ *
+ * Chosen in the camera, not in GR Mod (three lines of the Flash submenu, `directflash-menu.ts`):
+ * the flash's guide number (byte 0x99A; 0, what it is on every camera, is the GF-2's, 3), the
+ * background (how much darker than a correct exposure; -1.0 EV, half each, by default) and the
+ * slowest shutter speed (1/30 s by default), bits of byte 0x99B.
  *
  * Independent work: everything below was found in the official 1.11 firmware, starting from its
  * texts ("Flash On", "Flash Mode"), its menu record tables and the class names of its exposure code
@@ -32,13 +30,13 @@
  *  - Where the choice is kept. Not as a new Flash Mode value: the camera stores Flash Mode at byte
  *    0x10C of the user settings (CURRENT() = 0x55084DD8; the live value at +0xBF8) and many places
  *    look it up (menus, ADJ, Fn, flash control, exposure). Direct Flash is Flash Mode 0 (Flash On)
- *    plus byte 0x99B of the live user settings structure (CURRENT() + 4) set to 1: alignment padding
+ *    plus bit 0 of byte 0x99B of the live user settings structure (CURRENT() + 4): alignment padding
  *    (bytes 0x997..0x999, then a word at 0x99C) that the factory-defaults initialiser
  *    (UserDataInitValue, 0x535278D8, run in an emulator on all 30 default records) never writes,
  *    like 0x90F (soft focus) and 0x94B (date imprint). It is saved, loaded and copied to U1..U3 with
  *    the structure, and a settings reset makes it 0. The firmware itself only ever sees Flash Mode
- *    0..3; written back to the official firmware the camera simply has Flash On. Any value but 1
- *    is "off".
+ *    0..3; written back to the official firmware the camera simply has Flash On. (Up to test 055
+ *    the byte was 1 for on and anything else off; 1 is still on.)
  *  - Menus. Flash Mode has 4 values with slow sync, else 2; Direct Flash is one more, last:
  *     * the menu lists (SelectMenuController records 11 and 12 of the table at 0x53DA2D20: count,
  *       draw value i, set value i, is value i current), patched in place (before `datestamp-menu.ts`
@@ -48,10 +46,11 @@
  *     * the Fn list (record id 0x16 at 0x53DA09B4 of the table at 0x53DA072C: text, icon, is
  *       current, set, count; slow sync when byte +0x197 is set).
  *    The other values go to the camera's own handlers. Picking Direct Flash sets Flash Mode 0
- *    (SetFlashMode, 0x532B1FDC) and the byte; picking any other value clears the byte.
+ *    (SetFlashMode, 0x532B1FDC) and bit 0; picking any other value clears bit 0 (the other bits
+ *    are the camera-menu choices and stay).
  *  - The current value's icon: three places draw the icon of the current Flash Mode
  *    (0x53380CFC(resources, value, variant)): the still menu's Flash Mode line (0x531B0800), the
- *    submenu line (0x531E0D6C) and the shooting screen (0x5339787C). For value 0 with the byte set
+ *    submenu line (0x531E0D6C) and the shooting screen (0x5339787C). For value 0 with bit 0 set
  *    they show the Direct Flash icon.
  *  - Exposure. The still exposure (0x5367AC5C -> 0x5367A9E8) runs the flash program (0x5367A7B4,
  *    called once, at 0x5367AAA8), which leaves Tv, Av and Sv for the picture at +0xD0, +0xD4, +0xD8
@@ -59,8 +58,8 @@
  *    picture is prepared from those (0x53680D28). The call at 0x5367AAA8 goes through a wrapper
  *    that runs the flash program and then the module `tools/directflash/directflash.c`, which
  *    replaces the result when Direct Flash applies (see the module for the fields it reads).
- *  - Guide number and background balance: byte 0x99A (CURRENT() + 4), the same kind of padding as
- *    0x99B (UserDataInitValue never writes it): bits 0..3 and 4..7. Not changed by this build.
+ *  - Guide number: byte 0x99A (CURRENT() + 4), the same kind of padding as 0x99B
+ *    (UserDataInitValue never writes it).
  *  - Name: text 882, "Direct Flash" in the 21 languages; icon 733 (the ratio icon number of
  *    identity 17, never given out: added ratios use 7..14, the date imprint 5, 6, 15, 16).
  *
@@ -73,12 +72,12 @@ import { DIRECTFLASH_CODE, DIRECTFLASH_DIAG_CODE, DIRECTFLASH_DIAG_ENTRY, DIRECT
 
 export const DIRECT_FLASH_TEXT_ID = 882;
 export const DIRECT_FLASH_ICON_ID = 733;
-/** The setting byte: 1 = Direct Flash (with Flash Mode 0). */
-export const DIRECT_FLASH_BYTE = 0x55084dd8 + 4 + 0x99b;
 /**
- * The camera-menu choices, 0 on every camera: bits 0..3 index DIRECT_FLASH_GUIDE_NUMBERS, bits 4..7
- * DIRECT_FLASH_BACKGROUNDS (a choice beyond a table is its entry 0).
+ * The setting byte (0 on every camera): bit 0 Direct Flash (with Flash Mode 0); bits 1..4 and 5..7
+ * the background and the slowest shutter speed chosen in the camera menu (`directflash-menu.ts`).
  */
+export const DIRECT_FLASH_BYTE = 0x55084dd8 + 4 + 0x99b;
+/** The guide number chosen in the camera menu (`directflash-menu.ts`); 0 on every camera: DIRECT_FLASH_GN_DEFAULT. */
 export const DIRECT_FLASH_GN_BYTE = 0x55084dd8 + 4 + 0x99a;
 /**
  * Test builds only: the RAM word that holds the planner's diagnostic buffer (allocated by the module
@@ -88,14 +87,8 @@ export const DIRECT_FLASH_GN_BYTE = 0x55084dd8 + 4 + 0x99a;
 export const DIRECT_FLASH_DIAG_SLOT = 0x558372fc;
 const HEAP_ALLOC = 0x538e09b0;
 const ZERO_FILL_END = 0x53000460;
-/** Guide numbers (ISO 100, metres) by choice; entry 0 is the GF-2's (9.8 ft / 3 m). */
-export const DIRECT_FLASH_GUIDE_NUMBERS: readonly number[] = [3];
-/**
- * Background balances by choice: how many EV the background (lit by the ambient light only) is
- * darker than a correct exposure, the flash giving the rest of the subject's light. Entry 0: 1 EV,
- * the flash and the ambient light half each.
- */
-export const DIRECT_FLASH_BACKGROUNDS: readonly number[] = [1];
+/** The guide number (ISO 100, metres) while none is chosen: the GF-2's (9.8 ft / 3 m). */
+export const DIRECT_FLASH_GN_DEFAULT = 3;
 
 /** In `LANGS` order (cs da en fi fr de el hu it ja ko nl pl pt ru zh-CN es sv th zh-TW tr). */
 export const DIRECT_FLASH_NAMES: readonly string[] = [
@@ -239,13 +232,6 @@ export function guideNumberWord(gn: number): number {
   return new Uint32Array(f.buffer)[0];
 }
 
-/** The shutter offset of a background b EV darker, b + log2(1 - 2^-b), as a float32 bit pattern. */
-export function backgroundWord(b: number): number {
-  if (!(b > 0)) throw new RangeError('background balance must be above 0 EV');
-  const f = new Float32Array([b + Math.log2(1 - 2 ** -b)]);
-  return new Uint32Array(f.buffer)[0];
-}
-
 function decodeBase64(text: string): Uint8Array {
   const table = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
   const clean = text.replace(/=+$/, '');
@@ -272,11 +258,11 @@ function countAsm(h: Handlers, reg = 'r3'): string {
   return `ldrb ${reg}, [r0, #${h.values.flag}]; cmp ${reg}, #0; movne ${reg}, #4; moveq ${reg}, #2`;
 }
 
-/** r0 = 1 when Direct Flash is the current choice (byte 1, Flash Mode 0); keeps r4..r11. */
+/** r0 = 1 when Direct Flash is the current choice (bit 0 of the byte, Flash Mode 0); keeps r4..r11. */
 function activeAsm(): string {
   return `bl #${APP}; bl #${SETTINGS}; bl #${GET_FLASH_MODE}
     movw ip, #${lo(DIRECT_FLASH_BYTE)}; movt ip, #${hi(DIRECT_FLASH_BYTE)}; ldrb ip, [ip]
-    cmp ip, #1; movne r0, #0; bne active_done
+    tst ip, #1; moveq r0, #0; beq active_done
     cmp r0, #0; moveq r0, #1; movne r0, #0
     active_done:`;
 }
@@ -286,9 +272,9 @@ function setAsm(h: Handlers, official: number): string {
     ${countAsm(h)}
     movw r2, #${lo(DIRECT_FLASH_BYTE)}; movt r2, #${hi(DIRECT_FLASH_BYTE)}
     cmp r1, r3; beq set_direct
-    mov r3, #0; strb r3, [r2]
+    ldrb r3, [r2]; bic r3, r3, #1; strb r3, [r2]
     pop {r4, lr}; b #${official}
-    set_direct: mov r3, #1; strb r3, [r2]
+    set_direct: ldrb r3, [r2]; orr r3, r3, #1; strb r3, [r2]
     bl #${APP}; bl #${SETTINGS}; mov r1, #0
     pop {r4, lr}; b #${SET_FLASH_MODE}`;
 }
@@ -382,11 +368,9 @@ export function installDirectFlash(patch: Patch, iconbin: Uint8Array, diag = fal
   const code = decodeBase64(diag ? DIRECTFLASH_DIAG_CODE : DIRECTFLASH_CODE);
   const entry = diag ? DIRECTFLASH_DIAG_ENTRY : DIRECTFLASH_ENTRY;
   const module = patch.append(code, 16);
-  const table = patch.append(u32le(DIRECT_FLASH_GUIDE_NUMBERS.map(guideNumberWord)), 16);
-  const backgrounds = patch.append(u32le(DIRECT_FLASH_BACKGROUNDS.map(backgroundWord)), 16);
   const ctx = patch.append(u32le([
-    DIRECT_FLASH_BYTE, LIVE_FLASH_MODE, FLASH_OUTPUT, SYNC_TV, DIRECT_FLASH_GN_BYTE, table, DIRECT_FLASH_GUIDE_NUMBERS.length,
-    backgrounds, DIRECT_FLASH_BACKGROUNDS.length, ...(diag ? [DIRECT_FLASH_DIAG_SLOT, HEAP_ALLOC] : []),
+    DIRECT_FLASH_BYTE, LIVE_FLASH_MODE, FLASH_OUTPUT, SYNC_TV, DIRECT_FLASH_GN_BYTE, guideNumberWord(DIRECT_FLASH_GN_DEFAULT),
+    ...(diag ? [DIRECT_FLASH_DIAG_SLOT, HEAP_ALLOC] : []),
   ]), 16);
   const wrapper = patch.append((at) => assembleWords(
     `push {r4, lr}
@@ -427,7 +411,7 @@ export function installDirectFlash(patch: Patch, iconbin: Uint8Array, diag = fal
     `cmp r1, #0; bne #${FLASH_ICON}
      cmp r2, #0; bne #${FLASH_ICON}
      movw ip, #${lo(DIRECT_FLASH_BYTE)}; movt ip, #${hi(DIRECT_FLASH_BYTE)}; ldrb ip, [ip]
-     cmp ip, #1; bne #${FLASH_ICON}
+     tst ip, #1; beq #${FLASH_ICON}
      movw r0, #${DIRECT_FLASH_ICON_ID}; bx lr`, at), 16);
   for (const [site, link] of CURRENT_ICON_SITES) patch.setWord(site, branchTo(site, currentIcon, link), 'Direct Flash: icon of the current Flash Mode');
 

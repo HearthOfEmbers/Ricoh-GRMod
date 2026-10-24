@@ -9,6 +9,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { Engine, fw } from '../src';
 import { DIRECTFLASH_SOURCE_SHA256 } from '../src/fw/aspect/directflash-code';
 import { createHash } from 'node:crypto';
+import { LANGS, allowedChars, readName } from '../src/fw/names';
 
 const P = new URL('../testdata/private/', import.meta.url).pathname;
 const have = existsSync(P + 'official.bin');
@@ -30,17 +31,57 @@ describe('Direct Flash: data', () => {
     expect(aspect.DIRECT_FLASH_BYTE).toBe(0x55084dd8 + 4 + 0x99b);
     expect(aspect.DIRECT_FLASH_GN_BYTE).toBe(0x55084dd8 + 4 + 0x99a);
     expect([aspect.SOFT_FOCUS_BYTE, aspect.DATESTAMP_BYTE]).not.toContain(aspect.DIRECT_FLASH_BYTE);
-    expect(aspect.DIRECT_FLASH_GUIDE_NUMBERS[0]).toBe(3);
+    expect(aspect.DIRECT_FLASH_GN_DEFAULT).toBe(3);
     expect(new Float32Array(new Uint32Array([aspect.guideNumberWord(3)]).buffer)[0]).toBeCloseTo(2 * Math.log2(3), 6);
-    // Background balance: entry 0 is 1 EV darker (flash and ambient light half each), offset 0.
-    expect(aspect.DIRECT_FLASH_BACKGROUNDS[0]).toBe(1);
-    expect(aspect.backgroundWord(1)).toBe(0);
-    expect(new Float32Array(new Uint32Array([aspect.backgroundWord(2)]).buffer)[0]).toBeCloseTo(2 + Math.log2(0.75), 6);
-    expect(() => aspect.backgroundWord(0)).toThrow();
+
   });
   it('the compiled module is the one of the committed source', () => {
     const src = readFileSync(new URL('../../tools/directflash/directflash.c', import.meta.url));
     expect(createHash('sha256').update(src).digest('hex')).toBe(DIRECTFLASH_SOURCE_SHA256);
+  });
+});
+
+describe('Direct Flash: camera-menu settings', () => {
+  it('lists at most 21 values (the list controller makes rows for the camera\'s longest list), defaults stored as 0', () => {
+    const lists = aspect.directFlashLists();
+    expect(lists.map((l) => l.codes.length)).toEqual([21, 9, 8]);
+    for (const l of lists) {
+      expect(l.codes.length).toBeLessThanOrEqual(21);
+      expect(new Set(l.codes).size).toBe(l.codes.length);
+      expect(l.codes.filter((c) => c === 0).length).toBe(1);
+      expect(l.codes.every((c) => c <= l.mask)).toBe(true);
+      expect(l.icons.every((i) => i.length === 40 * 40 * 4)).toBe(true);
+    }
+    expect(lists[0].names[lists[0].fallback]).toBe('GN 3');
+    expect(lists[1].names[lists[1].fallback]).toBe('-1.0 EV');
+    expect(lists[2].names[lists[2].fallback]).toBe('1/30');
+    // Bits of byte 0x99B: 0 Direct Flash, 1..4 background, 5..7 slowest shutter speed.
+    expect([lists[1].shift, lists[1].mask, lists[2].shift, lists[2].mask]).toEqual([1, 15, 5, 7]);
+    expect(aspect.DF_SLOWEST.map((x) => x.tv)).toEqual([7, 6, 5, 4, 3, 2, 1, 0]);
+    // Texts after the ratio names (901..908), icons below the ratio icons (720..).
+    expect(lists[2].firstText + lists[2].codes.length - 1).toBe(950);
+    expect(lists[2].firstIcon + lists[2].codes.length - 1).toBeLessThan(720);
+  });
+  it.skipIf(!have)('line names fit beside the camera\'s own submenu lines, with glyphs of its own texts', () => {
+    const d = new fw.Firmware(new Uint8Array(readFileSync(P + 'official.bin'))).decoded;
+    const lines = [121, 123, 125, 226, 220, 191, 210, 196, 199, 205, 208, 201, 137, 365, 367, 371, 373, 376, 238, 242, 462, 463, 464, 465, 466, 518, 520, 392, 657, 661, 649, 655, 663, 669, 672, 675, 678, 262, 29, 30, 705, 707];
+    LANGS.forEach((lang, k) => {
+      const longest = Math.max(...lines.map((id) => readName(d, lang, id).text.length));
+      const allowed = allowedChars(d, lang);
+      for (const names of [aspect.DF_GN_NAMES, aspect.DF_BACKGROUND_NAMES, aspect.DF_SLOWEST_NAMES]) {
+        expect(names.length).toBe(21);
+        expect(names[k].length, `${lang} ${names[k]}`).toBeLessThanOrEqual(longest);
+        // 背 / 景 are not among the camera's own Chinese / Japanese texts, but in its fonts (RT_CN_S,
+        // RT_CN_T, RT_JP: full character sets, as for the date imprint's 戳, 样 and 向).
+        const cjk = lang === 'ja' || lang === 'zh-CN' || lang === 'zh-TW';
+        const missing = [...names[k]].filter((c) => !allowed.has(c.charCodeAt(0)) && !(cjk && '背景'.includes(c))).join('');
+        expect(missing, `${lang} ${names[k]}`).toBe('');
+      }
+      for (const l of aspect.directFlashLists()) {
+        const missing = [...l.names.join('')].filter((c) => !allowed.has(c.charCodeAt(0))).join('');
+        expect(missing, `${lang} values`).toBe('');
+      }
+    });
   });
 });
 
