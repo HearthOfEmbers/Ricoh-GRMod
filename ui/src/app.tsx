@@ -125,13 +125,6 @@ function HelpMenu() {
   );
 }
 
-/** Shown while an experimental camera (GR III 2.10) is open: not tested on that camera yet. */
-function ExperimentalBanner() {
-  const on = useStore((s) => !!s.info?.experimental);
-  if (!on) return null;
-  return <div className="gr3x-notice experimental" role="status"><b>{t('gr3Experimental')}</b><p>{t('gr3ExperimentalBody')}</p></div>;
-}
-
 export function App() {
   const page = useStore((s) => s.page);
   const gr3 = useStore((s) => isGr3(s.model));
@@ -143,7 +136,6 @@ export function App() {
       <Sidebar />
       <main className="main">
         <BridgeBanner />
-        <ExperimentalBanner />
         <div className="stage">{ready ? (page === 'ratio' ? <RatioPage /> : page === 'wall' && (!gr3 || menuPicsReady) ? <WallpaperPage /> : page === 'copies' ? <CopiesPage /> : <ImageControlPage />) : <div className="page"><span className="spinner" /></div>}</div>
         <OutputBar />
       </main>

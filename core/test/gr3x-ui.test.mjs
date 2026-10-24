@@ -124,15 +124,69 @@ describe('GR IIIx UI family isolation', () => {
     expect(store.getState().activeSlot).toBe('CY');
     expect(store.getState().slots.F9.preset).toBeUndefined();
   });
-  it('discards another camera family’s fitted preset and names when switching or opening a different model', async () => {
+  it('keeps each camera family’s own work apart when switching or opening a different model', async () => {
     store.getState().slots.CY = { ...store.getState().slots.CY, names: { en: 'GR IV film' }, preset: { result: {} } };
     store.setModel('GR3X_HDF');
     expect(store.getState().slots.CY.preset).toBeUndefined();
     expect(store.getState().slots.CY.names).toEqual({});
+    store.getState().slots.CY = { ...store.getState().slots.CY, names: { en: 'GR III film' } };
     store.setModel('HDF');
+    expect(store.getState().slots.CY.names).toEqual({ en: 'GR IV film' });
     store.getState().slots.CY.preset = { result: {} };
     await store.adoptFirmware('fwdc243b.bin', '1.60', new Uint8Array([1]));
     expect(store.getState().slots.CY.preset).toBeUndefined();
+    expect(store.getState().slots.CY.names).toEqual({ en: 'GR III film' });
+  });
+  it('saves GR IV and GR III work in their own files and brings both back after a restart', async () => {
+    await store.init();
+    mocks.host.available = true;
+    const files = new Map();
+    mocks.host.storeSet.mockImplementation(async (key, value) => { files.set(key, typeof value === 'string' ? new TextEncoder().encode(value) : value); });
+    mocks.host.storeDel = vi.fn(async key => { files.delete(key); });
+    mocks.host.storeGet.mockImplementation(async key => files.get(key) ?? null);
+    const presets = { capabilities: { ...info().capabilities, presets: true } };
+    mocks.engine.convert = vi.fn(async () => ({ matrixQ13: [] }));
+    const gr4 = { ...info(), ...presets, family: 'gr4', models: ['HDF'], filename: 'fwdc248b.bin', slots: [{ id: 'CY' }, { id: 'CG' }] };
+    mocks.engine.open.mockResolvedValueOnce(gr4);
+    await store.adoptFirmware('fwdc248b.bin', '1.11', new Uint8Array([1]));
+    store.setName('CY', 'en', 'Warm IV');
+    await store.loadPresetFile('CY', { name: 'iv.cube', size: 10, arrayBuffer: async () => new TextEncoder().encode('LUT_3D_SIZE 2 four').buffer });
+    store.setModel('GR3_HDF');
+    store.setName('CY', 'en', 'Film III');
+    await store.loadPresetFile('CY', { name: 'iii.cube', size: 10, arrayBuffer: async () => new TextEncoder().encode('LUT_3D_SIZE 2 three').buffer });
+    await vi.advanceTimersByTimeAsync(401);
+    expect(new TextDecoder().decode(files.get('preset-cy'))).toBe('LUT_3D_SIZE 2 four');
+    expect(new TextDecoder().decode(files.get('gr3-preset-cy'))).toBe('LUT_3D_SIZE 2 three');
+    const p4 = JSON.parse(new TextDecoder().decode(files.get('project.json')));
+    const p3 = JSON.parse(new TextDecoder().decode(files.get('project-gr3.json')));
+    expect(p4).toMatchObject({ model: 'GR3_HDF', slots: { CY: { names: { en: 'Warm IV' }, preset: { fileName: 'iv.cube' } } } });
+    expect(p3).toMatchObject({ slots: { CY: { names: { en: 'Film III' }, preset: { fileName: 'iii.cube' } } } });
+    // Restart on GR III, then switch to GR IV: each gets its own back.
+    vi.resetModules();
+    const restarted = await import('../../ui/src/store');
+    await restarted.init();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(restarted.getState()).toMatchObject({ model: 'GR3_HDF' });
+    expect(restarted.getState().slots.CY).toMatchObject({ names: { en: 'Film III' }, preset: { fileName: 'iii.cube', text: 'LUT_3D_SIZE 2 three' } });
+    restarted.setModel('HDF');
+    await vi.advanceTimersByTimeAsync(1);
+    expect(restarted.getState().slots.CY).toMatchObject({ names: { en: 'Warm IV' }, preset: { fileName: 'iv.cube', text: 'LUT_3D_SIZE 2 four' } });
+  });
+  it('takes over a GR III project of the test builds kept in project.json, presets included', async () => {
+    mocks.host.available = true;
+    const files = new Map([
+      ['project.json', new TextEncoder().encode(JSON.stringify({ v: 1, model: 'GR3_HDF', slots: { CY: { names: { en: 'Old III' }, preset: { fileName: 'old.cube', kind: 'cube' } } }, filmCount: 20 }))],
+      ['preset-cy', new TextEncoder().encode('LUT_3D_SIZE 2 old')],
+    ]);
+    mocks.host.storeSet.mockImplementation(async (key, value) => { files.set(key, typeof value === 'string' ? new TextEncoder().encode(value) : value); });
+    mocks.host.storeGet.mockImplementation(async key => files.get(key) ?? null);
+    await store.init();
+    await vi.advanceTimersByTimeAsync(401);
+    expect(store.getState()).toMatchObject({ model: 'GR3_HDF', filmCount: 20, slots: { CY: { names: { en: 'Old III' }, preset: { fileName: 'old.cube' } } } });
+    expect(new TextDecoder().decode(files.get('gr3-preset-cy'))).toBe('LUT_3D_SIZE 2 old');
+    expect(JSON.parse(new TextDecoder().decode(files.get('project-gr3.json')))).toMatchObject({ filmCount: 20, slots: { CY: { names: { en: 'Old III' } } } });
+    // GR IV's part of project.json is now empty (it was GR III's).
+    expect(JSON.parse(new TextDecoder().decode(files.get('project.json'))).slots).toBeUndefined();
   });
   it('exports only the unchanged original using the IIIx update filename', async () => {
     const original = new Uint8Array([1, 2, 3]);
@@ -183,8 +237,8 @@ describe('GR IIIx UI family isolation', () => {
     expect(mocks.host.write).not.toHaveBeenCalled();
     expect(mocks.engine.bridge).not.toHaveBeenCalled();
   });
-  it('opens GR III 2.10 (experimental) as its own model in the same family and writes fwdc239b.bin', async () => {
-    mocks.engine.open.mockResolvedValue({ ...info(), version: '2.10', filename: 'fwdc239b.bin', models: ['GR3_HDF'], experimental: true });
+  it('opens GR III 2.10 as its own model in the same family and writes fwdc239b.bin', async () => {
+    mocks.engine.open.mockResolvedValue({ ...info(), version: '2.10', filename: 'fwdc239b.bin', models: ['GR3_HDF'], });
     expect(await store.adoptFirmware('fwdc239b.bin', '2.10', new Uint8Array([1]))).toBe(true);
     expect(store.getState()).toMatchObject({ model: 'GR3_HDF', page: 'ratio', fwName: 'fwdc239b.bin' });
     expect(store.isGr3('GR3_HDF') && store.isGr3('GR3X_HDF') && !store.isGr3('HDF')).toBe(true);
@@ -202,7 +256,7 @@ describe('GR IIIx UI family isolation', () => {
     expect(store.getState().bridgeOpen).toBe(false);
   });
   it('switching between GR III and GR IIIx closes the other camera\'s firmware', async () => {
-    mocks.engine.open.mockResolvedValue({ ...info(), version: '2.10', filename: 'fwdc239b.bin', models: ['GR3_HDF'], experimental: true });
+    mocks.engine.open.mockResolvedValue({ ...info(), version: '2.10', filename: 'fwdc239b.bin', models: ['GR3_HDF'], });
     await store.adoptFirmware('fwdc239b.bin', '2.10', new Uint8Array([1]));
     store.setModel('GR3X_HDF');
     expect(store.getState()).toMatchObject({ model: 'GR3X_HDF', info: undefined, raw: undefined, fwName: undefined });

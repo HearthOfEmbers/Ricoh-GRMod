@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /**
- * GR III 2.10 support (experimental) rests on one claim: GR III 2.10 and GR IIIx 1.60 are the same
+ * GR III 2.10 support rests on one claim: GR III 2.10 and GR IIIx 1.60 are the same
  * build of one program, so the IIIx patches mean exactly the same on GR III. These tests check it on
  * the two official files and on every recipe the app can produce:
  *
@@ -149,11 +149,14 @@ describe.skipIf(!xPath || !iiiPath)('GR III 2.10 is the IIIx 1.60 program', () =
     expect(new DataView(d.buffer).getUint32(r.offset + 0x2034, true)).toBe(78350);
   }, 120_000);
 
-  it('opens GR III as its own experimental camera and recognises only its own builds', async () => {
+  it('opens GR III as its own camera and recognises only its own builds', async () => {
     const e3 = await Engine.open(raw3), eX = await Engine.open(rawX);
-    expect(e3.info).toMatchObject({ family: 'gr3x', filename: 'fwdc239b.bin', models: ['GR3_HDF'], version: '2.10', experimental: true,
-      capabilities: { build: true, presets: true, wallpaper: false, factoryEntry: false, bridge: false } });
-    expect(eX.info).toMatchObject({ filename: 'fwdc243b.bin', models: ['GR3X_HDF'], version: '1.60', experimental: false });
+    expect(e3.info).toMatchObject({ family: 'gr3x', filename: 'fwdc239b.bin', models: ['GR3_HDF'], version: '2.10',
+      capabilities: { build: true, presets: true, wallpaper: false, factoryEntry: false, bridge: false, menuPictures: true, lookLayout: true },
+      features: { dateStamp: true, maxFilms: 20 } });
+    expect(e3.info).not.toHaveProperty('experimental');
+    expect(eX.info).toMatchObject({ filename: 'fwdc243b.bin', models: ['GR3X_HDF'], version: '1.60',
+      capabilities: { menuPictures: false, lookLayout: false }, features: { dateStamp: false, maxFilms: 9 } });
     expect(e3.info.factoryEntry.modeSetName).toBe('00078350.588');
     expect(readGr3xFactoryEntry(dec3, GR3_210).modeSetName).toBe('00078350.588');
     expect(() => readGr3xFactoryEntry(dec3, GR3X_160)).toThrow();

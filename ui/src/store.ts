@@ -152,17 +152,30 @@ function fail(e: unknown): void {
   toast(`${t('error')}${code ? ` · ${code}` : ''}${msg && msg !== code ? ` · ${msg}` : ''}`.slice(0, 220), 'error');
 }
 
-// ------------------------------------------------------------------ persistence
-let saveTimer: ReturnType<typeof setTimeout> | undefined;
-function scheduleSave(): void {
-  if (!host.available || !state.ready) return;
-  clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => { void saveProject(); }, 400);
-}
-async function saveProject(): Promise<void> {
-  const s = state;
-  const doc = {
-    v: 1, page: s.page, model: s.model, lang: s.lang, fwName: s.fwName, showAll: s.showAll, previewMode: s.previewMode, ratioBackdrop: s.ratioBackdrop,
+// ------------------------------------------------------------------ camera families
+/**
+ * GR IV and GR III / IIIx keep their own work: Image Control slots or films with their presets,
+ * added slots, the menu order, pictures, ratios and switches. GR IV's is `project.json` as it
+ * always was (older versions of GR Mod read it unchanged; the settings of the program itself are
+ * there too); GR III / IIIx's is `project-gr3.json`, its presets `gr3-preset-…` (its films reuse
+ * the ids CY and CG). Switching to the other camera keeps this one's work and brings back that one's.
+ */
+type Family = 'gr4' | 'gr3';
+const familyOf = (m: CameraModel): Family => (isGr3(m) ? 'gr3' : 'gr4');
+const GR3_PROJECT = 'project-gr3.json';
+const presetKey = (id: SlotKey, fam: Family = familyOf(state.model)): string => (fam === 'gr3' ? 'gr3-preset-' : 'preset-') + id.toLowerCase();
+type FamilyDoc = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
+/** Each family's saved work as last loaded or saved; the open family's is taken from the state when saved. */
+const familyDocs: Record<Family, FamilyDoc | null> = { gr4: null, gr3: null };
+/** GR III work found in `project.json` itself (a data folder of the GR III test builds): its presets are `preset-…`. */
+let gr3Legacy = false;
+/** Changes whenever the open family changes: work still being loaded for the previous one is dropped. */
+let familyGen = 0;
+/** True while the open family's files are being read: a save meanwhile writes its work as loaded. */
+let familyLoading = false;
+
+function familyData(s: State): FamilyDoc {
+  return {
     slots: Object.fromEntries(SLOT_IDS.map((id) => [id, {
       preset: s.slots[id].preset ? { fileName: s.slots[id].preset!.fileName, kind: s.slots[id].preset!.kind } : null,
       names: s.slots[id].names,
@@ -174,11 +187,127 @@ async function saveProject(): Promise<void> {
     wall: s.wall.map((w) => ({ id: w.id, name: w.name, kind: 'image', width: w.width, height: w.height, crop: w.crop, ...(w.menuName !== undefined ? { menuName: w.menuName } : {}), ...(w.menuId ? { menuId: w.menuId } : {}) })),
     ratios: s.ratios.map((r) => ({ id: r.id, ratio: r.ratio, name: r.name })),
     soft: s.soft, dateStamp: s.dateStamp, monoUnlock: s.monoUnlock, filmCount: s.filmCount,
-    tours: s.toursSeen, toursV: 2,
   };
-  try { await host.storeSet('project.json', JSON.stringify(doc)); } catch (e) { console.warn('save failed', e); }
 }
 
+/** The part of a family's saved work that needs no file: everything but presets and pictures. */
+function parseFamily(doc: FamilyDoc | null): Partial<State> {
+  const slots = emptySlots();
+  for (const id of SLOT_IDS) {
+    const d = doc?.slots?.[id];
+    if (!d) continue;
+    slots[id].names = d.names || {};
+    if (d.icon) slots[id].icon = { mode: d.icon.mode || 'keep', text: d.icon.text || '', style: d.icon.style || 'film', image: d.icon.image };
+    // GR III projects up to 0.8.0-gr3exp.9 kept the film's level as a number (1 Weak, 2 Strong).
+    const h = validHalation(d.halation === 1 || d.halation === 2 ? { on: true, preview: d.halation === 2 ? 3 : 1 } : d.halation);
+    if (h) slots[id].halation = h;
+  }
+  const extras: ExtraSlot[] = (Array.isArray(doc?.extras) ? doc!.extras : []).slice(0, MAX_EXTRA_SLOTS)
+    .filter((x: ExtraSlot) => x && typeof x.key === 'string' && /^x-[a-z0-9]{1,12}$/.test(x.key))
+    .map((x: ExtraSlot) => ({ key: x.key, name: String(x.name || '').slice(0, 40), icon: { mode: x.icon?.mode === 'image' ? 'image' : 'text', text: String(x.icon?.text ?? ''), style: x.icon?.style === 'plain' ? 'plain' : 'film', image: x.icon?.image }, ...(validHalation(x.halation) ? { halation: validHalation(x.halation)! } : {}) }));
+  const ratios: RatioItem[] = (Array.isArray(doc?.ratios) ? doc!.ratios : []).slice(0, MAX_CUSTOM_RATIOS)
+    .filter((r: RatioItem) => r && typeof r.id === 'string' && typeof r.ratio === 'string')
+    .map((r: RatioItem) => ({ id: r.id, ratio: r.ratio.slice(0, 24), name: String(r.name || '').slice(0, 80) }));
+  return {
+    slots, extras, activeSlot: 'CY', wall: [], ratios, activeRatio: ratios[0]?.id,
+    lookOrder: normalizeLookOrder(Array.isArray(doc?.lookOrder) ? doc!.lookOrder : [], extras),
+    lookHidden: normalizeLookHidden(Array.isArray(doc?.lookHidden) ? doc!.lookHidden : [], extras),
+    lookOrder3: gr3SavedKeys(doc?.lookOrder3), lookHidden3: gr3SavedKeys(doc?.lookHidden3).filter((k) => k !== 'g11'),
+    soft: doc?.soft === true || (!!doc?.softFocus && typeof doc.softFocus === 'object' && Object.keys(doc.softFocus).length > 0),
+    dateStamp: doc?.dateStamp === true, monoUnlock: doc?.monoUnlock === true,
+    filmCount: Number.isInteger(doc?.filmCount) && doc!.filmCount >= 0 && doc!.filmCount <= GR3X_FILM_IDS.length ? doc!.filmCount : 9,
+  };
+}
+
+/** The presets and pictures of a family's saved work (read from their files), unless the family changes meanwhile. */
+async function loadFamilyFiles(doc: FamilyDoc | null, fam: Family, gen: number): Promise<void> {
+  if (!doc || !host.available) return;
+  const read = async (key: string): Promise<Uint8Array | null> => {
+    const bytes = await host.storeGet(key).catch(() => null);
+    // A GR III project kept in project.json: its presets are still under GR IV's names; moved once.
+    if (!bytes && fam === 'gr3' && gr3Legacy && key.startsWith('gr3-preset-')) {
+      const old = await host.storeGet(key.slice(4)).catch(() => null);
+      if (old) await host.storeSet(key, old).catch(() => undefined);
+      return old;
+    }
+    return bytes;
+  };
+  for (const id of SLOT_IDS) {
+    const p = doc.slots?.[id]?.preset;
+    if (!p) continue;
+    const text = await read(presetKey(id, fam));
+    if (gen !== familyGen) return;
+    if (text) void runPreset(id, p.fileName, p.kind, new TextDecoder().decode(text));
+  }
+  for (const x of state.extras) {
+    const p = (Array.isArray(doc.extras) ? doc.extras as { key: string; preset?: { fileName: string; kind: 'xmp' | 'cube' } | null }[] : []).find((d) => d.key === x.key)?.preset;
+    if (!p) continue;
+    const text = await read(presetKey(x.key, fam));
+    if (gen !== familyGen) return;
+    if (text) void runPreset(x.key, p.fileName, p.kind === 'xmp' ? 'xmp' : 'cube', new TextDecoder().decode(text));
+  }
+  const wall: WallItem[] = [];
+  for (const w of doc.wall || []) {
+    // the factory image of the start-up script's rotation (GR Mod 0.7) is in the camera's menu anyway
+    if (w.kind === 'factory' || wall.length >= SHUTDOWN_MAX_PICTURES) continue;
+    const bytes = await host.storeGet('wall-' + w.id).catch(() => null);
+    if (gen !== familyGen) return;
+    const menu = { menuName: typeof w.menuName === 'string' ? String(w.menuName).slice(0, 40) : menuNameOf(String(w.name || '')), menuId: validMenuId(w.menuId) ? w.menuId : newMenuId(wall) };
+    if (bytes) wall.push({ id: w.id, name: w.name, blob: new Blob([bytes as unknown as BlobPart], { type: 'image/jpeg' }), width: w.width, height: w.height, crop: w.crop, busy: true, ...menu });
+  }
+  set({ wall });
+  for (const w of wall) void encodeWall(w.id);
+}
+
+/** The open family's work to save: the state, but presets and pictures still being read as they were saved. */
+function currentFamilyDoc(): FamilyDoc {
+  const data = familyData(state), doc = familyDocs[familyOf(state.model)];
+  if (!familyLoading || !doc) return data;
+  for (const id of SLOT_IDS) if (!data.slots[id].preset && doc.slots?.[id]?.preset) data.slots[id].preset = doc.slots[id].preset;
+  for (const x of data.extras) if (!x.preset) x.preset = (Array.isArray(doc.extras) ? doc.extras : []).find((d: { key: string }) => d.key === x.key)?.preset ?? null;
+  data.wall = Array.isArray(doc.wall) ? doc.wall : [];
+  return data;
+}
+/** Before the open camera changes family: its work is kept (and saved with the next save). */
+function leaveFamily(): void {
+  familyDocs[familyOf(state.model)] = currentFamilyDoc();
+  familyLoading = false;
+  ++familyGen;
+}
+/** The work of the family now open: what needs no file at once, presets and pictures as they are read. */
+function enterFamily(fam: Family): void {
+  const gen = familyGen, doc = familyDocs[fam];
+  set(parseFamily(doc));
+  for (const id of allSlotKeys()) void renderIcon(id);
+  if (!doc || !host.available) return;
+  familyLoading = true;
+  void loadFamilyFiles(doc, fam, gen).finally(() => {
+    if (gen !== familyGen) return;
+    familyLoading = false;
+    scheduleSave();
+  });
+}
+
+// ------------------------------------------------------------------ persistence
+let saveTimer: ReturnType<typeof setTimeout> | undefined;
+function scheduleSave(): void {
+  if (!host.available || !state.ready) return;
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => { void saveProject(); }, 400);
+}
+async function saveProject(): Promise<void> {
+  const s = state;
+  familyDocs[familyOf(s.model)] = currentFamilyDoc();
+  const doc = {
+    ...(familyDocs.gr4 ?? {}),
+    v: 1, page: s.page, model: s.model, lang: s.lang, fwName: s.fwName, showAll: s.showAll, previewMode: s.previewMode, ratioBackdrop: s.ratioBackdrop,
+    tours: s.toursSeen, toursV: 2,
+  };
+  try {
+    await host.storeSet('project.json', JSON.stringify(doc));
+    if (familyDocs.gr3) await host.storeSet(GR3_PROJECT, JSON.stringify({ v: 1, ...familyDocs.gr3 }));
+  } catch (e) { console.warn('save failed', e); }
+}
 export async function init(): Promise<void> {
   if (!host.available) { set({ ready: true }); return; }
   void engine.heartbeat(host.info!.token);
@@ -189,59 +318,28 @@ export async function init(): Promise<void> {
     const raw = await host.storeGet('project.json');
     const doc = raw ? JSON.parse(new TextDecoder().decode(raw)) : null;
     if (doc && doc.v === 1) {
-      const slots = emptySlots();
-      for (const id of SLOT_IDS) {
-        const d = doc.slots?.[id];
-        if (!d) continue;
-        slots[id].names = d.names || {};
-        if (d.icon) slots[id].icon = { mode: d.icon.mode || 'keep', text: d.icon.text || '', style: d.icon.style || 'film', image: d.icon.image };
-        // GR III projects up to 0.8.0-gr3exp.9 kept the film's level as a number (1 Weak, 2 Strong).
-        const h = validHalation(d.halation === 1 || d.halation === 2 ? { on: true, preview: d.halation === 2 ? 3 : 1 } : d.halation);
-        if (h) slots[id].halation = h;
-      }
-      const extras: ExtraSlot[] = (Array.isArray(doc.extras) ? doc.extras : []).slice(0, MAX_EXTRA_SLOTS)
-        .filter((x: ExtraSlot) => x && typeof x.key === 'string' && /^x-[a-z0-9]{1,12}$/.test(x.key))
-        .map((x: ExtraSlot) => ({ key: x.key, name: String(x.name || '').slice(0, 40), icon: { mode: x.icon?.mode === 'image' ? 'image' : 'text', text: String(x.icon?.text ?? ''), style: x.icon?.style === 'plain' ? 'plain' : 'film', image: x.icon?.image }, ...(validHalation(x.halation) ? { halation: validHalation(x.halation)! } : {}) }));
-      const lookOrder = normalizeLookOrder(Array.isArray(doc.lookOrder) ? doc.lookOrder : [], extras);
-      const lookHidden = normalizeLookHidden(Array.isArray(doc.lookHidden) ? doc.lookHidden : [], extras);
-      const lookOrder3 = gr3SavedKeys(doc.lookOrder3), lookHidden3 = gr3SavedKeys(doc.lookHidden3).filter((k) => k !== 'g11');
-      const ratios: RatioItem[] = (Array.isArray(doc.ratios) ? doc.ratios : []).slice(0, MAX_CUSTOM_RATIOS)
-        .filter((r: RatioItem) => r && typeof r.id === 'string' && typeof r.ratio === 'string')
-        .map((r: RatioItem) => ({ id: r.id, ratio: r.ratio.slice(0, 24), name: String(r.name || '').slice(0, 80) }));
-      set({ ratios, activeRatio: ratios[0]?.id, page: doc.page === 'wall' || doc.page === 'copies' || doc.page === 'ratio' || doc.page === 'ic' ? doc.page : doc.page === 'script' ? 'wall' : 'ic', model: ['GR3_HDF', 'GR3X_HDF', 'HDF', 'STANDARD', 'MONO'].includes(doc.model) ? doc.model : 'HDF', lang: (LANGS as readonly string[]).includes(doc.lang) ? doc.lang : 'zh-CN', fwName: doc.fwName, showAll: !!doc.showAll, slots, extras, lookOrder, lookHidden, lookOrder3, lookHidden3, previewMode: doc.previewMode === 'swatch' ? 'swatch' : 'photo', ratioBackdrop: doc.ratioBackdrop === 'gray' ? 'gray' : 'photo',
-        soft: doc.soft === true || (!!doc.softFocus && typeof doc.softFocus === 'object' && Object.keys(doc.softFocus).length > 0),
-        dateStamp: doc.dateStamp === true, monoUnlock: doc.monoUnlock === true,
-        filmCount: Number.isInteger(doc.filmCount) && doc.filmCount >= 0 && doc.filmCount <= GR3X_FILM_IDS.length ? doc.filmCount : 9,
+      const model: CameraModel = ['GR3_HDF', 'GR3X_HDF', 'HDF', 'STANDARD', 'MONO'].includes(doc.model) ? doc.model : 'HDF';
+      const gr3Raw = await host.storeGet(GR3_PROJECT).catch(() => null);
+      const gr3Doc = gr3Raw ? JSON.parse(new TextDecoder().decode(gr3Raw)) : null;
+      if (gr3Doc && gr3Doc.v === 1) { familyDocs.gr4 = doc; familyDocs.gr3 = gr3Doc; }
+      else if (familyOf(model) === 'gr3') { familyDocs.gr3 = doc; gr3Legacy = true; } // a GR III project of the test builds
+      else familyDocs.gr4 = doc;
+      const fam = familyOf(model), work = familyDocs[fam];
+      set({ ...parseFamily(work), model,
+        page: doc.page === 'wall' || doc.page === 'copies' || doc.page === 'ratio' || doc.page === 'ic' ? doc.page : doc.page === 'script' ? 'wall' : 'ic',
+        lang: (LANGS as readonly string[]).includes(doc.lang) ? doc.lang : 'zh-CN', fwName: doc.fwName, showAll: !!doc.showAll,
+        previewMode: doc.previewMode === 'swatch' ? 'swatch' : 'photo', ratioBackdrop: doc.ratioBackdrop === 'gray' ? 'gray' : 'photo',
         // GR Mod 0.8 changed the power-off page: its tour (which now says where the pictures are chosen) shows once more
         toursSeen: TOUR_IDS.filter((id) => Array.isArray(doc.tours) && doc.tours.includes(id) && (id !== 'wall' || doc.toursV >= 2)) });
       const fwRaw = await host.storeGet('firmware.bin');
       // A family switch clears fwName. Do not reopen the previous family's cached file.
       if (fwRaw && doc.fwName) await openFirmware(fwRaw, doc.fwName, false);
-      for (const id of SLOT_IDS) {
-        const p = doc.slots?.[id]?.preset;
-        if (!p) continue;
-        const text = await host.storeGet('preset-' + id.toLowerCase());
-        if (text) void runPreset(id, p.fileName, p.kind, new TextDecoder().decode(text));
-      }
-      for (const x of extras) {
-        const p = (doc.extras as { key: string; preset?: { fileName: string; kind: 'xmp' | 'cube' } | null }[]).find((d) => d.key === x.key)?.preset;
-        if (!p) continue;
-        const text = await host.storeGet('preset-' + x.key);
-        if (text) void runPreset(x.key, p.fileName, p.kind === 'xmp' ? 'xmp' : 'cube', new TextDecoder().decode(text));
-      }
-      const wall: WallItem[] = [];
-      for (const w of doc.wall || []) {
-        // the factory image of the start-up script's rotation (GR Mod 0.7) is in the camera's menu anyway
-        if (w.kind === 'factory' || wall.length >= SHUTDOWN_MAX_PICTURES) continue;
-        const bytes = await host.storeGet('wall-' + w.id);
-        const menu = { menuName: typeof w.menuName === 'string' ? String(w.menuName).slice(0, 40) : menuNameOf(String(w.name || '')), menuId: validMenuId(w.menuId) ? w.menuId : newMenuId(wall) };
-        if (bytes) wall.push({ id: w.id, name: w.name, blob: new Blob([bytes as unknown as BlobPart], { type: 'image/jpeg' }), width: w.width, height: w.height, crop: w.crop, busy: true, ...menu });
-      }
-      set({ wall });
-      for (const w of wall) void encodeWall(w.id);
+      await loadFamilyFiles(work, fam, familyGen);
     }
   } catch (e) { console.warn('restore failed', e); }
   set({ ready: true });
+  // A GR III project found in project.json goes to its own file at once.
+  if (gr3Legacy) scheduleSave();
   void refreshVolumes();
   setInterval(() => { if (!document.hidden && !state.busy) void refreshVolumes(); }, 2500);
   for (const id of allSlotKeys()) void renderIcon(id);
@@ -279,20 +377,21 @@ export function setPage(page: Page): void {
 export function setLang(lang: LangCode): void { set({ lang }); scheduleSave(); }
 export function setModel(model: CameraModel): void {
   if (state.busy || state.fwBusy || model === state.model) return;
-  const differentFamily = isGr3(state.model) !== isGr3(model);
+  const differentFamily = familyOf(state.model) !== familyOf(model);
   ++ratioGen;
   clearTimeout(ratioTimer);
+  if (differentFamily) leaveFamily();
   if (state.info && !state.info.models.includes(model)) {
     void engine.reset();
     set({ info: undefined, raw: undefined, fwName: undefined, bridgeOpen: false, bridgeAfter: undefined,
       soft: false, dateStamp: false, monoUnlock: false,
       copyInfo: {}, copySel: [], ratios: state.ratios.map(({ preview, ...r }) => r) });
   }
-  set({ model,
-    ...(differentFamily ? { slots: emptySlots(), activeSlot: 'CY' as const, soft: false, dateStamp: false, monoUnlock: false } : {}),
-    ...(isGr3(model) ? { page: 'ratio' as const, bridgeOpen: false, bridgeAfter: undefined } : {}) });
+  set({ model, ...(isGr3(model) ? { page: 'ratio' as const, bridgeOpen: false, bridgeAfter: undefined } : {}) });
+  // The other camera's work comes back (its pictures are encoded again once read).
+  if (differentFamily) enterFamily(familyOf(model));
+  else for (const w of state.wall) void encodeWall(w.id);
   scheduleSave();
-  for (const w of state.wall) void encodeWall(w.id);
 }
 
 // ------------------------------------------------------------------ firmware
@@ -305,13 +404,15 @@ async function openFirmware(raw: Uint8Array, name: string, persist: boolean): Pr
   try {
     const info = await engine.open(raw);
     const model = info.models.includes(state.model) ? state.model : info.models[0];
-    const sameFamily = isGr3(state.model) === isGr3(model);
+    const sameFamily = familyOf(state.model) === familyOf(model);
+    if (!sameFamily) leaveFamily();
     set({ info, raw, model, fwName: info.filename, fwBusy: false, copyInfo: {}, copySel: [],
-      ...(!sameFamily ? { slots: emptySlots(), activeSlot: 'CY' as const, soft: false, dateStamp: false, monoUnlock: false } : {}),
-      ...(info.family === 'gr3x' ? { page: sameFamily ? state.page : 'ratio' as const, bridgeOpen: false, bridgeAfter: undefined,
-        soft: sameFamily && state.soft, dateStamp: sameFamily && state.dateStamp && info.features.dateStamp, monoUnlock: sameFamily && state.monoUnlock && info.features.monoUnlock,
-        // A list made for the other family does not carry over; an IIIx/III list does.
-        ...(sameFamily && state.ratios.length ? {} : { ratios: t4Ratios() }) } : {}) });
+      ...(info.family === 'gr3x' ? { page: sameFamily ? state.page : 'ratio' as const, bridgeOpen: false, bridgeAfter: undefined } : {}) });
+    // Opening the other camera's firmware brings back that camera's work.
+    if (!sameFamily) enterFamily(familyOf(model));
+    if (info.family === 'gr3x') set((s) => ({ dateStamp: s.dateStamp && info.features.dateStamp, monoUnlock: s.monoUnlock && info.features.monoUnlock,
+      // Nothing saved for GR III / IIIx yet: the seven ratios tested first.
+      ...(s.ratios.length ? {} : { ratios: t4Ratios() }) }));
     if (info.family === 'gr3x') ratiosChanged(true);
     if (info.bridge && persist) toast(t('bridgeOpened'), 'info');
     if (persist) { await host.storeSet('firmware.bin', raw); scheduleSave(); }
@@ -392,13 +493,13 @@ export async function loadPresetFile(id: SlotKey, file: File): Promise<void> {
   const lower = file.name.toLowerCase();
   const kind: 'xmp' | 'cube' = lower.endsWith('.cube') ? 'cube' : lower.endsWith('.xmp') ? 'xmp' : /LUT_(3D|1D)_SIZE/i.test(text) ? 'cube' : 'xmp';
   setActiveSlot(id);
-  if (host.available) await host.storeSet('preset-' + id.toLowerCase(), text).catch(() => undefined);
+  if (host.available) await host.storeSet(presetKey(id), text).catch(() => undefined);
   await runPreset(id, file.name, kind, text);
   scheduleSave();
 }
 export function removePreset(id: SlotKey): void {
   patchSlot(id, { preset: undefined });
-  if (host.available) void host.storeDel('preset-' + id.toLowerCase()).catch(() => undefined);
+  if (host.available) void host.storeDel(presetKey(id)).catch(() => undefined);
   scheduleSave();
 }
 
@@ -621,7 +722,7 @@ export function addExtraSlot(): void {
 }
 export function removeExtraSlot(key: string): void {
   set((s) => ({ extras: s.extras.filter((x) => x.key !== key), activeSlot: s.activeSlot === key ? 'CY' : s.activeSlot, lookOrder: normalizeLookOrder(s.lookOrder, s.extras.filter((x) => x.key !== key)), lookHidden: s.lookHidden.filter((k) => k !== key) }));
-  if (host.available) void host.storeDel('preset-' + key).catch(() => undefined);
+  if (host.available) void host.storeDel(presetKey(key)).catch(() => undefined);
   scheduleSave();
 }
 /** Set how many slots are added: the last ones are taken away, new empty ones appended. */

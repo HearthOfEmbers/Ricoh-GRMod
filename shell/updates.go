@@ -81,8 +81,9 @@ func updateTarget() update.Target {
 // replaced by it.
 func experimental() bool { return strings.Contains(version, "exp") }
 
-// experimentalDataSuffix is appended to the default data folder of an experimental build.
-const experimentalDataSuffix = "-GR3-Experimental"
+// experimentalDataSuffix is appended to the default data folder of an experimental build (the
+// GR III test builds' folder; a release takes their GR III work over once, migrate.go).
+const experimentalDataSuffix = gr3TestDataSuffix
 
 func updateOptions(target update.Target) *server.UpdateOptions {
 	if experimental() {

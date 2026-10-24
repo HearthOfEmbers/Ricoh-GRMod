@@ -144,7 +144,7 @@ async function buildContainer(raw: Uint8Array, purpose: 'research' | 'hardware-t
     bytes: built.out, manifest, decodedSha256: await sha256Hex(out), changedFrames: built.reencoded, changedBytes,
     report: {
       schema: 1, kind: purpose === 'research' ? 'gr3x-adj-research-container' : 'gr3x-adj9-test-firmware',
-      profile: profile.id, camera: profile.camera, experimental: profile.experimental, purpose,
+      profile: profile.id, camera: profile.camera, fullFeatures: profile.fullFeatures, purpose,
       revision: purpose === 'research' ? 'research' : revision,
       softFocus: softFocus.map(r => ({ ...r })), adjSoftFocus: features.adjSoftFocus === true,
       imageControls: looks && 'addedLooks' in manifest ? manifest.addedLooks.map(s => ({

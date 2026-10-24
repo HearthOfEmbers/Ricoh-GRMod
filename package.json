@@ -1,7 +1,7 @@
 {
   "name": "grmod",
   "private": true,
-  "version": "0.8.4-gr3exp.1",
+  "version": "0.9.0",
   "license": "GPL-2.0-only",
   "type": "module",
   "workspaces": ["core", "ui"],

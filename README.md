@@ -1,9 +1,18 @@
 # GR Mod
 
-A small desktop tool for the Ricoh GR IV / GR IV HDF (firmware 1.11). Not a Ricoh product.
+A small desktop tool for the Ricoh GR IV / GR IV HDF / GR IV Monochrome (firmware 1.11), the GR III
+HDF (firmware 2.10) and the GR IIIx HDF (firmware 1.60). Not a Ricoh product.
 
-**Experimental branch (`gr3-hdf-210-exp`, version 0.8.4-gr3expN): GR III HDF 2.10 and GR IIIx HDF 1.60.**
-Not a release: it keeps its own data folder (`GRMod-GR3-Experimental`) and never updates itself.
+## GR III and GR IIIx
+
+One program for both families: GR IV files are built exactly as by GR Mod 0.8.4 (GR IV's code is
+shared and unchanged; `core/test/gr4-unchanged.test.ts` pins its outputs), and the GR III / IIIx code
+(`core/src/fw/gr3x`, `tools/gr3x`) is used only for the exact official GR III 2.10 / IIIx 1.60
+files. Each family keeps its own work: GR IV's in `project.json` as before, GR III / IIIx's in
+`project-gr3.json` with its presets `gr3-preset-…` (`ui/src/store.ts`). The GR III test builds
+(0.8.0-gr3exp.1 .. 0.8.4-gr3exp.1) kept a data folder of their own (`GRMod-GR3-Experimental`); a
+release takes its GR III work over once (`shell/migrate.go`). A version containing `exp` is still a
+test build: own data folder, no updates.
 
 GR III 2.10 (`fwdc239b.bin`) and GR IIIx 1.60 (`fwdc243b.bin`) are the same build of one program:
 every address is shared and the images differ only in identity bytes (name, project/product,

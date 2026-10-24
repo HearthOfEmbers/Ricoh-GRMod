@@ -104,16 +104,14 @@ export interface ShutdownResource {
 export interface FirmwareInfo {
   family: 'gr4' | 'gr3x';
   filename: string;
-  /** Support without any camera test yet (GR III 2.10). */
-  experimental?: boolean;
   models: CameraModel[];
   factoryRatios: string[];
   /** `menuPictures`: power-off pictures chosen in the camera's menu (End Screen submenu on both; GR III builds of round 5 had a Setup line after End Screen). */
   capabilities: { build: boolean; presets: boolean; wallpaper: boolean; factoryEntry: boolean; bridge: boolean; menuPictures: boolean;
-    /** The Image Control menu order and hidden looks (GR IV; the experimental GR III build from round 8). */
+    /** The Image Control menu order and hidden looks (GR IV; GR III 2.10 from round 8). */
     lookLayout?: boolean };
   features: { softFocus: 'clarity' | 'adj'; dateStamp: boolean; monoUnlock: boolean;
-    /** GR III / IIIx: the most films a build can have (9; 20 on the experimental GR III build, where
+    /** GR III / IIIx: the most films a build can have (9; 20 on GR III 2.10, where
      * the number is chosen with BuildOptions.filmCount and Halation is set in the camera). */
     maxFilms?: number };
   version: string;
@@ -242,10 +240,10 @@ export interface BuildOptions {
   monoUnlock?: boolean;
   /** Added Image Control slots (1 to 20), after the factory ones. */
   extraSlots?: ExtraSlotSpec[];
-  /** Image Control menu order and hidden looks (factory ids 11..30 plus added styles 34..; experimental
+  /** Image Control menu order and hidden looks (factory ids 11..30 plus added styles 34..;
    * GR III: the camera's 11..22 plus films 64..). */
   lookLayout?: LookLayout;
-  /** Experimental GR III: 7 builds round 7's files (GR Mod 0.8.2, camera-tested T7) instead of round 8's. */
+  /** GR III 2.10: 7 builds round 7's files (GR Mod 0.8.2, camera-tested T7) instead of round 8's. */
   gr3Round?: 7 | 8;
   /** Power-off pictures (1 to 8) chosen in the camera's End Screen menu; see `encodeShutdownPicture`. */
   shutdownPictures?: ShutdownPictureSpec[];
@@ -258,7 +256,7 @@ export interface BuildOptions {
   dateStampFixed?: number;
   /** Test builds only: print the encoder configuration on the 720x480 picture. */
   dateStampDiag?: boolean;
-  /** GR III (experimental): the number of films, 1..20 (`features.maxFilms`), each with a Halation
+  /** GR III 2.10: the number of films, 1..20 (`features.maxFilms`), each with a Halation
    * line in the camera. Absent: the nine-film T6 build. */
   filmCount?: number;
 }
@@ -396,16 +394,16 @@ export class Engine {
         throw new FirmwareError('unexpected-layout', 'IIIx shutdown JPEG format changed');
       }
       const info: FirmwareInfo = {
-        family: 'gr3x', filename: profile.filename, models: [profile.model], experimental: profile.experimental,
+        family: 'gr3x', filename: profile.filename, models: [profile.model],
         factoryRatios: [...profile.factoryRatios],
         // Power-off images and the factory-menu entry reached the camera through a start-up script.
         // GR Mod 0.8 dropped that route, and it was never tested on these cameras: not offered.
-        // Power-off pictures: the experimental GR III build only (tested there first).
-        capabilities: { build: true, presets: true, wallpaper: false, factoryEntry: false, bridge: false, menuPictures: profile.experimental === true, lookLayout: profile.experimental === true },
-        // The date imprint is offered in the experimental GR III build only (tested there first).
-        features: { softFocus: 'adj', dateStamp: profile.experimental === true, monoUnlock: false, maxFilms: profile.experimental === true ? GR3X_MAX_FILMS : 9 },
+        // Power-off pictures: GR III 2.10 only (made and tested there first).
+        capabilities: { build: true, presets: true, wallpaper: false, factoryEntry: false, bridge: false, menuPictures: profile.fullFeatures, lookLayout: profile.fullFeatures },
+        // The date imprint: GR III 2.10 only (made and tested there first).
+        features: { softFocus: 'adj', dateStamp: profile.fullFeatures, monoUnlock: false, maxFilms: profile.fullFeatures ? GR3X_MAX_FILMS : 9 },
         version: profile.version, sha256: profile.sha256, bridge: false,
-        slots: GR3X_FILM_IDS.slice(0, profile.experimental === true ? GR3X_MAX_FILMS : 9).map((id, i) => ({
+        slots: GR3X_FILM_IDS.slice(0, profile.fullFeatures ? GR3X_MAX_FILMS : 9).map((id, i) => ({
           id, defaultName: GR3X_FILM_NAMES[i], icon: lookResources.film.slice(),
           names: Object.fromEntries(LANGS.map(l => [l, { text: GR3X_FILM_NAMES[i], capacity: 24 }])) as SlotInfoView['names'],
         })), tiles: lookResources.tiles, contentArea: CONTENT_AREA,
@@ -837,7 +835,7 @@ export class Engine {
       const filmCount = options.filmCount || undefined;
       if (options.filmCount === 0 && requests.length) throw new FirmwareError('bad-edit', 'film changes without films');
       if (filmCount !== undefined && (options.monoUnlock || !Number.isInteger(filmCount) || filmCount < 1 || filmCount > (this.info.features.maxFilms ?? 9) || filmCount > GR3X_MAX_FILMS || (this.info.features.maxFilms ?? 9) < GR3X_MAX_FILMS))
-        throw new FirmwareError('bad-edit', 'the number of films is 1..20 (experimental GR III build)');
+        throw new FirmwareError('bad-edit', 'the number of films is 1..20 (GR III 2.10)');
       // Legacy replica builds remain reproducible, but T6 uses all nine slots for films (round 6: filmCount).
       const ids = options.monoUnlock ? GR3X_FILM_IDS.slice(0, 2) : GR3X_FILM_IDS.slice(0, filmCount ?? 9);
       if (requests.length > ids.length || new Set(requests.map(r => r.slot)).size !== requests.length ||
@@ -863,14 +861,14 @@ export class Engine {
       } : undefined;
       if (options.adjSoftFocus && softFocus.length) throw new FirmwareError('bad-clarity', 'soft focus on the ADJ lever and on the clarity table cannot be combined');
       // Round 7 (as GR Mod 0.8.2: settings guard, date imprint by look, halation strength and colour):
-      // every build of the experimental GR III app but the black-and-white replicas and the legacy
+      // every GR III 2.10 build but the black-and-white replicas and the legacy
       // nine-film builds without a film count; `guard: false` builds as round 6 did (as GR IV's option).
       // Round 8 (as GR Mod 0.8.4: the date imprint follows the camera and can add the look's name,
       // the Image Control order and hidden looks): every round 7 build, unless `gr3Round: 7` asks
       // for round 7's files (camera-tested T7).
       const round7 = options.guard !== false && !options.monoUnlock && (this.info.features.maxFilms ?? 9) >= GR3X_MAX_FILMS && (!looks || looks.filmCount !== undefined);
       const round8 = round7 && options.gr3Round !== 7;
-      if (options.lookLayout && !round8) throw new FirmwareError('bad-look-layout', 'the Image Control order needs a round 8 build (experimental GR III)');
+      if (options.lookLayout && !round8) throw new FirmwareError('bad-look-layout', 'the Image Control order needs a round 8 build (GR III 2.10)');
       const lookLayout = options.lookLayout && !isGr3xFactoryLayout(options.lookLayout, filmCount ?? 0) ? options.lookLayout : undefined;
       if (options.lookLayout) validateGr3xLookLayout(options.lookLayout, filmCount ?? 0);
       const r = await this.fixedGr3x(softFocus, looks, menu, !!options.adjSoftFocus, !!options.dateStamp,
