@@ -30,6 +30,8 @@
 import { branchWord } from '../aspect/arm';
 import { FirmwareError } from '../types';
 import { GR3X_LOAD_CALL, GR3X_LOAD_DATA, GR3X_SAVE_CALL, GR3X_SAVE_DATA } from './look-addresses';
+import { gr3xSettingsHook, gr3xSettingsPrior } from './round10';
+import type { Gr3xSite } from './round10';
 
 export const GR3X_STANDARD_LOOK = 11;
 const OWN_LOOKS = [11, 22] as const;
@@ -53,7 +55,13 @@ export interface Gr3xGuardOptions {
   maxRatio: number;
   /** Round 8: looks hidden from the lists (never Standard). */
   hidden?: readonly number[];
+  /** Round 10 with soft focus on function 0x09 (adj-softfocus.ts): a record whose soft focus is on
+   * (byte 0x9a1 1..3) and that has it on no ADJ slot gets 0x09 on the slots holding 0x13, where
+   * rounds 6..9 had it. */
+  softFocusR10?: boolean;
 }
+const SOFT_FOCUS_BYTE = 0x9a1;
+const ADJ_SLOT_BYTES = [0x918, 0x91a, 0x91c, 0x91e, 0x920];
 /** The standard photo and movie sets' looks (the others are the custom sets'). */
 const CURRENT_LOOKS = [0x1c2, 0x57e];
 
@@ -77,7 +85,14 @@ export function installGr3xGuardCode(p: Gr3xGuardProgram, o: Gr3xGuardOptions) {
       }
     }
   });
-  lines.push(`ldrb r2,[r0,#${RATIO}]`, `cmp r2,#${o.maxRatio}`, 'movhi r2,#0', `strbhi r2,[r0,#${RATIO}]`, 'bx lr');
+  lines.push(`ldrb r2,[r0,#${RATIO}]`, `cmp r2,#${o.maxRatio}`, 'movhi r2,#0', `strbhi r2,[r0,#${RATIO}]`);
+  if (o.softFocusR10) {
+    lines.push(`ldrb r2,[r0,#${SOFT_FOCUS_BYTE}]`, 'sub r2,r2,#1', 'cmp r2,#2', 'bxhi lr');
+    for (const f of ADJ_SLOT_BYTES) lines.push(`ldrb r2,[r0,#${f}]`, 'cmp r2,#9', 'bxeq lr');
+    lines.push('mov r3,#9');
+    for (const f of ADJ_SLOT_BYTES) lines.push(`ldrb r2,[r0,#${f}]`, 'cmp r2,#0x13', `strbeq r3,[r0,#${f}]`);
+  }
+  lines.push('bx lr');
   const fix = p.code(lines.join(';'));
   // fixAll(object): the record in use and the stored ones (object + 4 .. object + 0x20).
   const fixAll = p.code(`cmp r0,#0;bxeq lr;push {r4,r5,r6,lr};mov r4,r0;mov r5,#0;
@@ -105,5 +120,22 @@ export function installGr3xGuard(p: Gr3xGuardProgram, o: Gr3xGuardOptions) {
   const save = p.code(`push {r4,lr};mov r4,r0;bl #${fixAll};mov r0,r4;pop {r4,lr};b #${GR3X_SAVE_DATA};`);
   p.patch(GR3X_SAVE_CALL, branchWord(GR3X_SAVE_CALL, GR3X_SAVE_DATA), branchWord(GR3X_SAVE_CALL, save), 'settings guard: before the settings save');
   const recall = installGr3xGuardRecall(p, fix);
+  return { guardFix: fix, guardFixAll: fixAll, guardLoad: load, guardSave: save, guardRecall: recall };
+}
+
+/**
+ * Round 10 (GR IV's installSettingsGuard): through the settings scaffold (round10.ts), installed after
+ * everything else that hooks the settings load and save: the load runs what was there, then the
+ * guard; the save the guard, then what was there. The mode recall as before (`before`: the films'
+ * table first).
+ */
+export function installGr3xGuardR10(p: Gr3xGuardProgram & { sites: Gr3xSite[] }, o: Gr3xGuardOptions, before?: number) {
+  const { fix, fixAll } = installGr3xGuardCode(p, o);
+  const priorLoad = gr3xSettingsPrior(p, 'load'), priorSave = gr3xSettingsPrior(p, 'save');
+  const load = p.code(`push {r4,r5,r6,lr};mov r4,r0;bl #${priorLoad};mov r5,r0;mov r0,r4;bl #${fixAll};mov r0,r5;pop {r4,r5,r6,pc};`);
+  gr3xSettingsHook(p, 'load', load, 'settings guard: after the settings load');
+  const save = p.code(`push {r4,lr};mov r4,r0;bl #${fixAll};mov r0,r4;pop {r4,lr};b #${priorSave};`);
+  gr3xSettingsHook(p, 'save', save, 'settings guard: before the settings save');
+  const recall = installGr3xGuardRecall(p, fix, before);
   return { guardFix: fix, guardFixAll: fixAll, guardLoad: load, guardSave: save, guardRecall: recall };
 }

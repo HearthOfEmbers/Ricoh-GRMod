@@ -244,7 +244,7 @@ export interface BuildOptions {
    * GR III: the camera's 11..22 plus films 64..). */
   lookLayout?: LookLayout;
   /** GR III / IIIx: 7 or 8 build round 7's or round 8's files (camera-tested T7, T8) instead of round 9's (the default). */
-  gr3Round?: 7 | 8 | 9;
+  gr3Round?: 7 | 8 | 9 | 10;
   /** Power-off pictures (1 to 8) chosen in the camera's End Screen menu; see `encodeShutdownPicture`. */
   shutdownPictures?: ShutdownPictureSpec[];
   /**
@@ -343,14 +343,14 @@ export class Engine {
   private gr3xCandidates = new Map<string, Promise<FirmwareBuild>>();
 
   private fixedGr3x(softFocus: readonly SoftFocusRequest[] = [], looks?: Gr3xLookOptions, menu: readonly Gr3xMenuRatio[] = GR3X_T4_MENU, adjSoftFocus = false, dateImprint = false, pictures: readonly Gr3xPictureSpec[] = [], dateMenu: 'list' | 'submenu' = 'submenu', pictureMenu: 'list' | 'submenu' = 'submenu',
-    round: { round7?: boolean; round8?: boolean; round9?: boolean; lookLayout?: Gr3xLookLayout } = {}): Promise<FirmwareBuild> {
+    round: { round7?: boolean; round8?: boolean; round9?: boolean; round10?: boolean; lookLayout?: Gr3xLookLayout } = {}): Promise<FirmwareBuild> {
     const requests = [...softFocus].sort((a, b) => a.level - b.level);
-    const round7 = round.round7 === true, round8 = round7 && round.round8 === true, round9 = round8 && round.round9 === true, lookLayout = round8 ? round.lookLayout : undefined;
-    const key = JSON.stringify({ requests, looks, menu, adjSoftFocus, dateImprint, dateMenu, pictureMenu, round7, round8, round9, lookLayout, pictures: pictures.map(p => ({ id: p.id, name: p.name, jpeg: Array.from(p.jpeg) })) });
+    const round7 = round.round7 === true, round8 = round7 && round.round8 === true, round9 = round8 && round.round9 === true, round10 = round9 && round.round10 === true, lookLayout = round8 ? round.lookLayout : undefined;
+    const key = JSON.stringify({ requests, looks, menu, adjSoftFocus, dateImprint, dateMenu, pictureMenu, round7, round8, round9, round10, lookLayout, pictures: pictures.map(p => ({ id: p.id, name: p.name, jpeg: Array.from(p.jpeg) })) });
     let candidate = this.gr3xCandidates.get(key);
     if (candidate) return candidate;
     candidate = buildGr3xTestFirmware(this.raw, requests, looks, menu, { adjSoftFocus, ...(dateImprint ? { dateImprint, dateMenu } : {}), ...(pictures.length ? { pictures, pictureMenu } : {}), ...(round7 ? { round7 } : {}),
-      ...(round8 ? { round8 } : {}), ...(round9 ? { round9 } : {}), ...(lookLayout ? { lookLayout } : {}) }).then(r => ({
+      ...(round8 ? { round8 } : {}), ...(round9 ? { round9 } : {}), ...(round10 ? { round10 } : {}), ...(lookLayout ? { lookLayout } : {}) }).then(r => ({
       file: r.bytes, sha256: r.report.outputSha256, decodedSha256: r.decodedSha256,
       changedFrames: r.changedFrames, changedBytes: r.changedBytes,
       ranges: r.report.ranges, checks: r.report.checks, features: { ...(looks?.monoReplicas ? { monoUnlock: true } : {}), ...(adjSoftFocus ? { adjSoftFocus: true } : {}), ...(dateImprint ? { dateStamp: true } : {}),
@@ -484,7 +484,7 @@ export class Engine {
       let pictures: Gr3xPictureSpec[] = [];
       let dateMenu: 'list' | 'submenu' = 'list';
       let pictureMenu: 'list' | 'submenu' = 'list';
-      let round7 = false, round8 = false, round9 = false;
+      let round7 = false, round8 = false, round9 = false, round10 = false;
       let lookLayout: Gr3xLookLayout | undefined;
       if (!official) try {
         // Read only recognized negative gain rows, rebuild from the verified
@@ -499,7 +499,7 @@ export class Engine {
           const build = readGr3xBuildRecipe(appended);
           if (build) {
             menu = planGr3xMenu(build.ratios); adjSoftFocus = build.adjSoftFocus; dateImprint = build.dateImprint; dateMenu = build.dateMenu; pictureMenu = build.pictureMenu; round7 = build.round7;
-            round8 = build.round8; round9 = build.round9; lookLayout = build.lookLayout;
+            round8 = build.round8; round9 = build.round9; round10 = build.round10; lookLayout = build.lookLayout;
             // Power-off pictures: the names from the recipe, the JPEGs from the file's own RES section.
             if (build.pictures.length) {
               if (build.pictures.length > GR3X_MAX_PICTURES) throw new FirmwareError('bad-edit', 'IIIx picture recipe');
@@ -514,7 +514,7 @@ export class Engine {
         }
         const changes = clarityChanges(decoded, GR3X_CLARITY_OFFSET);
         if (changes.every(c => SOFT_FOCUS_LEVELS.includes(c.level as SoftFocusLevel) && c.strength !== 'custom')) {
-          candidate = await this.fixedGr3x(changes as SoftFocusRequest[], looks ?? undefined, menu, adjSoftFocus, dateImprint, pictures, dateMenu, pictureMenu, { round7, round8, round9, ...(lookLayout ? { lookLayout } : {}) });
+          candidate = await this.fixedGr3x(changes as SoftFocusRequest[], looks ?? undefined, menu, adjSoftFocus, dateImprint, pictures, dateMenu, pictureMenu, { round7, round8, round9, round10, ...(lookLayout ? { lookLayout } : {}) });
           softFocus = changes;
         }
       } catch { /* unrecognized input remains non-writable */ }
@@ -875,12 +875,14 @@ export class Engine {
       const round8 = round7 && options.gr3Round !== 7;
       // Round 9 (the default): round 8 with the live view refreshed between films; `gr3Round: 8` builds round 8's files.
       const round9 = round8 && options.gr3Round !== 8;
+      // Round 10 (experimental, `gr3Round: 10`): GR IV's ways throughout (films as looks of their own, ...).
+      const round10 = round9 && options.gr3Round === 10;
       if (options.lookLayout && !round8) throw new FirmwareError('bad-look-layout', 'the Image Control order needs a round 8 build');
       const lookLayout = options.lookLayout && !isGr3xFactoryLayout(options.lookLayout, filmCount ?? 0) ? options.lookLayout : undefined;
       if (options.lookLayout) validateGr3xLookLayout(options.lookLayout, filmCount ?? 0);
       const r = await this.fixedGr3x(softFocus, looks, menu, !!options.adjSoftFocus, !!options.dateStamp,
         (options.shutdownPictures ?? []).map(p => ({ id: p.id, name: p.name, jpeg: p.jpeg })), 'submenu', 'submenu',
-        { round7, round8, round9, ...(lookLayout ? { lookLayout } : {}) });
+        { round7, round8, round9, round10, ...(lookLayout ? { lookLayout } : {}) });
       return { ...r, file: r.file.slice() };
     }
     if (this.layout === null || !this.info.capabilities.build) requireGr3xPort('custom firmware');

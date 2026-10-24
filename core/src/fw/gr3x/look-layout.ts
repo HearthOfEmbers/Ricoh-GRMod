@@ -49,6 +49,9 @@ const fail = (code: string, m: string): never => { throw new FirmwareError(code,
 const lo = (v: number) => v & 0xffff, hi = (v: number) => v >>> 16;
 const addr = (r: string, a: number) => `movw ${r},#${lo(a)};movt ${r},#${hi(a)};`;
 
+/** The movie list's count (`movls r0,#10`). */
+export const GR3X_MOVIE_COUNT = COUNT_MOVIE;
+
 export function gr3xFactoryLookOrder(films: number): number[] {
   return [...GR3X_STILL_LOOKS, ...Array.from({ length: films }, (_, k) => GR3X_FIRST_FILM_LOOK + k)];
 }
@@ -69,13 +72,13 @@ export function isGr3xFactoryLayout(layout: Gr3xLookLayout, films: number): bool
   return layout.hidden.length === 0 && layout.order.length === f.length && layout.order.every((v, i) => v === f[i]);
 }
 
-/** The three lists: still (Image Control, ADJ), movie, RAW development. */
-export function gr3xLookLists(layout: Gr3xLookLayout, films: number) {
+/** The three lists: still (Image Control, ADJ), movie, RAW development. Round 10: the films are in the movie list too. */
+export function gr3xLookLists(layout: Gr3xLookLayout, films: number, round10 = false) {
   validateGr3xLookLayout(layout, films);
   const shown = layout.order.filter(id => !layout.hidden.includes(id));
   return {
     still: shown,
-    movie: shown.filter(id => GR3X_MOVIE_LOOKS.includes(id)),
+    movie: shown.filter(id => GR3X_MOVIE_LOOKS.includes(id) || (round10 && id >= GR3X_FIRST_FILM_LOOK)),
     raw: shown.filter(id => GR3X_STILL_LOOKS.includes(id)),
   };
 }
@@ -107,10 +110,10 @@ export function checkGr3xLookLayoutSites(p: Pick<Gr3xLookLayoutProgram, 'u32' | 
  * The lists of a layout. `films`: the build's films (their entries come from here too: in a build
  * with films this replaces image-control-research.ts's count, entry and reverse lookups).
  */
-export function installGr3xLookLayout(p: Gr3xLookLayoutProgram, layout: Gr3xLookLayout, films: number) {
+export function installGr3xLookLayout(p: Gr3xLookLayoutProgram, layout: Gr3xLookLayout, films: number, round10 = false) {
   checkGr3xLookLayoutSites(p);
-  const L = gr3xLookLists(layout, films);
-  if (!L.still.length || !L.movie.length || !L.raw.length || L.still.length > 255 || L.movie.length > GR3X_MOVIE_LOOKS.length) fail('internal', 'list lengths');
+  const L = gr3xLookLists(layout, films, round10);
+  if (!L.still.length || !L.movie.length || !L.raw.length || L.still.length > 255 || L.movie.length > GR3X_MOVIE_LOOKS.length + (round10 ? films : 0)) fail('internal', 'list lengths');
   const still = p.append(Uint8Array.from(L.still)), movie = p.append(Uint8Array.from(L.movie)), raw = p.append(Uint8Array.from(L.raw));
   // Count: still (byte 0) or RAW development (2); r3 holds the byte, the flags are those of `cmp r0,#2`.
   const count = p.code(`bhi #${COUNT_STILL + 4};cmp r3,#0;moveq r0,#${L.still.length};movne r0,#${L.raw.length};b #${COUNT_STILL + 8};`);

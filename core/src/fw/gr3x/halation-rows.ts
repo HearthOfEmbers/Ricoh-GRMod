@@ -58,7 +58,10 @@ export interface Gr3xHalationRowsOptions {
   /** Texts: the Halation row's name, the Colour row's name. Icons: the halation icon, the colour scale, red and white lights. */
   halationText: number; colourText: number; halationIcon: number; colourScale: number; redIcon: number; whiteIcon: number;
   /** slots3.c: sp_hal / sp_hal_put / sp_hal_text, sp_col / sp_col_put, sp_hal_backup / sp_hal_restore. */
-  hal: number; halPut: number; halText: number; col: number; colPut: number; backup: number; restore: number;
+  hal: number; halPut: number; halText: number; col: number; colPut: number;
+  /** Rounds 7..9: the settings kept and put back with the screen's own (round 10: the Toning byte is
+   * one of the parameters the screen backs up and restores itself). */
+  backup?: number; restore?: number;
 }
 
 const bl = (at: number, target: number) => (0xeb000000 | (((target - (at + 8)) >> 2) & 0xffffff)) >>> 0;
@@ -174,8 +177,8 @@ export function installGr3xHalationRows(p: Gr3xHalationRowsProgram, o: Gr3xHalat
     p.patch(at, branchWord(at, target), branchWord(at, stub), what);
     return stub;
   };
-  const backup = thunk(BACKUP, BACKUP_BODY, o.backup, 'halation: kept when the parameter screen opens');
-  const restore = thunk(RESTORE, RESTORE_BODY, o.restore, 'halation: put back on Cancel');
+  const backup = o.backup !== undefined ? thunk(BACKUP, BACKUP_BODY, o.backup, 'halation: kept when the parameter screen opens') : undefined;
+  const restore = o.restore !== undefined ? thunk(RESTORE, RESTORE_BODY, o.restore, 'halation: put back on Cancel') : undefined;
   return { table, lists: [l0, l12], base, subtitle, start15, position15, text15, icon15, setter15,
-    scale10, positions10, start10, position10, text10, icon10, setter10, backup, restore };
+    scale10, positions10, start10, position10, text10, icon10, setter10, ...(backup !== undefined ? { backup, restore } : {}) };
 }

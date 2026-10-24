@@ -12,7 +12,11 @@ import type { Gr3xResearchLook } from './image-control-research';
 import { GR3X_160, openGr3xOfficial } from './profile';
 import { GR3X_PARAMETER_SETTER_LOOKS, GR3X_STANDARD_ACTIVE_CHECKS, GR3X_STANDARD_ACTIVE_CHECKS_SET0, GR3X_TONE_READS,
   GR3X_PHOTO_STYLE_SETTERS, GR3X_LOAD_CALL, GR3X_LOAD_DATA, GR3X_SAVE_CALL, GR3X_SAVE_DATA,
-  GR3X_ZERO_FILL_END, GR3X_GAP, GR3X_HEAP_BASE } from './look-addresses';
+  GR3X_ZERO_FILL_END, GR3X_GAP, GR3X_HEAP_BASE, GR3X_R10_TONE_READS } from './look-addresses';
+import { GR3X_TONE_RECORD_TAIL, installGr3xR10Parameters, installGr3xR10PictureInfo, installGr3xR10Raw, installGr3xR10Tables } from './films-r10';
+import { gr3xFactoryLookOrder } from './look-layout';
+import { installGr3xGuardR10 } from './guard';
+import { gr3xRawDevelopmentWordsR10 } from './datestamp';
 import { GR3X_SLOTS_NATIVE } from './slots-native';
 import { GR3X_SLOTS2_NATIVE } from './slots2-native';
 import { GR3X_SLOTS3_NATIVE } from './slots3-native';
@@ -186,6 +190,9 @@ export async function buildGr3xImageControls(raw: Uint8Array, options: Gr3xLookO
   // black-and-white one). From round 9 it reads the look itself (no adapter there).
   const round9 = features.round9 === true;
   if (round9 && !round8) throw new FirmwareError('bad-edit', 'IIIx round 9 builds on round 8');
+  // Round 10 (films-r10.ts): the films as looks of their own, GR IV's way.
+  const round10 = features.round10 === true;
+  if (round10 && !round9) throw new FirmwareError('bad-edit', 'IIIx round 10 builds on round 9');
   if (round6 && (!extended || options.ownParameters !== true || options.jpegDiagnostics || !Number.isInteger(options.filmCount) ||
       options.filmCount! < 1 || options.filmCount! > GR3X_MAX_FILMS || options.films?.some(f => f.halation !== undefined)))
     throw new FirmwareError('bad-edit', 'IIIx film count: 1..20 films with their own parameters (Halation is set in the camera)');
@@ -251,6 +258,8 @@ export async function buildGr3xImageControls(raw: Uint8Array, options: Gr3xLookO
     const curveId = 0x47430000 + id;
     if (spec.film || spec.base === 20) {
       const rec = originalRead(u32(0x55018d94 + spec.base * 4), 84);
+      // Round 10: words 17..20 as the camera's start-up gives its own records (0x536eb0e4).
+      if (round10) rec.set(originalRead(GR3X_TONE_RECORD_TAIL, 16), 68);
       const quantized = spec.film ? filmBytes(spec.film, matrix) : undefined;
       // HDR uses IIIx's own local-tone processing with a neutral luma matrix.
       const q = quantized?.matrixQ13 ?? Int16Array.from([2449,4809,934,2449,4809,934,2449,4809,934]);
@@ -281,7 +290,7 @@ export async function buildGr3xImageControls(raw: Uint8Array, options: Gr3xLookO
   // Round 6: slots2.c (Halation Off / Weak / Strong); round 7: slots3.c (strength and colour,
   // preset fingerprints).
   // Round 8: slots3.c with -DHIDDEN_FILMS (a hidden film in the standard set handled like a removed one).
-  const own2 = round8 ? GR3X_SLOTS4_NATIVE : round7 ? GR3X_SLOTS3_NATIVE : round6 ? GR3X_SLOTS2_NATIVE : undefined;
+  const own2 = round10 ? undefined : round8 ? GR3X_SLOTS4_NATIVE : round7 ? GR3X_SLOTS3_NATIVE : round6 ? GR3X_SLOTS2_NATIVE : undefined;
   const own2Origin = own2 ? append(unhex(own2.code)) : 0;
   const own2Entry = (name: keyof typeof GR3X_SLOTS3_NATIVE.exports) => {
     const exports = own2!.exports as Record<string, number>;
@@ -316,10 +325,24 @@ export async function buildGr3xImageControls(raw: Uint8Array, options: Gr3xLookO
     patch(GR3X_LIVE_FLAGS_END, 0xe5c411a5, branchWord(GR3X_LIVE_FLAGS_END, stub), 'films: a look change also marks the live view\'s gamma (curves)');
     return stub;
   })() : undefined;
-  const adapters = GR3X_TONE_READS.filter(([at]) => !(round9 && at === GR3X_LIVE_LOOK_READ)).map(([at, word]) => {
+  const adapters = (round10 ? GR3X_R10_TONE_READS : GR3X_TONE_READS.filter(([at]) => !(round9 && at === GR3X_LIVE_LOOK_READ))).map(([at, word]) => {
     const dst = (word >>> 12) & 15, src = (word >>> 16) & 15;
     const scratch = [0,1,2,3].find(r => r !== dst && r !== src)!;
-    const entry = at === GR3X_DEVELOP_LOOK_READ && round6 ? (() => {
+    const entry = at === GR3X_DEVELOP_LOOK_READ && round10 ? (() => {
+      if (word !== 0xe5d3277c) throw new FirmwareError('unexpected-instruction', 'IIIx development look read changed');
+      // Round 10 (GR IV's STASH_ASM): ldrb r2,[r3,#0x77c]; the stash gets look | level << 8 | 0x10000
+      // (| 0x20000 white), the level from a film's Toning byte (+0x786, GR IV's states: 0 off, 1 / 3 / 2
+      // weak / medium / strong red, 4..6 white, 7..11 off); a film 64 + k as 32 + k. In RAW
+      // development also GR IV's frame look and orientation words. Registers and flags as before, but
+      // r2 (the look, a film as Standard).
+      return code(`push {r0-r5,ip,lr};mrs r4,cpsr;ldrb r2,[r3,#0x77c];mov r0,#0;sub ip,r2,#${GR3X_FIRST_FILM};cmp ip,#${capacity - 1};bhi nolevel;
+        ldrb r1,[r3,#0x786];cmp r1,#7;movhs r1,#0;cmp r1,#4;subhs r1,r1,#3;orrhs r0,r0,#0x20000;bhs level;
+        cmp r1,#3;moveq r1,#2;beq level;cmp r1,#2;moveq r1,#3;level:orr r0,r0,r1,lsl #8;
+        nolevel:cmp r2,#${GR3X_FIRST_FILM};subhs ip,r2,#${GR3X_FIRST_FILM - GR3X_STASH_FILM};movlo ip,r2;orr ip,ip,r0;orr ip,ip,#0x10000;
+        ${addr(1, GR3X_HALATION_STASH)}str ip,[r1];` +
+        (round8Date ? `ldr r1,[sp,#4];${gr3xRawDevelopmentWordsR10('r1', 'ip', 'r0', 'r5')}` : '') +
+        map(2) + `str r2,[sp,#8];msr cpsr_f,r4;pop {r0-r5,ip,lr};b #${at + 4};`);
+    })() : at === GR3X_DEVELOP_LOOK_READ && round6 ? (() => {
       if (word !== 0xe5d3277c) throw new FirmwareError('unexpected-instruction', 'IIIx development look read changed');
       // ldrb r2,[r3,#0x77c]: also store look | level << 8 | valid in the stash, the level being the
       // film's Halation in the active photo set (slots2.c; 0 for any other look). Registers and
@@ -357,13 +380,13 @@ export async function buildGr3xImageControls(raw: Uint8Array, options: Gr3xLookO
   if (aggregate !== undefined) patch(0x53279a08, 0xe1a01006, branchWord(0x53279a08, aggregate), 'image control: fixed preset parameters in native property transaction');
   // RAW development safely falls back to each original base. It does not
   // pretend an imported film can be reconstructed from the native EXIF enum.
-  const rawEnum = code(map(1) + 'sub r1,r1,#11;b #0x53288d60;');
-  patch(0x53288d5c, 0xe241100b, branchWord(0x53288d5c, rawEnum), 'image control: RAW development native-base fallback');
+  const rawEnum = round10 ? undefined : code(map(1) + 'sub r1,r1,#11;b #0x53288d60;');
+  if (rawEnum !== undefined) patch(0x53288d5c, 0xe241100b, branchWord(0x53288d5c, rawEnum), 'image control: RAW development native-base fallback');
   const restriction = code(map(1) + 'cmp r1,#0;b #0x53553ad8;');
   patch(0x53553ad4, 0xe3510000, branchWord(0x53553ad4, restriction), 'image control: preserve native shooting-mode restrictions');
   // Native default getters assert on unknown IDs. Fixed new presets have their
   // own values; every other ID still executes the original validation.
-  const defaults = DEFAULTS.map(([at, offset]) => {
+  const defaults = round10 ? [] : DEFAULTS.map(([at, offset]) => {
     // Only parameters Standard has (its native default getter answers) follow Standard;
     // the others keep the fixed value, as Standard's getter would assert.
     const entry = adjustable && STANDARD_PARAMETERS.includes(offset) ? code(map(1) + `mov ip,sp;b #${at + 4};`)
@@ -386,14 +409,14 @@ export async function buildGr3xImageControls(raw: Uint8Array, options: Gr3xLookO
     branchWord(0x536dc124, enforce, 14, true), 'image control: films always render with their fixed parameters');
   // Parameter setters (SetSaturation etc.) take the current look from 0x53549ee8 and do
   // nothing for an unknown one; for a film they now act on Standard.
-  const setters = adjustable ? GR3X_PARAMETER_SETTER_LOOKS.map(at => {
+  const setters = adjustable && !round10 ? GR3X_PARAMETER_SETTER_LOOKS.map(at => {
     const entry = code(`push {lr};bl #0x53549ee8;` + map(0) + `pop {pc};`);
     patch(at, branchWord(at, 0x53549ee8, 14, true), branchWord(at, entry, 14, true), 'image control: film parameter write uses Standard storage');
     return { address: at, entry };
   }) : [];
   // After a stored write, each Standard setter updates the live value only when the stored
   // look of the active set is Standard (ldrb [..,#0x1c2/0x1c4/0x1c6]; cmp #11).
-  const activeChecks = adjustable ? GR3X_STANDARD_ACTIVE_CHECKS.map(([at, word]) => {
+  const activeChecks = adjustable && !round10 ? GR3X_STANDARD_ACTIVE_CHECKS.map(([at, word]) => {
     const dst = (word >>> 12) & 15, src = (word >>> 16) & 15, offset = word & 0xfff;
     const scratch = [0,1,2,3].find(r => r !== dst && r !== src)!;
     const entry = code(`push {r${scratch}};mrs r${scratch},cpsr;ldrb r${dst},[r${src},#${offset}];` +
@@ -401,7 +424,7 @@ export async function buildGr3xImageControls(raw: Uint8Array, options: Gr3xLookO
     patch(at, word, branchWord(at, entry), 'image control: a film counts as Standard for the live-value update');
     return { address: at, entry, sourceRegister: src, destinationRegister: dst };
   }) : [];
-  const activeChecksSet0 = adjustable ? GR3X_STANDARD_ACTIVE_CHECKS_SET0.map(at => {
+  const activeChecksSet0 = adjustable && !round10 ? GR3X_STANDARD_ACTIVE_CHECKS_SET0.map(at => {
     // ldr r3,[r3,#0x1c0] reads the active set (byte 0) and set 0's stored look (byte 2).
     const entry = code(`push {r0,r1};mrs r0,cpsr;ldr r3,[r3,#0x1c0];and r1,r3,#0xff0000;` +
       mapped.map(s => `cmp r1,#${s.id << 16};biceq r3,r3,#0xff0000;orreq r3,r3,#${s.nativeBase << 16};`).join('') +
@@ -415,7 +438,22 @@ export async function buildGr3xImageControls(raw: Uint8Array, options: Gr3xLookO
   // values as always. The table is HTData record 12, loaded after the settings and saved after
   // them at power off. Its pointer lives in the 12 unused bytes between the zero-filled data and
   // the heap: the start-up fill is extended to cover them, so the pointer is 0 at every start.
-  const own = adjustable && options.ownParameters === true ? (() => {
+  // Round 10: the films' module (native/films.c), the settings guard through the scaffold, the
+  // picture's information and RAW development (films-r10.ts).
+  const r10Program = { code, append, patch, u32, read: originalRead, sites, next };
+  const r10 = round10 ? (() => {
+    const layout = features.lookLayout && !isGr3xFactoryLayout(features.lookLayout, capacity) ? features.lookLayout : undefined;
+    const hiddenMask = (layout?.hidden ?? []).filter(id => id >= GR3X_FIRST_FILM && id < GR3X_FIRST_FILM + capacity).reduce((m, id) => (m | (1 << (id - GR3X_FIRST_FILM))) >>> 0, 0);
+    const tables = installGr3xR10Tables(r10Program, slots.filter(s => s.record).map(s => ({ id: s.id, record: s.record, iconId: s.iconId, print: s.print })));
+    const params = installGr3xR10Parameters(r10Program, { films: capacity, prints: slots.slice(0, capacity).map(s => s.print >>> 0), hiddenMask, setterSites: GR3X_PARAMETER_SETTER_LOOKS });
+    const guard = installGr3xGuardR10({ code, patch, u32, sites }, { films: capacity, maxRatio: gr3xMaxId(menu.menu), ...(layout ? { hidden: layout.hidden } : {}),
+      ...(features.adjSoftFocus ? { softFocusR10: true } : {}) }, params.moduleSymbols.sp_before_recall);
+    const order = (layout ? layout.order.filter(id => !layout.hidden.includes(id)) : gr3xFactoryLookOrder(capacity));
+    const raw = installGr3xR10Raw(r10Program, { films: capacity, order, module: params.moduleSymbols });
+    const info = installGr3xR10PictureInfo(r10Program, capacity, slots[0].iconId);
+    return { ...tables, ...params, ...guard, ...raw, ...info };
+  })() : undefined;
+  const own = adjustable && options.ownParameters === true && !round10 ? (() => {
     const native = own2 ?? GR3X_SLOTS_NATIVE;
     const origin = own2 ? own2Origin : append(unhex(native.code));
     const entry = (name: 'sp_style' | 'sp_after_load' | 'sp_after_save' | 'sp_before_recall') => origin + (native.exports as Record<string, number>)[name];
@@ -455,11 +493,13 @@ export async function buildGr3xImageControls(raw: Uint8Array, options: Gr3xLookO
     return { module: origin, moduleSha256: native.sourceSha256, styles, load, save, exports: { ...native.exports } };
   })() : undefined;
   // Round 7: the Halation and Colour rows of a film on the parameter screen (halation-rows.ts).
+  const sym = r10?.moduleSymbols;
   const halationRows = round7 ? installGr3xHalationRows({ code, append, patch, u32: (a: number) => u32(a), read: originalRead },
     { films: capacity, halationText: menu.extraTextIds[0], colourText: menu.extraTextIds[1], halationIcon: menu.extraIconIds[0],
       colourScale: menu.extraIconIds[1], redIcon: menu.extraIconIds[2], whiteIcon: menu.extraIconIds[3],
-      hal: own2Entry('sp_hal'), halPut: own2Entry('sp_hal_put'), halText: own2Entry('sp_hal_text'), col: own2Entry('sp_col'), colPut: own2Entry('sp_col_put'),
-      backup: own2Entry('sp_hal_backup'), restore: own2Entry('sp_hal_restore') }) : undefined;
+      ...(sym ? { hal: sym.sp_hal, halPut: sym.sp_hal_put, halText: sym.sp_hal_text, col: sym.sp_col, colPut: sym.sp_col_put }
+        : { hal: own2Entry('sp_hal'), halPut: own2Entry('sp_hal_put'), halText: own2Entry('sp_hal_text'), col: own2Entry('sp_col'), colPut: own2Entry('sp_col_put'),
+          backup: own2Entry('sp_hal_backup'), restore: own2Entry('sp_hal_restore') }) }) : undefined;
   // Round 6: the Halation line of a film on the parameter screen (halation-screen.ts).
   const halationScreen = round6 && !round7 ? installGr3xHalationScreen({ code, append, patch, u32: (a: number) => u32(a), read: originalRead },
     { films: capacity, textId: menu.extraTextIds[0], iconId: menu.extraIconIds[0], scaleIconId: menu.extraIconIds[1],
@@ -500,12 +540,13 @@ export async function buildGr3xImageControls(raw: Uint8Array, options: Gr3xLookO
     ...(round7 ? { halation7: { light: slots.slice(0, capacity).map(s => s.quantizedCurves ? halationLight(s.quantizedCurves, s.postQ9) : PLAIN_LIGHT) } } : {}),
     diagnostics: options.jpegDiagnostics === true,
   });
-  const descriptor = code(`push {r1-r3,ip};ldrb r2,[r7,#0x77c];` +
+  // Round 10: the film's record comes from the descriptor's own table (films-r10.ts).
+  const descriptor = round10 ? undefined : code(`push {r1-r3,ip};ldrb r2,[r7,#0x77c];` +
     slots.filter(s => s.record).map(s => `cmp r2,#${s.id};beq slot${s.id};`).join('') +
     `b done;` + slots.filter(s => s.record).map(s => `slot${s.id}:${addr(3, s.record)}str r3,[r4,#8];` +
       (s.nativeBase === 20 ? 'mov r3,#1;strb r3,[r4,#0x79];' : '') + 'b done;').join('') +
     'done:pop {r1-r3,ip};b #0x536f00c4;');
-  patch(0x536dc690, branchWord(0x536dc690, 0x536f00c4, 14, true),
+  if (descriptor !== undefined) patch(0x536dc690, branchWord(0x536dc690, 0x536f00c4, 14, true),
     branchWord(0x536dc690, descriptor, 14, true), 'image control: selected immutable matrix record');
   const imported = slots.filter(s => s.curves);
   const gamma = code(`cmp r2,#0;bne native;ldrb ip,[r1,#0x77c];` +
@@ -525,15 +566,16 @@ export async function buildGr3xImageControls(raw: Uint8Array, options: Gr3xLookO
     append: { address: menu.append.address, bytes: hex(payload) },
     addedLooks: slots, renderingImplemented: true as const,
     lookEntries: { aggregate, rawEnum, restriction, enforce, descriptor, gamma, defaults, adapters, setters, activeChecks, activeChecksSet0, ...(liveGamma ? { liveGamma } : {}),
-      ...(own ? { ownParameters: own } : {}), ...(postMatrix ? { postMatrix } : {}), ...(jpeg ? { jpeg } : {}),
+      ...(own ? { ownParameters: own } : {}), ...(r10 ? { films: r10 } : {}), ...(postMatrix ? { postMatrix } : {}), ...(jpeg ? { jpeg } : {}),
       ...(halationScreen ? { halationScreen } : {}), ...(halationRows ? { halationRows } : {}) },
     ...(round6 ? { filmCount: capacity, halationInCamera: true } : {}),
     ...(round7 ? { round7: true, monoFilms } : {}),
     ...(round9 ? { round9: true } : {}),
+    ...(round10 ? { round10: true } : {}),
     ...(round8 ? { round8: true, ...(features.lookLayout && !isGr3xFactoryLayout(features.lookLayout, capacity) ? { lookLayout: { order: [...features.lookLayout.order], hidden: [...features.lookLayout.hidden] } } : {}) } : {}),
     // sharedParameters: films use Standard's storage (T6c). ownParameters: on top of it, each film's
     // values are swapped into that storage when it is selected (T6d).
-    sharedParameters: adjustable, ownParameters: !!own,
+    sharedParameters: adjustable && !round10, ownParameters: !!own || !!r10,
     // A patch-set is not a firmware update. Packaging and native regression checks
     // are separate; camera behavior remains unverified until the user tests it.
     flashable: false as const, cameraUpdateCandidate: false as const, hardwareTested: false,

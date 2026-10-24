@@ -19,6 +19,10 @@ tools/gr3x/native/endscreen.c), every patch of the manifest installed, against t
   - the power-off picture for every camera variant and stored value (none, each picture, an
     unknown identity, round 5's picture numbers, no record): the chosen picture's table number,
     else the camera's own; the table copied with the pictures.
+Round 10 (GR IV's shutdown.c): the choice is HTData record 13 of the settings store ({ 'MSDO',
+choice }, the store substituted): confirm writes it and nothing of the records; a missing record
+reads the padding bytes rounds 6..9 kept (taken over); the save hook runs the save it continues,
+then writes the choice again.
 UI widgets and singletons are substitutes; the camera's menus, keys and display are not executed.
 """
 import argparse,hashlib,json,struct
@@ -74,6 +78,11 @@ class Ui:
             c.mem_write(r,bytes(data))
             c.mem_write(UD+4+4*i,struct.pack('<I',r if pointers else 0))
     def snapshot(s):return [bytes(s.uc.mem_read(r,0xb28)) for r in RECS]
+    def choose(s,choice=None,aae=0,pointers=True):
+        """The stored choice: round 10 the record (the padding bytes another value), else the padding."""
+        if getattr(s,'r10',False):
+            s.records(choice=0x00badd00,aae=aae,pointers=pointers);s.record(choice)
+        else:s.records(choice=choice,aae=aae,pointers=pointers)
     def run(s,at,*args):
         s.log=[];c=s.uc
         for i in range(13):c.reg_write(getattr(reg,'UC_ARM_REG_R'+str(i)),0)
@@ -85,11 +94,29 @@ class Ui:
         assert [c.reg_read(getattr(reg,'UC_ARM_REG_R'+str(i))) for i in range(4,12)]==[0x12340000+i for i in range(4,12)]
         return c.reg_read(reg.UC_ARM_REG_R0)
 
+STORAGE,STORE_WRITE,STORE_READ,STORE_SIZE=0x53828014,0x53829a08,0x53829fcc,0x53829e50
+STORE,HT=0x6207e000,0x6207f000;REC_MAGIC=0x4f44534d
+
 class Patched(Ui,PictureProbe):
     def __init__(s,data,manifest):
         PictureProbe.__init__(s,data,manifest);s.log=[];s.selected=0;s.built=None
+        s.r10=bool(manifest.get('round10'));s.store={};s.saved=0
+        s.save_native=manifest['entries'].get('settingsSaveNative')
+        if s.r10:s.uc.mem_write(STORE,bytes(0x40));s.uc.mem_write(STORE+0x14,struct.pack('<I',HT))
     def _hook(s,cpu,at,size,user):
+        R=lambda n:cpu.reg_read(getattr(reg,'UC_ARM_REG_R%d'%n))
+        if s.r10 and at==STORAGE:ret(cpu,STORE);return
+        if s.r10 and at in (STORE_SIZE,STORE_READ,STORE_WRITE):
+            assert R(0)==HT and R(1)==13,(hex(at),R(0),R(1))
+            if at==STORE_SIZE:ret(cpu,len(s.store.get(13,b'')));return
+            if at==STORE_READ:
+                b=s.store.get(13);assert b is not None and R(2)==len(b);cpu.mem_write(R(3),b);ret(cpu,1);return
+            s.store[13]=bytes(cpu.mem_read(R(3),R(2)));s.log.append(('store',s.store[13]));ret(cpu,1);return
+        if s.r10 and at==s.save_native:s.saved+=1;ret(cpu,0x5a);return
         if not s.ui_hook(cpu,at):PictureProbe._hook(s,cpu,at,size,user)
+    def record(s,choice):
+        if choice is None:s.store.pop(13,None)
+        else:s.store[13]=struct.pack('<II',REC_MAGIC,choice)
 
 class Official(Ui,RearDialProbe):
     def __init__(s,data):
@@ -180,7 +207,7 @@ def verify(data,manifest):
     pic=0
     for stored in [None,0]+choices+[0xdeadbeef,1<<24,8<<24]:
         chosen=1+choices.index(stored) if stored in choices else 0
-        p.controller();p.records(choice=stored);before=p.snapshot()
+        p.controller();p.choose(stored);before=p.snapshot()
         p.run(REFRESH,CTL);calls+=1
         rows=[('shown',LIST,1+n),('title',TVIEW,ids['pictureText'])]
         for r in range(1+n):rows+= [('item',LIST,r),('check',CHILD,int(r==chosen)),('text',CHILD,ids['factoryText']+r)]
@@ -190,16 +217,20 @@ def verify(data,manifest):
         # The Picture line: the current choice's name; the Type line: the camera's value text.
         p.run(e['endScreenLinePicture'],0x62056000,0x6205b000);assert p.log==[('line',0x6205b000,ids['factoryText']+chosen)];calls+=1
         for aae in (0,1):
-            p.records(choice=stored,aae=aae);p.run(e['endScreenLineType'],0x62056000,0x6205b000);calls+=1
+            p.choose(stored,aae=aae);p.run(e['endScreenLineType'],0x62056000,0x6205b000);calls+=1
             assert p.log==[('textof',aae),('line',0x6205b000,0x7000+aae)],p.log
         # Confirm each row: the identity in all eight copies (bytes 0x9a9..0x9ab, 0x9a3), nothing else.
         for row in range(1+n):
-            p.records(choice=stored);p.selected=row;before=p.snapshot()
+            p.choose(stored);p.selected=row;before=p.snapshot()
             assert p.run(CONFIRM,CTL)==1;calls+=1
             want=0 if row==0 else choices[row-1]
-            for b,a in zip(before,p.snapshot()):
-                exp=bytearray(b);exp[0x9a9:0x9ac]=struct.pack('<I',want)[:3];exp[0x9a3]=want>>24
-                assert a==bytes(exp)
+            if p.r10:
+                # Round 10: the record, nothing of the settings records.
+                assert p.snapshot()==before and p.store.get(13)==struct.pack('<II',REC_MAGIC,want)
+            else:
+                for b,a in zip(before,p.snapshot()):
+                    exp=bytearray(b);exp[0x9a9:0x9ac]=struct.pack('<I',want)[:3];exp[0x9a3]=want>>24
+                    assert a==bytes(exp)
             assert [x for x in p.log if x[0] in ('check','text')]==[y for r in range(1+n) for y in (('check',CHILD,int(r==row)),('text',CHILD,ids['factoryText']+r))]
             pic+=1
         # Up / down at every row, with and without key repeat.
@@ -217,8 +248,26 @@ def verify(data,manifest):
                 icon=ids['factoryIcons'][variant if variant<5 else 0] if row==0 else ids['icons'][row-1]
                 assert [x for x in p.log if x[0] in ('icon','visible')]==[('icon',GRAPH,icon),('visible',GRAPH,1)],(variant,row,p.log)
     # No record at all: the factory picture, nothing written.
-    p.controller();p.records(choice=choices[0],pointers=False);p.selected=1
-    assert p.run(CONFIRM,CTL)==1;p.run(REFRESH,CTL);assert ('check',CHILD,1) in p.log and p.log[-1]==('focus',LIST,0);calls+=2
+    if p.r10:
+        # Round 10: no settings records: the store alone decides; a missing record reads the padding
+        # (none here: the factory picture).
+        p.controller();p.records(choice=choices[0],pointers=False);p.record(None);p.selected=1
+        assert p.run(CONFIRM,CTL)==1 and p.store[13]==struct.pack('<II',REC_MAGIC,choices[0]);calls+=1
+        p.record(None);p.run(REFRESH,CTL);assert p.log[-1]==('focus',LIST,0);calls+=1
+        # Taken over: no record, the padding bytes of rounds 6..9 hold a picture of the list.
+        for k,x in enumerate(choices):
+            p.controller();p.records(choice=x);p.record(None);p.run(REFRESH,CTL);calls+=1
+            assert p.log[-1]==('focus',LIST,1+k) and 13 not in p.store
+        # The settings save: the save it continues, then the choice again (none: nothing written).
+        for stored in [None,0,0xdeadbeef]+choices:
+            p.records(choice=0);p.record(stored);p.saved=0;before=dict(p.store)
+            assert p.run(e['endScreenSave'],UD)==0x5a and p.saved==1;calls+=1
+            if stored in choices:assert p.store[13]==struct.pack('<II',REC_MAGIC,stored)
+            else:assert p.store==before
+        report['record']=13
+    else:
+        p.controller();p.records(choice=choices[0],pointers=False);p.selected=1
+        assert p.run(CONFIRM,CTL)==1;p.run(REFRESH,CTL);assert ('check',CHILD,1) in p.log and p.log[-1]==('focus',LIST,0);calls+=2
     report['picture_mode_cases']=pic
     # 7. The power-off picture.
     jt_lo,jt_hi=u32(c,0x5322e4b4),u32(c,0x5322e4bc);jt=(jt_lo&0xfff)|((jt_lo>>4)&0xf000)|(((jt_hi&0xfff)|((jt_hi>>4)&0xf000))<<16)
@@ -229,9 +278,12 @@ def verify(data,manifest):
     seen=0
     for variant in range(5):
         for stored,pointer in [(None,True),(0,True),(0xdeadbeef,True),(1<<24,True),(3<<24,True),(choices[0],False)]+[(x,True) for x in choices]:
-            p.variant=variant;p.records(choice=stored,pointers=pointer);p.requests=[];p.call(REQUEST,0x62056000);calls+=1
+            p.variant=variant;p.requests=[]
+            if p.r10:p.records(choice=0,pointers=pointer);p.record(stored)
+            else:p.records(choice=stored,pointers=pointer)
+            p.call(REQUEST,0x62056000);calls+=1
             assert len(p.requests)==1
-            want=13+choices.index(stored) if pointer and stored in choices else NATIVE_INDEX[variant]
+            want=13+choices.index(stored) if (pointer or p.r10) and stored in choices else NATIVE_INDEX[variant]
             assert p.requests[0][1]==want and p.requests[0][0]==0x6205e000,(variant,stored,pointer,p.requests)
             seen+=1
     report['picture_requests']=seen

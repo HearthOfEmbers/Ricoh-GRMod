@@ -33,7 +33,21 @@ typedef unsigned int u32;
 
 #define MAX_PICTURES 8u
 #define FACTORY 5u
+#ifdef STORE_RECORD
+/* Round 10 (GR IV's shutdown.c): the choice is a record of the camera's settings store, { magic,
+ * choice }, written when a row is confirmed and again after every settings save (power off), like
+ * the store's other records. GR IV keeps it in APData; GR III's APData has twelve records, all in
+ * use and fixed in number, so it is HTData record 13 (the films' table is 12). A missing record (the
+ * first start of this firmware) takes the choice that rounds 6..9 kept in the padding bytes. */
+#define ES_CTX_MAGIC 0x34455347u   /* 'GSE4' */
+#define REC_MAGIC 0x4f44534du      /* 'MSDO', GR IV's */
+#define STORAGE     ((void *(*)(void))0x53828014u)
+#define STORE_WRITE ((u32 (*)(void *, u32, u32, const void *))0x53829a08u)
+#define STORE_READ  ((u32 (*)(void *, u32, u32, void *))0x53829fccu)
+#define STORE_SIZE  ((u32 (*)(void *, u32))0x53829e50u)
+#else
 #define ES_CTX_MAGIC 0x33455347u   /* 'GSE3' */
+#endif
 
 struct es_ctx {
   u32 magic;
@@ -44,6 +58,10 @@ struct es_ctx {
   u16 pad;
   u32 choice[MAX_PICTURES];    /* stable identities */
   u32 resource[MAX_PICTURES];  /* numbers in the extended JPEG table */
+#ifdef STORE_RECORD
+  u32 record;                  /* HTData record of the choice */
+  u32 prior_save;              /* the settings save this hook continues */
+#endif
 };
 
 typedef void *(*get0_fn)(void);
@@ -77,11 +95,32 @@ static int row_of(const struct es_ctx *k, u32 choice) {
   return -1;
 }
 
-static u32 stored(void) {
+static u32 padding(void) {
   const volatile u8 *r = RECORDS[0];
   if (!r) return 0;
   return (u32)r[0x9a9] | (u32)r[0x9aa] << 8 | (u32)r[0x9ab] << 16 | (u32)r[0x9a3] << 24;
 }
+
+#ifdef STORE_RECORD
+struct record { u32 magic, choice; };
+
+static void *htdata(void) {
+  u8 *s = (u8 *)STORAGE();
+  return s ? *(void **)(s + 0x14) : 0;
+}
+
+static u32 stored_of(const struct es_ctx *k) {
+  struct record r = { 0, 0 };
+  void *ht = htdata();
+  if (!ht) return 0;
+  if (STORE_SIZE(ht, k->record) != sizeof r) return padding();
+  if (!STORE_READ(ht, k->record, sizeof r, &r) || r.magic != REC_MAGIC) return 0;
+  return r.choice;
+}
+#define stored() stored_of(k)
+#else
+#define stored() padding()
+#endif
 
 /* The chosen picture: an identity of the list, or 0 (factory). */
 u32 es_get(const struct es_ctx *k) {
@@ -91,6 +130,17 @@ u32 es_get(const struct es_ctx *k) {
   return row_of(k, choice) >= 0 ? choice : 0;
 }
 
+#ifdef STORE_RECORD
+static u32 put_record(const struct es_ctx *k, u32 choice) {
+  struct record r;
+  void *ht = htdata();
+  if (!ht) return 0;
+  r.magic = REC_MAGIC;
+  r.choice = choice;
+  return STORE_WRITE(ht, k->record, sizeof r, &r);
+}
+#define put(choice) put_record(k, choice)
+#else
 static void put(u32 choice) {
   u32 i;
   for (i = 0; i < COPIES; i++) {
@@ -99,6 +149,7 @@ static void put(u32 choice) {
     r[0x9a9] = (u8)choice; r[0x9aa] = (u8)(choice >> 8); r[0x9ab] = (u8)(choice >> 16); r[0x9a3] = (u8)(choice >> 24);
   }
 }
+#endif
 
 /* ---- the power-off picture ------------------------------------------------------------------ */
 
@@ -106,6 +157,18 @@ u32 es_pick(u32 number, const struct es_ctx *k) {
   int row = ok(k) ? row_of(k, es_get(k)) : -1;
   return row >= 0 ? k->resource[row] : number;
 }
+
+#ifdef STORE_RECORD
+/* Settings save (power off): the native save first, then the choice again (GR IV's sd_save). */
+u32 es_save(void *ud, const struct es_ctx *k) {
+  u32 result = ((u32 (*)(void *))k->prior_save)(ud);
+  if (ok(k)) {
+    u32 choice = es_get(k);
+    if (choice) put(choice);
+  }
+  return result;
+}
+#endif
 
 /* ---- the menu ------------------------------------------------------------------------------- */
 

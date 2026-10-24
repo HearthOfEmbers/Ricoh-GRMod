@@ -21,7 +21,9 @@ LOAD_DATA,LOAD_CALL,SAVE_DATA,SAVE_CALL,MEMCPY=0x5324b284,0x5324b754,0x5323f274,
 RECALL_FROM,RECALL_TO=0x53279fec,0x5327a008
 REGION=0x63000000;UD=REGION;RECS=REGION+0x1000
 
-def guarded(rec,films,max_ratio,hidden=()):
+SOFT=0x9a1;ADJ_SLOTS=(0x918,0x91a,0x91c,0x91e,0x920)
+
+def guarded(rec,films,max_ratio,hidden=(),soft_r10=False):
     out=bytearray(rec)
     for off in LOOKS:
         v=out[off]
@@ -29,19 +31,27 @@ def guarded(rec,films,max_ratio,hidden=()):
         # Round 8: a hidden look of the standard photo / movie set becomes Standard (the custom sets keep theirs).
         if off in (0x1c2,0x57e) and out[off] in hidden:out[off]=11
     if out[RATIO]>max_ratio:out[RATIO]=0
+    # Round 10: soft focus on (1..3) and on no slot as 0x09: the slots that hold 0x13 (rounds 6..9) get 0x09.
+    if soft_r10 and 1<=out[SOFT]<=3 and not any(out[f]==9 for f in ADJ_SLOTS):
+        for f in ADJ_SLOTS:
+            if out[f]==0x13:out[f]=9
     return bytes(out)
 
 class GuardProbe(AdjProbe):
     def __init__(self,data,manifest):
         super().__init__(data,manifest);self.uc.mem_map(REGION,0x40000);self.loads=0;self.saves=[]
+        # Round 10: the load and save are hooked at their entries (the settings scaffold): the
+        # firmware's own body is the scaffold's continuation.
+        e=manifest.get('entries',{})
+        self.load_native=e.get('settingsLoadNative',LOAD_DATA);self.save_native=e.get('settingsSaveNative',SAVE_DATA)
         # The films' table pointer (0x55804374, 0 here: slots3.c stays out of the way at a recall).
         try:self.uc.mem_map(0x55800000,0x100000)
         except Exception:pass
     def _hook(self,cpu,at,size,user):
         r=lambda n:cpu.reg_read(getattr(reg,'UC_ARM_REG_R'+str(n)))
-        if at==LOAD_DATA:
+        if at==self.load_native:
             assert r(0)==UD;self.loads+=1;cpu.reg_write(reg.UC_ARM_REG_R0,0x77);cpu.reg_write(reg.UC_ARM_REG_PC,cpu.reg_read(reg.UC_ARM_REG_LR))
-        elif at==SAVE_DATA:
+        elif at==self.save_native:
             assert r(0)==UD;self.saves.append([bytes(cpu.mem_read(RECS+i*0x1000,SIZE)) for i in range(8)])
             cpu.reg_write(reg.UC_ARM_REG_R0,0x5a);cpu.reg_write(reg.UC_ARM_REG_PC,cpu.reg_read(reg.UC_ARM_REG_LR))
         else:super()._hook(cpu,at,size,user)
@@ -63,25 +73,34 @@ def entries_of(manifest):
     """The guard's entries: in the adj layer (no films) or with the films' own parameters."""
     e=manifest['entries']
     if 'guardFixAll' in e:return dict(fix=e['guardFix'],fixAll=e['guardFixAll'],recall=e['guardRecall'],films=0,own=False)
-    own=manifest['lookEntries']['ownParameters']
+    # Round 10: with the films' module (films-r10.ts).
+    own=manifest['lookEntries'].get('films') or manifest['lookEntries']['ownParameters']
     return dict(fix=own['guardFix'],fixAll=own['guardFixAll'],recall=own['guardRecall'],films=manifest['filmCount'],own=True)
 
 def verify(data,manifest,seed=1107,rounds=400):
     g=entries_of(manifest);films=g['films'];max_ratio=max(r['id'] for r in manifest['menu'])
     hidden=tuple((manifest.get('lookLayout') or {}).get('hidden',()))
     assert not hidden or manifest.get('round8')
-    want=lambda rec,f,m:guarded(rec,f,m,hidden)
+    r10=bool(manifest.get('round10'));soft_r10=r10 and bool(manifest.get('adjSoftFocus'))
+    want=lambda rec,f,m:guarded(rec,f,m,hidden,soft_r10)
     assert max_ratio==3+sum(1 for r in manifest['menu'] if r['id']>=4)
     p=GuardProbe(data,manifest);cpu=p.uc;rng=random.Random(seed+films*31+max_ratio);calls=0;fixed=0
     # The hook sites point at the guard.
     sites={s['address']:s for s in manifest['sites']}
-    for at in (LOAD_CALL,SAVE_CALL,0x5327a004):assert at in sites and 'guard' in sites[at]['reason'],hex(at)
+    # (Round 10: through the settings scaffold at the load's and save's entries, the guard outermost.)
+    for at in ((LOAD_DATA,SAVE_DATA) if r10 else (LOAD_CALL,SAVE_CALL))+(0x5327a004,):assert at in sites and 'guard' in sites[at]['reason'],hex(at)
+    if r10:assert LOAD_CALL not in sites and SAVE_CALL not in sites
     # 1. fix(record): every value of every look and of the ratio (with a layout every hidden look
     # among them), then random records.
     for v in range(256):
         rec=bytearray(rng.randrange(256) for _ in range(SIZE))
         for off in LOOKS:rec[off]=v
-        rec[RATIO]=v;cpu.mem_write(RECS,bytes(rec))
+        rec[RATIO]=v
+        if soft_r10 and v%4==1:
+            # Round 10's soft focus: on / off, 0x13 / 0x09 / other on the slots.
+            rec[SOFT]=rng.choice((0,1,2,3,4,0xff))
+            for f in ADJ_SLOTS:rec[f]=rng.choice((0x13,9,0,4,0x14))
+        cpu.mem_write(RECS,bytes(rec))
         assert p.call(g['fix'],RECS) is not None;calls+=1
         got=bytes(cpu.mem_read(RECS,SIZE));assert got==want(rec,films,max_ratio),v
         fixed+=got!=bytes(rec)
@@ -104,10 +123,13 @@ def verify(data,manifest,seed=1107,rounds=400):
     # 3. Load and save (without films; with films slots_probe runs them with the films' table).
     load_save=False
     if not g['own']:
-        recs,ud=p.records(rng);p.run(LOAD_CALL,LOAD_CALL+4,{0:UD,4:UD});calls+=1
-        assert p.loads==1 and cpu.reg_read(reg.UC_ARM_REG_R4)==UD
+        recs,ud=p.records(rng)
+        if r10:p.run(LOAD_DATA,STOP,{0:UD})
+        else:p.run(LOAD_CALL,LOAD_CALL+4,{0:UD,4:UD})
+        calls+=1
+        assert p.loads==1 and (r10 or cpu.reg_read(reg.UC_ARM_REG_R4)==UD) and (not r10 or cpu.reg_read(reg.UC_ARM_REG_R0)==0x77)
         for i,rec in enumerate(recs):assert bytes(cpu.mem_read(RECS+i*0x1000,SIZE))==want(rec,films,max_ratio)
-        recs,ud=p.records(rng);p.run(SAVE_CALL,STOP,{0:UD});calls+=1
+        recs,ud=p.records(rng);p.run(SAVE_DATA if r10 else SAVE_CALL,STOP,{0:UD});calls+=1
         assert cpu.reg_read(reg.UC_ARM_REG_R0)==0x5a and len(p.saves)==1
         assert p.saves[0]==[want(rec,films,max_ratio) for rec in recs]
         load_save=True

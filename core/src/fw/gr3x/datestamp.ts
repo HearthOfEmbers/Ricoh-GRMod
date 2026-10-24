@@ -67,6 +67,8 @@ import { GR3X_JPEG_EXECUTE } from './jpeg-stage';
 import { GR3X_PICTURE_MENU_ID, installGr3xEndScreenSetup, installGr3xPictureList, installGr3xPictureSetupLine } from './shutdown';
 import { GR3X_END_SCREEN_ID as END_SCREEN_ID, GR3X_PICTURE_LIST_ID, GR3X_PICTURE_MODE } from './endscreen';
 import { GR3X_FRAME_LOOK, GR3X_GAP, GR3X_HEAP_BASE, GR3X_ORIENT_BYTE, GR3X_ZERO_FILL_END } from './look-addresses';
+import { GR3X_DATESTAMP_R10_CODE } from './picture-modules-r10';
+import { GR3X_R10 } from './round10';
 import type { Gr3xPictureIds } from './shutdown';
 
 export const GR3X_DATE_SETTINGS_POINTER = 0x55063f34;
@@ -168,8 +170,8 @@ const load16 = (n: string) => `movw r2,#${lo(GR3X_DATE_SETTINGS_POINTER)};movt r
 
 /** The module: round 8's (0.8.4 sources: orientation and the look's name, -DGR3_PACKED), round 7's
  * (0.8.2 sources: with the look fields) or, for the files of rounds 4..6, theirs. */
-export function gr3xDateModule(round: 6 | 7 | 8 = 8): Uint8Array {
-  const raw = Uint8Array.from(atob(round === 8 ? GR3X_DATESTAMP_CODE : round === 7 ? GR3X_DATESTAMP_R7_CODE : GR3X_DATESTAMP_R6_CODE), c => c.charCodeAt(0));
+export function gr3xDateModule(round: 6 | 7 | 8 | 10 = 8): Uint8Array {
+  const raw = Uint8Array.from(atob(round === 10 ? GR3X_DATESTAMP_R10_CODE : round === 8 ? GR3X_DATESTAMP_CODE : round === 7 ? GR3X_DATESTAMP_R7_CODE : GR3X_DATESTAMP_R6_CODE), c => c.charCodeAt(0));
   if (raw.length % 4) fail('date imprint module length');
   return raw;
 }
@@ -187,6 +189,8 @@ export interface Gr3xDateLook {
   /** Round 8 (as GR Mod 0.8.4): the look's name after the date and the imprint turned with the
    * camera, per look of the stash word (11..22 the camera's own, 32 + k film k) its name. */
   names?: Readonly<Record<number, string>>;
+  /** Round 10: GR IV's words for the orientation and the frame look (round10.ts's RAM words). */
+  r10?: boolean;
 }
 
 /** The camera's English names of its looks (GR III 2.10's texts 4, 268..278 through the name
@@ -232,7 +236,7 @@ function gr3xLookNameTable(p: Gr3xDateProgram, names: Readonly<Record<number, st
 export const GR3X_BEFORE_EXPOSE = 0x534322d8;
 const DIRECTION_SINGLETON = 0x553458b0;
 const ram = (r: string, label: string) => `cmp ${r},#0x40000000;blo ${label};cmp ${r},#0xc0000000;bhs ${label};tst ${r},#3;bne ${label};`;
-export function installGr3xExposureOrientation(p: Gr3xDateProgram, stash: number) {
+export function installGr3xExposureOrientation(p: Gr3xDateProgram, stash: number, r10 = false) {
   const guards: readonly (readonly [number, number])[] = [
     [GR3X_BEFORE_EXPOSE, 0xe1a0c00d], [GR3X_BEFORE_EXPOSE + 4, 0xe92dd830], // mov ip, sp; push {r4, r5, fp, ip, lr, pc}
     [GR3X_BEFORE_EXPOSE + 0x88, 0xe5c41946], // strb r1, [r4, #0x946] (the frame's date)
@@ -242,7 +246,16 @@ export function installGr3xExposureOrientation(p: Gr3xDateProgram, stash: number
     [0x535f63d0, 0xe28320c8], // the EXIF setter's +0x14: the record + 0xc8
   ];
   for (const [at, w] of guards) if (p.word(at) !== w >>> 0) fail(`IIIx exposure orientation guard at ${at.toString(16)}`);
-  const stub = p.code(`push {r0,r1};
+  // Round 10 (GR IV): the stash's word as it is (FRAME_LOOK), the direction | 0x100 (ORIENT_WORD).
+  const stub = r10 ? p.code(`push {r0,r1};
+    movw r0,#${lo(stash)};movt r0,#${hi(stash)};ldr r0,[r0];
+    movw r1,#${lo(GR3X_R10.frameLook)};movt r1,#${hi(GR3X_R10.frameLook)};str r0,[r1];
+    movw r0,#${lo(DIRECTION_SINGLETON)};movt r0,#${hi(DIRECTION_SINGLETON)};ldr r0,[r0];${ram('r0', 'done')}
+    ldr r0,[r0,#0x518];${ram('r0', 'done')}
+    ldr r0,[r0];${ram('r0', 'done')}
+    ldrb r0,[r0,#0xc8];cmp r0,#3;movhi r0,#0;orr r0,r0,#0x100;
+    movw r1,#${lo(GR3X_R10.orientWord)};movt r1,#${hi(GR3X_R10.orientWord)};str r0,[r1];
+    done:pop {r0,r1};mov ip,sp;b #${GR3X_BEFORE_EXPOSE + 4};`) : p.code(`push {r0,r1};
     movw r0,#${lo(stash)};movt r0,#${hi(stash)};ldr r0,[r0];tst r0,#0x10000;and r0,r0,#0xff;orrne r0,r0,#0x8000;moveq r0,#0;
     movw r1,#${lo(GR3X_FRAME_LOOK)};movt r1,#${hi(GR3X_FRAME_LOOK)};strh r0,[r1];
     movw r0,#${lo(DIRECTION_SINGLETON)};movt r0,#${hi(DIRECTION_SINGLETON)};ldr r0,[r0];${ram('r0', 'done')}
@@ -263,6 +276,14 @@ export function installGr3xExposureOrientation(p: Gr3xDateProgram, stash: number
  * step's hooks (image-control.ts, adj.ts): `arg` holds the argument + 0x8000, `a` and `b` are free
  * registers, r3 the record; the flags change.
  */
+/** Round 10 (GR IV's STASH_ASM): in RAW development the stash's word as FRAME_LOOK and the orientation | 0x100 as ORIENT_WORD. */
+export function gr3xRawDevelopmentWordsR10(arg: string, look: string, a: string, b: string): string {
+  return `ldrb ${a},[${arg},#0x2ac];cmp ${a},#0;bne rawdone;
+    movw ${b},#${lo(GR3X_R10.frameLook)};movt ${b},#${hi(GR3X_R10.frameLook)};str ${look},[${b}];
+    add ${b},r3,#0x71000;ldrb ${a},[${b},#0xe03];cmp ${a},#0;ldrbne ${a},[${b},#0xe04];ldrbeq ${a},[r3,#0xc8];cmp ${a},#3;movhi ${a},#0;orr ${a},${a},#0x100;
+    movw ${b},#${lo(GR3X_R10.orientWord)};movt ${b},#${hi(GR3X_R10.orientWord)};str ${a},[${b}];rawdone:`;
+}
+
 export function gr3xRawDevelopmentWords(arg: string, look: string, a: string, b: string): string {
   return `ldrb ${a},[${arg},#0x2ac];cmp ${a},#0;bne rawdone;
     tst ${look},#0x10000;and ${a},${look},#0xff;orrne ${a},${a},#0x8000;moveq ${a},#0;movw ${b},#${lo(GR3X_FRAME_LOOK)};movt ${b},#${hi(GR3X_FRAME_LOOK)};strh ${a},[${b}];
@@ -291,10 +312,12 @@ export function installGr3xDateImprintStage(p: Gr3xDateProgram, look?: Gr3xDateL
   // Monochrome model: always 0). Round 8: the orientation byte, the frame look and the names.
   const round8 = !!look?.names;
   const lookWords = look ? [look.stash, p.append(gr3xMonoTable(look.monoFilms)), p.code('mov r0,#0;bx lr;')] : [];
-  const r8Words = round8 ? [GR3X_ORIENT_BYTE, GR3X_FRAME_LOOK, gr3xLookNameTable(p, look!.names!)] : [];
+  const r10 = !!look?.r10;
+  const r8Words = round8 ? [r10 ? GR3X_R10.orientWord : GR3X_ORIENT_BYTE, r10 ? GR3X_R10.frameLook : GR3X_FRAME_LOOK, gr3xLookNameTable(p, look!.names!)] : [];
   const ctx = p.append(u32([CACHE, CACHE_FLUSH_FOR_READ, CACHE_CLEAN, PLATFORM, GET_TIME, GR3X_DATE_SETTINGS_POINTER, GR3X_DATE_OFFSET, ...lookWords, ...r8Words]));
-  const exposure = round8 ? installGr3xExposureOrientation(p, look!.stash) : {};
-  const module = p.append(gr3xDateModule(round8 ? 8 : look ? 7 : 6));
+  if (r10 && !round8) fail('IIIx date imprint: round 10 builds on round 8');
+  const exposure = round8 ? installGr3xExposureOrientation(p, look!.stash, r10) : {};
+  const module = p.append(gr3xDateModule(r10 ? 10 : round8 ? 8 : look ? 7 : 6));
   const stub = p.code(`push {r0-r3,ip,lr};ldr r1,[r1,#8];movw r0,#${lo(ctx)};movt r0,#${hi(ctx)};bl #${module};pop {r0-r3,ip,lr};
     mov ip,sp;b #${GR3X_JPEG_EXECUTE + 4};`);
   p.patch(GR3X_JPEG_EXECUTE, 0xe1a0c00d, branchWord(GR3X_JPEG_EXECUTE, stub), 'date imprint: JPEG encode step');
@@ -319,7 +342,9 @@ export function installGr3xMenuAdditions(p: Gr3xDateProgram, o: { date?: Gr3xDat
   onOffText?: boolean;
   /** Round 8 (as GR Mod 0.8.4): the third line Follow Orientation, four styles (with the look's name),
    * the Style values' labels as wide as the row allows. Needs `onOffText` and the submenu. */
-  round8?: boolean }) {
+  round8?: boolean;
+  /** Round 10: the start-up fill is already extended (round10.ts). */
+  zeroFillDone?: boolean }) {
   const iconOff = o.onOffText ? TEXT_ICON_OFF : ICON_OFF, iconOn = o.onOffText ? TEXT_ICON_ON : ICON_ON;
   const ids = o.date;
   if (o.picture && o.endScreen) fail('IIIx pictures: list or submenu');
@@ -570,7 +595,7 @@ export function installGr3xMenuAdditions(p: Gr3xDateProgram, o: { date?: Gr3xDat
       pop {r4,lr};b #${TOP_SET_TITLE};`);
     Object.assign(entries, { endScreenSetupLine: setupLine }, installGr3xEndScreenSetup(p, setupLine));
     // The picture list's mode is in the gap before the heap: the start-up fill clears it.
-    p.patch(GR3X_ZERO_FILL_END, GR3X_GAP, GR3X_HEAP_BASE, 'start-up zero fill reaches the heap base (clears the added RAM words)');
+    if (!o.zeroFillDone) p.patch(GR3X_ZERO_FILL_END, GR3X_GAP, GR3X_HEAP_BASE, 'start-up zero fill reaches the heap base (clears the added RAM words)');
   }
 
   // --- Controller ids: Horizon Correction's list controller and key map.

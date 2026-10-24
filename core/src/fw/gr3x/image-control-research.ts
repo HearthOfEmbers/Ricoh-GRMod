@@ -12,7 +12,7 @@ import type { Gr3xAdjFeatures } from './adj';
 import type { Gr3xMenuRatio } from './geometry';
 import { GR3X_160, openGr3xOfficial } from './profile';
 import { GR3X_FONT_VERIFIED_CHARS, GR3X_TEXT_ROWS, gr3xAllowedChars, validateGr3xLookNameFor } from './look-resources';
-import { installGr3xLookLayout, isGr3xFactoryLayout, validateGr3xLookLayout } from './look-layout';
+import { GR3X_MOVIE_COUNT, installGr3xLookLayout, isGr3xFactoryLayout, validateGr3xLookLayout } from './look-layout';
 
 export const GR3X_LOOK_RESEARCH = {
   // The native list has 12 + n + 2 widgets: twelve originals, n films and Custom 1/2 (nine films
@@ -219,19 +219,32 @@ export async function buildGr3xLookMenuResearch(raw: Uint8Array, looks: readonly
   let count: number, item: number, index: number, layoutEntries: Record<string, number> = {};
   if (layout) {
     if (slots.some((s, i) => s.id !== cfg.firstId + i)) throw new FirmwareError('bad-edit', 'IIIx look layout: the films are looks 64..');
-    layoutEntries = installGr3xLookLayout({ code, append, patch, u32: va => new DataView(originalRead(va, 4).buffer).getUint32(0, true), read: originalRead }, layout, slots.length);
+    layoutEntries = installGr3xLookLayout({ code, append, patch, u32: va => new DataView(originalRead(va, 4).buffer).getUint32(0, true), read: originalRead }, layout, slots.length, !!features.round10);
     count = layoutEntries.lookLayoutCount; item = layoutEntries.lookLayoutItem; index = layoutEntries.lookLayoutIndex;
   } else {
     const order = append(Uint8Array.from(slots.map(s => s.id)));
     count = code(`bhi #0x532c2ad0;cmp r3,#0;moveq r0,#${12 + slots.length};movne r0,#12;b #0x532c2ad4;`);
     patch(cfg.countHook, 0x93a0000c, branchWord(cfg.countHook, count), 'research: extra still-photo look count');
-    item = code(`ldrb ip,[r0,#0x1b];cmp ip,#0;bne native;cmp r1,#12;blo native;
-      cmp r1,#${12 + slots.length};bhs native;sub ip,r1,#12;${addr(2, order)}ldrb r0,[r2,ip];bx lr;
-      native:mov ip,sp;b #${cfg.item + 4};`);
+    if (features.round10) {
+      // Round 10 (GR IV: the added slots are in the movie list too): the films after the movie list's ten.
+      patch(GR3X_MOVIE_COUNT, 0x93a0000a, (0x93a00000 | (10 + slots.length)) >>> 0, 'films: in the movie Image Control list too');
+      item = code(`ldrb ip,[r0,#0x1b];cmp ip,#1;beq imovie;cmp ip,#0;bne native;cmp r1,#12;blo native;
+        cmp r1,#${12 + slots.length};bhs native;sub ip,r1,#12;${addr(2, order)}ldrb r0,[r2,ip];bx lr;
+        imovie:cmp r1,#10;blo native;cmp r1,#${10 + slots.length};bhs native;sub ip,r1,#10;${addr(2, order)}ldrb r0,[r2,ip];bx lr;
+        native:mov ip,sp;b #${cfg.item + 4};`);
+      index = code(`ldrb ip,[r0,#0x1b];cmp ip,#1;beq xmovie;cmp ip,#0;bne native;` +
+        slots.map((s, i) => `cmp r1,#${s.id};moveq r0,#${12 + i};bxeq lr;`).join('') + 'b native;xmovie:' +
+        slots.map((s, i) => `cmp r1,#${s.id};moveq r0,#${10 + i};bxeq lr;`).join('') +
+        `native:mov ip,sp;b #${cfg.index + 4};`);
+    } else {
+      item = code(`ldrb ip,[r0,#0x1b];cmp ip,#0;bne native;cmp r1,#12;blo native;
+        cmp r1,#${12 + slots.length};bhs native;sub ip,r1,#12;${addr(2, order)}ldrb r0,[r2,ip];bx lr;
+        native:mov ip,sp;b #${cfg.item + 4};`);
+      index = code(`ldrb ip,[r0,#0x1b];cmp ip,#0;bne native;` +
+        slots.map((s, i) => `cmp r1,#${s.id};moveq r0,#${12 + i};bxeq lr;`).join('') +
+        `native:mov ip,sp;b #${cfg.index + 4};`);
+    }
     patch(cfg.item, 0xe1a0c00d, branchWord(cfg.item, item), 'research: append still-photo look entries');
-    index = code(`ldrb ip,[r0,#0x1b];cmp ip,#0;bne native;` +
-      slots.map((s, i) => `cmp r1,#${s.id};moveq r0,#${12 + i};bxeq lr;`).join('') +
-      `native:mov ip,sp;b #${cfg.index + 4};`);
     patch(cfg.index, 0xe1a0c00d, branchWord(cfg.index, index), 'research: extra still-photo look reverse lookup');
   }
   const maximum = code(`mov r0,#${12 + slots.length};bx lr;`);

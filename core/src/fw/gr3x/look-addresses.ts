@@ -97,6 +97,9 @@ export const GR3X_TONE_READS = [
   [0x53700590, 0xe5d4277c], // ldrb r2, [r4, #0x77c]
 ] as const;
 
+/** Round 10 (films-r10.ts): the reads where a film is still taken as Standard (decisions from the look). */
+export const GR3X_R10_TONE_READS = GR3X_TONE_READS.filter(([at]) => [0x535131c0, 0x536db7f8, 0x536dc4bc, 0x536dd3e0].includes(at));
+
 // Image Control parameter setters (SetSaturation etc.): the call that fetches the current
 // look before the per-look jump table. Unknown looks fall through without writing.
 export const GR3X_PARAMETER_SETTER_LOOKS = [

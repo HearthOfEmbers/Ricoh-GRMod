@@ -68,8 +68,11 @@ if (lookLayout && !round8) throw new Error('GR3X_LAYOUT needs GR3X_R8');
 // GR3X_R9=1 (round 9, with GR3X_R8): the live view refreshed between films (image-control.ts).
 const round9 = process.env.GR3X_R9 === '1';
 if (round9 && !round8) throw new Error('GR3X_R9 needs GR3X_R8');
+// GR3X_R10=1 (round 10, with GR3X_R9): GR IV's ways throughout (round10.ts, films-r10.ts).
+const round10 = process.env.GR3X_R10 === '1';
+if (round10 && !round9) throw new Error('GR3X_R10 needs GR3X_R9');
 const features = { adjSoftFocus: round >= 3, ...(dateImprint ? { dateImprint, dateMenu } : {}), ...(pictures.length ? { pictures, pictureMenu } : {}), ...(round7 ? { round7 } : {}),
-  ...(round8 ? { round8 } : {}), ...(round9 ? { round9 } : {}), ...(lookLayout ? { lookLayout } : {}) };
+  ...(round8 ? { round8 } : {}), ...(round9 ? { round9 } : {}), ...(round10 ? { round10 } : {}), ...(lookLayout ? { lookLayout } : {}) };
 // GR3X_BUILD_ONLY=1: build and print the file's SHA-256, nothing written (regression checks).
 const buildOnly = process.env.GR3X_BUILD_ONLY === '1';
 // GR3X_FILMS=n (round 6): n films (1..20; the nine T6 films first, then plain ones), each with the

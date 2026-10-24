@@ -66,9 +66,35 @@ const one = (source: string, at: number): number => {
 const bl = (at: number, target: number) => (0xeb000000 | (((target - (at + 8)) >> 2) & 0xffffff)) >>> 0;
 const b = (at: number, target: number) => (0xea000000 | (((target - (at + 8)) >> 2) & 0xffffff)) >>> 0;
 
-export function installGr3xAdjSoftFocus(p: Gr3xSoftFocusProgram, textId: number, iconId: number) {
-  const record = TABLE + GR3X_ADJ_SOFT_FOCUS * RECORD, crop = TABLE + CROP * RECORD;
-  for (const [off, v] of OFFICIAL_0X13) if (p.word(record + off) !== v) throw new FirmwareError('unexpected-layout', 'IIIx ADJ record 0x13');
+/**
+ * Round 10 (GR IV's way, ../aspect/softfocus.ts): soft focus takes the place of the flash's exposure
+ * compensation, as on GR IV (whose function 0x0A is that; GR IV has a Focus Limiter at 0x02, so GR
+ * III's number is 0x09; GR III's 0x0A is the drive mode, which the ADJ controller tests for in five
+ * places). Function 0x09 is the default case of the controller's three switches on the function
+ * and in no compare; its record (0x53b39c78) becomes Crop's with the four handlers. It is already
+ * in each slot's list of the ADJ mode setting menu (five lists of 19, 0x53b4eba0 ..; index 10):
+ * as GR IV inserts 0x0A after Image Control (0x0C), it moves there. Name 0x53292900 (`mov r0,#0x7f`,
+ * reached only from the lookup's case 9) and icon 0x53293b20 (`mov r0,#0x38`, only from case 9).
+ * The five slot getters (0x5324633c + 12 i: `ldr r3,[r0,#4]; ldrb r0,[r3,#0x918 + 2 i]; bx lr`)
+ * read a stored function above 0x13 as 0, as GR IV's above 0x14. The pictures use the setting
+ * whenever it is on (GR IV: the byte alone decides). Flash exposure compensation stays in the
+ * camera's menu; GF-2 Flash Mode (0x13) is the camera's own again.
+ */
+export const GR3X_ADJ_SOFT_FOCUS_R10 = 0x09;
+const OFFICIAL_0X09: readonly (readonly [number, number])[] = [[0x10, 0x5319fe88], [0x18, 0x531a3540], [0x20, 0x531a1418],
+  [0x28, 0x531a0e7c], [0x30, 0x5319fedc], [0x38, 1], [0x3c, 0]];
+const NAME_SITE_R10 = 0x53292900, ICON_SITE_R10 = 0x53293b20;
+export const GR3X_ADJ_LISTS = [0x53b4eba0, 0x53b5a430, 0x53b5a404, 0x53b58fb0, 0x53b5a4b4] as const;
+const ADJ_LIST = [0, 1, 2, 3, 4, 16, 5, 6, 7, 8, 9, 18, 19, 10, 11, 12, 13, 17, 14];
+/** The lists with 0x09 after Image Control (0x0C), as GR IV's with 0x0A. */
+export const GR3X_ADJ_LIST_R10 = [0, 1, 2, 3, 4, 16, 5, 6, 7, 8, 18, 19, 10, 11, 12, 9, 13, 17, 14];
+const SLOT_GETTERS = [0x5324633c, 0x53246348, 0x53246354, 0x53246360, 0x5324636c];
+export const GR3X_ADJ_SLOTS = [0x918, 0x91a, 0x91c, 0x91e, 0x920] as const;
+
+export function installGr3xAdjSoftFocus(p: Gr3xSoftFocusProgram, textId: number, iconId: number, round10 = false) {
+  const fn = round10 ? GR3X_ADJ_SOFT_FOCUS_R10 : GR3X_ADJ_SOFT_FOCUS;
+  const record = TABLE + fn * RECORD, crop = TABLE + CROP * RECORD;
+  for (const [off, v] of round10 ? OFFICIAL_0X09 : OFFICIAL_0X13) if (p.word(record + off) !== v) throw new FirmwareError('unexpected-layout', `IIIx ADJ record ${fn}`);
   for (const [off, v] of CROP_HANDLERS) if (p.word(crop + off) !== v) throw new FirmwareError('unexpected-layout', 'IIIx ADJ Crop record');
   const O = GR3X_SOFT_FOCUS_OFFSET;
   // --- the four handlers (this = r0, value index = r1)
@@ -86,16 +112,43 @@ export function installGr3xAdjSoftFocus(p: Gr3xSoftFocusProgram, textId: number,
   const handlers = new Map([[H_DRAW, draw], [H_IS_CURRENT, isCurrent], [H_SET, set], [H_COUNT, count]]);
   for (let off = 0; off < RECORD; off += 4) {
     const want = handlers.get(off) ?? p.word(crop + off), have = p.word(record + off);
-    if (want !== have) p.patch(record + off, have, want, 'ADJ soft focus: record of function 0x13');
+    if (want !== have) p.patch(record + off, have, want, `ADJ soft focus: record of function ${fn}`);
   }
-  // --- name and icon of function 0x13
-  p.patch(NAME_SITE, 0x03a00049, one(`movweq r0,#${textId}`, NAME_SITE), 'ADJ soft focus: name');
-  const tail = assembleWords(`cmp r1,#0x13;movweq r0,#${iconId};movne r0,#0;bx lr`, ICON_TAIL);
-  [0xe2410013, 0xe16f0f10, 0xe1a002a0, 0xe12fff1e].forEach((w, i) => p.patch(ICON_TAIL + i * 4, w, tail[i], 'ADJ soft focus: icon'));
+  const r10: Record<string, number> = {};
+  if (round10) {
+    // --- name and icon of function 0x09; its place in the five lists; the slot getters
+    p.patch(NAME_SITE_R10, 0xe3a0007f, one(`movw r0,#${textId}`, NAME_SITE_R10), 'ADJ soft focus: name');
+    p.patch(ICON_SITE_R10, 0xe3a00038, one(`movw r0,#${iconId}`, ICON_SITE_R10), 'ADJ soft focus: icon');
+    const bytes = (at: number, n: number) => Array.from({ length: n }, (_, i) => (p.word(at + (i & ~3)) >>> (8 * (i & 3))) & 255);
+    for (const list of GR3X_ADJ_LISTS) {
+      const now = bytes(list, 20);
+      if (now.slice(0, 19).some((v, i) => v !== ADJ_LIST[i])) throw new FirmwareError('unexpected-layout', `IIIx ADJ function list at ${list.toString(16)}`);
+      const next = [...GR3X_ADJ_LIST_R10, now[19]];
+      for (let w = 0; w < 5; w++) {
+        const old = (now[4 * w] | now[4 * w + 1] << 8 | now[4 * w + 2] << 16 | now[4 * w + 3] << 24) >>> 0;
+        const nw = (next[4 * w] | next[4 * w + 1] << 8 | next[4 * w + 2] << 16 | next[4 * w + 3] << 24) >>> 0;
+        if (old !== nw) p.patch(list + 4 * w, old, nw, 'ADJ soft focus: after Image Control in the function list');
+      }
+    }
+    SLOT_GETTERS.forEach((at, i) => {
+      if (p.word(at) !== 0xe5903004 || p.word(at + 8) !== 0xe12fff1e) throw new FirmwareError('unexpected-layout', 'IIIx ADJ slot getter');
+      const load = 0xe5d30918 + 2 * i;
+      const getter = p.code(`ldrb r0,[r3,#${GR3X_ADJ_SLOTS[i]}];cmp r0,#0x13;movhi r0,#0;bx lr;`);
+      p.patch(at + 4, load, b(at + 4, getter), 'ADJ soft focus: slot getter (a function above 0x13 reads as 0)');
+      r10[`softFocusSlot${i}`] = getter;
+    });
+  } else {
+    // --- name and icon of function 0x13
+    p.patch(NAME_SITE, 0x03a00049, one(`movweq r0,#${textId}`, NAME_SITE), 'ADJ soft focus: name');
+    const tail = assembleWords(`cmp r1,#0x13;movweq r0,#${iconId};movne r0,#0;bx lr`, ICON_TAIL);
+    [0xe2410013, 0xe16f0f10, 0xe1a002a0, 0xe12fff1e].forEach((w, i) => p.patch(ICON_TAIL + i * 4, w, tail[i], 'ADJ soft focus: icon'));
+  }
   // --- pictures. The level counts only while one of the five ADJ slots holds soft focus
   // (bytes 0x918 + 2i): taken off the lever, it cannot stay on unseen. Returns it in r2;
   // every other register is kept (flags are not).
-  const level = p.code(`push {r0,r1,r3,lr};${ptr('r0')}mov r2,#0;cmp r0,#0;beq done;
+  // Round 10 (GR IV): the byte alone (0..3; anything else off).
+  const level = round10 ? p.code(`push {r0,r1,r3,lr};${ptr('r0')}mov r2,#0;cmp r0,#0;beq done;
+    ldrb r1,[r0,#${O}];cmp r1,#3;movls r2,r1;done:pop {r0,r1,r3,pc};`) : p.code(`push {r0,r1,r3,lr};${ptr('r0')}mov r2,#0;cmp r0,#0;beq done;
     ldrb r1,[r0,#${O}];cmp r1,#3;bhi done;` +
     [0x918, 0x91a, 0x91c, 0x91e, 0x920].map(f => `ldrb r3,[r0,#${f}];cmp r3,#${GR3X_ADJ_SOFT_FOCUS};beq on;`).join('') +
     `b done;on:mov r2,r1;done:pop {r0,r1,r3,pc};`);
@@ -116,5 +169,6 @@ export function installGr3xAdjSoftFocus(p: Gr3xSoftFocusProgram, textId: number,
   p.patch(ROW, 0xe0281893, bl(ROW, row), 'ADJ soft focus: clarity row');
   void wordsToBytes;
   return { softFocusLevel: level, softFocusDraw: draw, softFocusIsCurrent: isCurrent, softFocusSet: set, softFocusCount: count,
-    softFocusGates: gates, softFocusParam: param, softFocusRows: rows, softFocusRow: row, softFocusText: textId, softFocusIcon: iconId };
+    softFocusGates: gates, softFocusParam: param, softFocusRows: rows, softFocusRow: row, softFocusText: textId, softFocusIcon: iconId,
+    ...(round10 ? { softFocusFunction: fn, ...r10 } : {}) };
 }

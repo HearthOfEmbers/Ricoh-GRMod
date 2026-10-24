@@ -34,6 +34,11 @@ import { decodeBaselineJpeg } from '../../jpeg/decoder';
 import { assembleWords, branchWord, movWord, wordsToBytes } from '../aspect/arm';
 import { FirmwareError } from '../types';
 import { GR3X_ENDSCREEN_NATIVE } from './endscreen-native';
+import { GR3X_ENDSCREEN2_NATIVE } from './endscreen2-native';
+import { gr3xSettingsHook, gr3xSettingsPrior } from './round10';
+import type { Gr3xSite } from './round10';
+/** Round 10: the HTData record of the choice (GR IV: its APData record; the films' table is 12). */
+export const GR3X_END_SCREEN_RECORD = 13;
 
 export const GR3X_PICTURE_LIST_ID = 0x020001a4;
 /** The third word of the gap before the heap (zeroed at start by the extended fill). */
@@ -56,6 +61,7 @@ export const GR3X_PICTURE_NAMES: readonly string[] = [
 ];
 
 const CTX_MAGIC = 0x33455347; // 'GSE3'
+const CTX_MAGIC_R10 = 0x34455347; // 'GSE4'
 const MAX = 8, FACTORY = 5;
 const CTX_BYTES = 12 + FACTORY * 2 + MAX * 2 + 2 + MAX * 4 * 2;
 const REFRESH = 0x532049fc, CONFIRM = 0x532048c4, UP = 0x53204834, DOWN = 0x53204878, FOOTER = 0x53204ab0;
@@ -80,6 +86,9 @@ export interface Gr3xEndScreenOptions {
   /** Round 8: the mode is the word's low byte (its upper bytes hold the date imprint's orientation
    * and frame look, look-addresses.ts): read and written as a byte. */
   modeByte?: boolean;
+  /** Round 10 (GR IV's shutdown.c): the choice is HTData record 13, written on confirm and after
+   * every settings save (through the settings scaffold, round10.ts). */
+  r10?: { sites: Gr3xSite[]; u32(address: number): number };
 }
 
 const lo = (v: number) => v & 0xffff, hi = (v: number) => v >>> 16;
@@ -105,8 +114,8 @@ export function gr3xPreview(jpeg: Uint8Array): Uint8Array {
   return out;
 }
 
-export function gr3xEndScreenModule(): Uint8Array {
-  const raw = Uint8Array.from(GR3X_ENDSCREEN_NATIVE.code.match(/../g)!.map(x => parseInt(x, 16)));
+export function gr3xEndScreenModule(r10 = false): Uint8Array {
+  const raw = Uint8Array.from((r10 ? GR3X_ENDSCREEN2_NATIVE : GR3X_ENDSCREEN_NATIVE).code.match(/../g)!.map(x => parseInt(x, 16)));
   if (raw.length % 4) fail('module length');
   return raw;
 }
@@ -128,20 +137,23 @@ export function installGr3xEndScreen(p: Gr3xEndScreenProgram, o: Gr3xEndScreenOp
     [JOIN, JOIN_WORD], [JOIN - 4, 0xe3a07002], [JOIN + 0x24, 0xe1a01007],
   ];
   for (const [at, w] of guards) if (p.word(at) !== w >>> 0) fail(`guard at ${at.toString(16)}`);
-  const module = p.append(gr3xEndScreenModule());
-  const fn = (name: keyof typeof GR3X_ENDSCREEN_NATIVE.exports) => module + GR3X_ENDSCREEN_NATIVE.exports[name];
-  const ctxBytes = new Uint8Array(CTX_BYTES), v = new DataView(ctxBytes.buffer);
-  [CTX_MAGIC, n, o.factoryText].forEach((w, i) => v.setUint32(i * 4, w >>> 0, true));
+  const r10 = o.r10;
+  const module = p.append(gr3xEndScreenModule(!!r10));
+  const exportsOf = (r10 ? GR3X_ENDSCREEN2_NATIVE.exports : GR3X_ENDSCREEN_NATIVE.exports) as Record<string, number>;
+  const fn = (name: keyof typeof GR3X_ENDSCREEN2_NATIVE.exports) => module + exportsOf[name];
+  const ctxBytes = new Uint8Array(CTX_BYTES + (r10 ? 8 : 0)), v = new DataView(ctxBytes.buffer);
+  [r10 ? CTX_MAGIC_R10 : CTX_MAGIC, n, o.factoryText].forEach((w, i) => v.setUint32(i * 4, w >>> 0, true));
   let at = 12;
   for (let i = 0; i < FACTORY; i++, at += 2) v.setUint16(at, o.factoryIcons[i], true);
   for (let k = 0; k < MAX; k++, at += 2) v.setUint16(at, k < n ? o.icons[k] : 0, true);
   at += 2;
   for (let k = 0; k < MAX; k++, at += 4) v.setUint32(at, k < n ? o.choices[k] >>> 0 : 0, true);
   for (let k = 0; k < MAX; k++, at += 4) v.setUint32(at, k < n ? o.resources[k] : 0, true);
+  if (r10) { v.setUint32(at, GR3X_END_SCREEN_RECORD, true); v.setUint32(at + 4, gr3xSettingsPrior(r10, 'save'), true); }
   const ctx = p.append(ctxBytes);
   const ctxIn = (r: number) => `movw r${r},#${lo(ctx)};movt r${r},#${hi(ctx)};`;
   const MODE = `movw ip,#${lo(GR3X_PICTURE_MODE)};movt ip,#${hi(GR3X_PICTURE_MODE)};${o.modeByte ? 'ldrb' : 'ldr'} ip,[ip];cmp ip,#0;`;
-  const handler = (at: number, original: string, reg: number, name: keyof typeof GR3X_ENDSCREEN_NATIVE.exports, what: string) => {
+  const handler = (at: number, original: string, reg: number, name: keyof typeof GR3X_ENDSCREEN2_NATIVE.exports, what: string) => {
     const target = p.code(`${MODE}beq native;${ctxIn(reg)}b #${fn(name)};native:${original};b #${at + 4};`);
     p.patch(at, p.word(at), branchWord(at, target), what);
     return target;
@@ -173,7 +185,10 @@ export function installGr3xEndScreen(p: Gr3xEndScreenProgram, o: Gr3xEndScreenOp
     mov r1,r0;mov r0,r5;bl #${END_SCREEN_TEXT};mov r1,r0;mov r0,r4;pop {r4,r5,r6,lr};b #${SUB_LINE_TEXT};`);
   const linePicture = p.code(`${ctxIn(2)}b #${fn('es_line')};`);
   void assembleWords; void wordsToBytes;
-  return { endScreenModule: module, endScreenContext: ctx, endScreenConfirm: confirm, endScreenUp: up, endScreenDown: down,
+  // Round 10: after the settings save, the choice again (es_save calls the save it continues).
+  const save = r10 ? p.code(`${ctxIn(1)}b #${fn('es_save')};`) : undefined;
+  if (r10) gr3xSettingsHook(r10, 'save', save!, 'End Screen picture: the settings save, then its record');
+  return { ...(save ? { endScreenSave: save } : {}), endScreenModule: module, endScreenContext: ctx, endScreenConfirm: confirm, endScreenUp: up, endScreenDown: down,
     endScreenFooter: footer, endScreenRefresh: refresh, endScreenTypes: types, endScreenTypesAt: typesAt, picturePick: pick,
     endScreenLineType: lineType, endScreenLinePicture: linePicture };
 }

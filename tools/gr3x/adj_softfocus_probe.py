@@ -1,4 +1,4 @@
-"""Soft focus on the ADJ lever (function 0x13): the native ADJ controller, ADJ mode setting menu
+"""Soft focus on the ADJ lever (function 0x13; round 10, GR IV's way: 0x09, the flash's exposure compensation): the native ADJ controller, ADJ mode setting menu
 and image-processing functions, with every patch of the manifest installed.
 
 List widgets, text setting and singletons are substitutes; the camera's UI, the ISP and the
@@ -41,8 +41,9 @@ class UI:
         elif at in (0x53395430,0x533947f0,0x53396f80,0x533a19b4,0x53395224,0x533ad3c0,0x533a1734):s.ui.append((hex(at),R(1)));ret(0)
         else:return False
         return True
-    def state(s,fn=FN,slot=0,movie=0,byte=0,ptr=True):
+    def state(s,fn=None,slot=0,movie=0,byte=0,ptr=True):
         s.reset();s.ui=[]
+        if fn is None:fn=FN
         for k in range(1,9):put(s.uc,SELECTOR+4*k,DATA)
         for off in (0x918,0x91a,0x91c,0x91e,0x920):s.uc.mem_write(DATA+off,b'\x04')
         s.uc.mem_write(DATA+0x918+2*slot,bytes([fn]));s.uc.mem_write(BYTE,bytes([byte]))
@@ -64,8 +65,14 @@ def max_count(p):
     c.emu_start(0x531a1e34,0x531a1eb8,count=20000);assert not p.diagnostics
     return c.mem_read(VIEW+0x271,1)[0]
 
+R10_LIST=[0,1,2,3,4,16,5,6,7,8,18,19,10,11,12,9,13,17,14]
+OLD_LIST=[0,1,2,3,4,16,5,6,7,8,9,18,19,10,11,12,13,17,14]
+
 def verify(data,manifest):
+    global FN
     e=manifest['entries'];text,icon=e['softFocusText'],e['softFocusIcon']
+    r10=e.get('softFocusFunction')==9;FN=9 if r10 else 0x13
+    INDEX=(R10_LIST if r10 else OLD_LIST).index(FN)
     p=Patched(data,manifest);n=Native(data);c=p.uc;calls=0;rep={}
     # Names and icons: only function 0x13 changes.
     for f in range(0x16):
@@ -103,11 +110,25 @@ def verify(data,manifest):
         p.state(byte=1);p.cursor=k;p.call(0x531a3100,VIEW);calls+=1
         assert c.mem_read(BYTE,1)[0]==(k if k<4 else 1)
     p.state(ptr=False);p.cursor=2;p.call(0x531a3100,VIEW);calls+=1
-    # The ADJ mode setting menu lists 0x13 at index 12 on each of the five slots.
+    # The ADJ mode setting menu lists 0x13 at index 12 on each of the five slots (round 10: 0x09
+    # after Image Control, index 15, GR IV's place; every other entry its function's name and icon).
     for slot,(draw,setter,current) in enumerate(MENU):
-        p.state(fn=4);p.call(draw,0,ITEM,12);assert p.ui[-1]==('menuitem',icon,text),p.ui[-1]
-        p.state(fn=4);p.call(setter,0,12);assert c.mem_read(DATA+0x918+2*slot,1)[0]==FN
-        p.state(fn=FN,slot=slot);assert [i for i in range(19) if p.call(current,0,i)]==[12];calls+=21
+        p.state(fn=4);p.call(draw,0,ITEM,INDEX);assert p.ui[-1]==('menuitem',icon,text),p.ui[-1]
+        p.state(fn=4);p.call(setter,0,INDEX);assert c.mem_read(DATA+0x918+2*slot,1)[0]==FN
+        p.state(fn=FN,slot=slot);assert [i for i in range(19) if p.call(current,0,i)]==[INDEX];calls+=21
+        if r10:
+            for i,f in enumerate(R10_LIST):
+                p.state(fn=4);p.call(setter,0,i);assert c.mem_read(DATA+0x918+2*slot,1)[0]==f,(slot,i,f)
+                if f!=FN:
+                    p.state(fn=4);n.state(fn=4);p.call(draw,0,ITEM,i);n.call(draw,0,ITEM,OLD_LIST.index(f));assert p.ui[-1]==n.ui[-1],(slot,i,f)
+                calls+=3
+    # Round 10: the five slot getters read a stored function above 0x13 as 0 (GR IV: above 0x14).
+    if r10:
+        for slot,at in enumerate((0x5324633c,0x53246348,0x53246354,0x53246360,0x5324636c)):
+            for f in list(range(0x16))+[0x80,0xff]:
+                p.state(fn=f,slot=slot);n.state(fn=f,slot=slot)
+                got=p.call(at,SELECTOR);assert got==(f if f<=0x13 else 0),(slot,f,got)
+                if f<=0x13:assert got==n.call(at,SELECTOR);calls+=2
     # Pictures: the per-picture decision and the clarity parameter.
     def slots(probe,on,where=2):
         for i,f in enumerate((0x918,0x91a,0x91c,0x91e,0x920)):probe.uc.mem_write(DATA+f,bytes([FN if on and i==where else 4]))
@@ -122,8 +143,8 @@ def verify(data,manifest):
         for b in (1,2,3):
             on=decide(p,look,b);calls+=1
             assert on==(off if native_look==20 else 1),(look,b,on)
-            # Taken off the ADJ lever, soft focus is off whatever the byte says.
-            assert decide(p,look,b,on=False)==off;calls+=1
+            # Taken off the ADJ lever, soft focus is off whatever the byte says (round 10, GR IV: the byte decides).
+            assert decide(p,look,b,on=False)==(on if r10 else off);calls+=1
         assert decide(p,look,9)==off
     def effect(probe,clarity,byte,on=True):
         slots(probe,on,4);u=probe.uc;u.mem_write(CP,bytes(0x800));u.mem_write(CP+0x793,bytes([4,clarity,0,0]));u.mem_write(CP+0x7b8,struct.pack('<f',1.0))
@@ -134,7 +155,7 @@ def verify(data,manifest):
         for b in (0,4,9,0xff):assert effect(p,clarity,b)==native
         for b in (1,2,3):
             v,raw=effect(p,clarity,b);assert v==4+b and raw[:2]+raw[4:]==native[1][:2]+native[1][4:]
-            assert effect(p,clarity,b,on=False)==native
+            assert effect(p,clarity,b,on=False)==((v,raw) if r10 else native)
         calls+=8
     # The clarity function's row: rows 0..8 as before, 9..11 from the three soft-focus rows.
     rows=e['softFocusRows']
@@ -146,7 +167,7 @@ def verify(data,manifest):
     return dict(schema=1,rtos_sha256=hashlib.sha256(data).hexdigest(),calls=calls,function=FN,text=text,icon=icon,
         soft_focus_rows=[list(gains[i*11:i*11+11]) for i in range(3)],names_all_21_rows=True,other_functions_unchanged=True,
         movie_layout_unchanged=True,one_current_value_always=True,menu_all_five_slots=True,
-        look20_unchanged=True,off_unless_on_an_adj_slot=True,hardware_tested=False,
+        look20_unchanged=True,**({'byte_decides':True,'gr4_list_place':INDEX,'slot_getters_above_0x13_off':True} if r10 else {'off_unless_on_an_adj_slot':True}),hardware_tested=False,
         scope='ADJ controller, ADJ mode setting menu, picture decision, effect parameter and row helper; widgets substituted.')
 
 if __name__=='__main__':

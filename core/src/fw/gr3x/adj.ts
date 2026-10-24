@@ -24,6 +24,9 @@ import { GR3X_STASH_FILM } from './datestamp';
 import { installGr3xLookLayout, isGr3xFactoryLayout, validateGr3xLookLayout } from './look-layout';
 import type { Gr3xLookLayout } from './look-layout';
 import { GR3X_GAP, GR3X_HEAP_BASE, GR3X_ZERO_FILL_END } from './look-addresses';
+import { GR3X_FILL_OFFICIAL, GR3X_FILL_R10, GR3X_ZERO_FILL_LITERAL, installGr3xSettingsScaffold } from './round10';
+import { installGr3xGuardR10 } from './guard';
+import { gr3xRawDevelopmentWordsR10 } from './datestamp';
 import type { Gr3xMenuRatio } from './geometry';
 import { GR3X_160, openGr3xOfficial } from './profile';
 import { installGr3xImageIdentity, installGr3xDevelopAndPlayback, installGr3xAutofocus } from './image-pipeline';
@@ -90,6 +93,10 @@ export interface Gr3xAdjFeatures {
   /** Round 9 (needs round 8): with films, the live view's change detection sees each film as a look
    * of its own (image-control.ts); without films only the recorded round differs from round 8. */
   round9?: boolean;
+  /** Round 10 (needs round 9): GR IV's ways throughout (round10.ts): films as looks of their own,
+   * soft focus on the flash's exposure compensation (0x09), the settings scaffold, the RAM words,
+   * the End Screen choice as a record of the settings store. Absent: the files of round 9. */
+  round10?: boolean;
   /** Round 8: the Image Control order and hidden looks (look-layout.ts; the camera's order with
    * nothing hidden is the same as none). */
   lookLayout?: Gr3xLookLayout;
@@ -110,6 +117,8 @@ export async function buildGr3xAdjResearch(raw: Uint8Array, ratioMenu: readonly 
   if (round8 && !round7) fail('IIIx round 8 builds on round 7');
   const round9 = features.round9 === true;
   if (round9 && !round8) fail('IIIx round 9 builds on round 8');
+  const round10 = features.round10 === true;
+  if (round10 && !round9) fail('IIIx round 10 builds on round 9');
   if (features.lookLayout && !round8) fail('IIIx look layout: round 8');
   if (round7 && dateImprint && features.dateMenu !== 'submenu') fail('IIIx round 7: the date imprint submenu');
   const dateForm: Gr3xDateForm = features.dateMenu === 'submenu' ? 'submenu' : 'list';
@@ -181,6 +190,9 @@ export async function buildGr3xAdjResearch(raw: Uint8Array, ratioMenu: readonly 
     patch(high, movWord(register, old >>> 16, true), movWord(register, next >>> 16, true), reason);
   };
 
+  // Round 10 (round10.ts): the settings scaffold, and the zero fill over the 76 bytes before the heap.
+  const scaffold = round10 ? installGr3xSettingsScaffold({ code, sites, u32: word }) : {};
+  if (round10) patch(GR3X_ZERO_FILL_LITERAL, GR3X_FILL_OFFICIAL, GR3X_FILL_R10, 'start-up zero fill over the 76 bytes before the heap (round 10\'s RAM words)');
   const order = append(Uint8Array.from(geometry.ratios.map(r => r.id)));
   for (const at of m.orderSites) pair(at, at + 4, 3, m.order, order, `${spelled}-entry native menu order`);
   for (const at of m.countSites) patch(at, 0xe3a00002, 0xe3a00000 | count, `${spelled}-entry native menu count`);
@@ -310,10 +322,11 @@ export async function buildGr3xAdjResearch(raw: Uint8Array, ratioMenu: readonly 
   const liveEntries = installGr3xLiveView(program);
   const rawEntries = installGr3xRawDevelopment(program);
   const shadingEntries = installGr3xShading(program);
-  const softEntries = softFocus ? installGr3xAdjSoftFocus({ code, append, patch, word }, softText, softIcon) : {};
+  const softEntries = softFocus ? installGr3xAdjSoftFocus({ code, append, patch, word }, softText, softIcon, round10) : {};
   const fullRawEntries = installGr3xFullFrameRaw(program);
   const endScreen = pictureSub ? installGr3xEndScreen({ code, append, patch, word }, { ...endIds,
-    choices: pictures.map(x => x.id!), resources: pictures.map((_, k) => GR3X_JPEG_TABLE_COUNT + k), ...(date8 ? { modeByte: true } : {}) }) : undefined;
+    choices: pictures.map(x => x.id!), resources: pictures.map((_, k) => GR3X_JPEG_TABLE_COUNT + k), ...(date8 ? { modeByte: true } : {}),
+    ...(round10 ? { r10: { sites, u32: word } } : {}) }) : undefined;
   // Round 8: the names for the date imprint, per look of the stash word: the camera's own (checked
   // against its English texts), films (32 + k) by the names the image-control layer gives.
   const lookNames = date8 ? (() => {
@@ -333,9 +346,9 @@ export async function buildGr3xAdjResearch(raw: Uint8Array, ratioMenu: readonly 
     ...installGr3xMenuAdditions({ code, append, patch, word, read }, { ...(dateImprint ? { date: dateIds, dateForm } : {}),
       ...(pictureCount && !pictureSub ? { picture: pictureIds } : {}),
       ...(endScreen ? { endScreen: { typeText: endIds.typeText, pictureText: endIds.pictureText, lineType: endScreen.endScreenLineType, linePicture: endScreen.endScreenLinePicture } } : {}),
-      ...(round7 ? { onOffText: true } : {}), ...(date8 ? { round8: true } : {}) }),
+      ...(round7 ? { onOffText: true } : {}), ...(date8 ? { round8: true } : {}), ...(round10 ? { zeroFillDone: true } : {}) }),
     ...(dateImprint ? installGr3xDateImprintStage({ code, append, patch, word, read },
-      round7 ? { stash: GR3X_HALATION_STASH, monoFilms: layer.monoFilms ?? [], ...(lookNames ? { names: lookNames } : {}) } : undefined) : {}),
+      round7 ? { stash: GR3X_HALATION_STASH, monoFilms: layer.monoFilms ?? [], ...(lookNames ? { names: lookNames } : {}), ...(round10 ? { r10: true } : {}) } : undefined) : {}),
     ...(pictureCount ? installGr3xPictureStage({ code, append, patch, word, read }, pictureCount, { pick: !pictureSub }) : {}) } : {};
   // Round 7 without films: the look word for the date imprint (the image-control layer's
   // development adapter writes it when there are films), and the settings guard.
@@ -345,7 +358,7 @@ export async function buildGr3xAdjResearch(raw: Uint8Array, ratioMenu: readonly 
       // ldrb r2,[r3,#0x77c] (the frame's look): also store look | 0x10000 (level 0: no halation).
       // Round 8: in RAW development also the orientation and the look of the picture (datestamp.ts).
       const stash = date8 ? code(`push {r0,r1,r4,r5,ip,lr};mrs r0,cpsr;ldrb r2,[r3,#0x77c];orr r4,r2,#0x10000;
-        movw r5,#${GR3X_HALATION_STASH & 0xffff};movt r5,#${GR3X_HALATION_STASH >>> 16};str r4,[r5];${gr3xRawDevelopmentWords('r1', 'r4', 'r5', 'ip')}
+        movw r5,#${GR3X_HALATION_STASH & 0xffff};movt r5,#${GR3X_HALATION_STASH >>> 16};str r4,[r5];${(round10 ? gr3xRawDevelopmentWordsR10 : gr3xRawDevelopmentWords)('r1', 'r4', 'r5', 'ip')}
         msr cpsr_f,r0;pop {r0,r1,r4,r5,ip,lr};b #${GR3X_DEVELOP_LOOK_READ + 4};`)
         : code(`push {r0,r1};mrs r0,cpsr;ldrb r2,[r3,#0x77c];orr r1,r2,#0x10000;push {r2};
         movw r2,#${GR3X_HALATION_STASH & 0xffff};movt r2,#${GR3X_HALATION_STASH >>> 16};str r1,[r2];pop {r2};msr cpsr_f,r0;pop {r0,r1};b #${GR3X_DEVELOP_LOOK_READ + 4};`);
@@ -359,7 +372,8 @@ export async function buildGr3xAdjResearch(raw: Uint8Array, ratioMenu: readonly 
     const layout = features.lookLayout && !isGr3xFactoryLayout(features.lookLayout, 0) ? features.lookLayout : undefined;
     if (features.lookLayout) validateGr3xLookLayout(features.lookLayout, 0);
     const layoutEntries = layout ? installGr3xLookLayout({ code, append, patch, u32: word, read }, layout, 0) : {};
-    return { ...out, ...layoutEntries, ...installGr3xGuard({ code, patch, u32: word }, { films: 0, maxRatio: gr3xMaxId(menu), ...(layout ? { hidden: layout.hidden } : {}) }) };
+    const guardOptions = { films: 0, maxRatio: gr3xMaxId(menu), ...(layout ? { hidden: layout.hidden } : {}), ...(round10 && softFocus ? { softFocusR10: true } : {}) };
+    return { ...out, ...layoutEntries, ...(round10 ? installGr3xGuardR10({ code, patch, u32: word, sites }, guardOptions) : installGr3xGuard({ code, patch, u32: word }, guardOptions)) };
   })() : {};
   const payload = new Uint8Array((length + 3) & ~3);
   let at = 0; for (const part of parts) { payload.set(part, at); at += part.length; }
@@ -369,12 +383,12 @@ export async function buildGr3xAdjResearch(raw: Uint8Array, ratioMenu: readonly 
     schema: 1, kind: 'gr3x-adj-patchset' as const, profile: profile.id,
     originalRtosSha256: profile.rtosSha256, originalLength: p.rtosLength, base: BASE,
     sites, append: { address: geometry.append.address, bytes: hex(payload) }, geometry,
-    entries: { ...geometry.entries, ratioText, ratioIcon, fnCycle, ...imageEntries, ...developEntries, ...afEntries, ...mapEntries, ...liveEntries, ...rawEntries, ...shadingEntries, ...fullRawEntries, ...softEntries, ...dateEntries, ...lookEntries },
+    entries: { ...geometry.entries, ...scaffold, ratioText, ratioIcon, fnCycle, ...imageEntries, ...developEntries, ...afEntries, ...mapEntries, ...liveEntries, ...rawEntries, ...shadingEntries, ...fullRawEntries, ...softEntries, ...dateEntries, ...lookEntries },
     catalogs: { order, textRoots, textColumns: columns, iconRoot, iconCount },
     adjSoftFocus: softFocus,
     dateImprint: dateImprint ? { ...dateIds, form: dateForm, ...(round7 ? { iconOff: 296, iconOn: 297 } : {}), ...(lookNames ? { names: lookNames } : {}) } : undefined,
     round7,
-    ...(round8 ? { round8 } : {}), ...(round9 ? { round9 } : {}),
+    ...(round8 ? { round8 } : {}), ...(round9 ? { round9 } : {}), ...(round10 ? { round10 } : {}),
     ...(round8 && !layer.looksFollow && features.lookLayout && !isGr3xFactoryLayout(features.lookLayout, 0) ? { lookLayout: { order: [...features.lookLayout.order], hidden: [...features.lookLayout.hidden] } } : {}),
     pictures: pictureCount ? (pictureSub ? { form: 'submenu' as const, count: pictureCount, ...endIds, names: pictures.map((_, k) => endIds.factoryText + 1 + k),
       factoryIcons: [...endIds.factoryIcons], icons: [...endIds.icons], choices: pictures.map(x => x.id!) }

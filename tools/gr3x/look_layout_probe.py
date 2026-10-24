@@ -62,13 +62,15 @@ def expected(manifest):
         assert 11 not in layout['hidden'] and set(layout['hidden'])<=set(order)
         order,hidden=list(layout['order']),list(layout['hidden'])
     shown=[x for x in order if x not in hidden]
-    return {0:shown,1:[x for x in shown if x in MOVIE],2:[x for x in shown if x in STILL]},bool(layout)
+    # Round 10 (GR IV): the films are in the movie list too.
+    film=lambda x:manifest.get('round10') and x>=64
+    return {0:shown,1:[x for x in shown if x in MOVIE or film(x)],2:[x for x in shown if x in STILL]},bool(layout)
 
 def verify(data,manifest):
     lists,layout=expected(manifest);films=manifest.get('filmCount') or 0
     p=ListProbe(AdjProbe(data,manifest));calls=0;cases=0
     # Without a layout the camera's movie and RAW development lists are its own (films in the still list only).
-    if not layout:assert lists[1]==MOVIE and lists[2]==STILL
+    if not layout:assert lists[1]==MOVIE+([64+k for k in range(films)] if manifest.get('round10') else []) and lists[2]==STILL
     for flag in (0,1,2):
         L=lists[flag]
         for set_ in (0,1,2):
