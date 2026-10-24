@@ -43,7 +43,7 @@ export const GR3X_R10 = {
   orientWord: 0x55804380,
   /** The look at the start of the exposure, LOOK_STASH's word (GR IV: FRAME_LOOK). */
   frameLook: 0x55804384,
-  /** The End Screen choice read from its record at start (0 until then; shutdown.c's cache). */
+  /** Reserved for the End Screen choice (unused: as GR IV's shutdown.c, endscreen.c reads its record each time). */
   endScreenChoice: 0x55804388,
 } as const;
 

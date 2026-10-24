@@ -79,7 +79,7 @@ class FilmsProbe(AdjProbe):
         self.uc.mem_map(REGION,0x100000)
         self.store={};self.writes=[];self.pushes=[];self.allocs=[];self.alloc_ok=True;self.singleton_ok=True
         self.loads=self.saves=0;self.next_heap=HEAPAREA;self.toning=[];self.filling=False
-        self.rec_writes=[]
+        self.rec_writes=[];self.fail_keys=set();self.failed=[]
         for r in RECS:self.uc.hook_add(UC_HOOK_MEM_WRITE,self._record_write,begin=r,end=r+0xb28)
     def _record_write(self,cpu,access,at,size,value,user):
         if not self.filling:self.rec_writes.append((at,size))
@@ -99,6 +99,7 @@ class FilmsProbe(AdjProbe):
                 if data is None:self._ret(cpu,0)
                 else:n=min(r(2),len(data));cpu.mem_write(r(3),data[:n]);self._ret(cpu,1)
             else:
+                if key in self.fail_keys:self.failed.append(key);self._ret(cpu,0);return
                 data=bytes(cpu.mem_read(r(3),r(2)));self.writes.append((key,data));self.store[key]=data;self._ret(cpu,1)
         elif at==ALLOC:
             n=r(0);self.allocs.append(n)
@@ -338,38 +339,54 @@ def verify(data,manifest,seed=1110,steps=3000):
         n.power_off();table,_=table_of([d for k,d in n.writes if k==12][-1]);o=look-FIRST+1
         assert table[o][0]==film_vals,(look,table[o][0],film_vals)
         rep['away_film']=look
-    # 5. Rounds 6..9's tables are taken over.
+    # 5. Rounds 6..9's tables are taken over. Version 3: a film whose preset changed starts neutral.
+    # A takeover whose new table was not written (the camera saved the converted records, the old
+    # table stayed: here both writes of the table fail) is taken over again at the next start without
+    # converting the converted sets a second time.
+    def halation(h,ver):
+        if ver==1:return 0
+        if ver==2:h=3 if h==2 else h
+        return encode(h&3,(h>>2)&1,0)
     for version in (3,2,1):
-        owners_old=10 if version==1 else 21
-        ov=[[[rng.randrange(9) for j in range(9)] for s in range(3)] for o in range(owners_old)]
-        oh=[[rng.randrange(8) for s in range(3)] for k in range(20)]
-        if version==2:oh=[[rng.randrange(3) for s in range(3)] for k in range(20)]
-        n.store={12:old_record(version,ov,oh,[1]*20)}
-        recs=fresh_records(rng,films)
-        for c in range(6):recs[0][look_at(c)]=11
-        k=rng.randrange(min(films,9));recs[0][look_at(1)]=FIRST+k;recs[4][look_at(2)]=FIRST+k
-        for r in recs[1:]:
-            for c in range(3,6):r[look_at(c)]=11
-        fieldvals=[recs[0][STD_FIELD[j][1]] for j in range(9)];bleach=[recs[0][FIELD[j][1]] for j in range(NP)]
-        stored4=[recs[4][STD_FIELD[j][2]] for j in range(9)]
-        n.records(recs);cpu.mem_write(GAP,b'\xa5'*4);n.writes=[];assert n.boot();calls+=1
-        def halation(h,ver):
-            if ver==1:return 0
-            if ver==2:h=3 if h==2 else h
-            return encode(h&3,(h>>2)&1,0)
-        want=[fieldvals[j] for j in range(7)]+[halation(oh[k][1],version)]+fieldvals[7:9]
-        # The set's film: its values (from Standard's fields) in Bleach Bypass's; Standard's own back.
-        assert n.fields(1)==want,(version,n.fields(1),want)
-        assert [n.rec()[STD_FIELD[j][1]] for j in range(9)]==ov[0][1]
-        assert [n.rec(4)[STD_FIELD[j][2]] for j in range(9)]==ov[0][2]
-        assert n.fields(2,4)==[stored4[j] for j in range(7)]+[halation(oh[k][2],version)]+stored4[7:9]
-        # The other films: the old table's values, Halation as Toning; Bleach Bypass its own.
-        k2=(k+1)%min(films,9)
-        n.select(0,FIRST+k2);calls+=1
-        assert n.fields(0)==[ov[k2+1][0][j] for j in range(7)]+[halation(oh[k2][0],version)]+[ov[k2+1][0][7],ov[k2+1][0][8]],version
-        n.select(1,BLEACH);calls+=1;assert n.fields(1)==bleach,version
-        n.select(4,FIRST+k2);assert n.fields(4)==[NEUTRAL[j] for j in range(NP) if FIELD[j][4]];calls+=1
-        rep['taken_over_v%d'%version]=True
+        for case in (('plain','changed','twice') if version==3 else ('plain','twice')):
+            owners_old=10 if version==1 else 21
+            ov=[[[rng.randrange(9) for j in range(9)] for s in range(3)] for o in range(owners_old)]
+            oh=[[rng.randrange(8) for s in range(3)] for k in range(20)]
+            if version==2:oh=[[rng.randrange(3) for s in range(3)] for k in range(20)]
+            k=rng.randrange(min(films,9));k2=(k+1)%min(films,9)
+            old_prints=prints+[0]*(20-films)
+            if case=='changed':old_prints=list(old_prints);old_prints[k2]^=0x5a5a
+            n.store={12:old_record(version,ov,oh,old_prints)}
+            recs=fresh_records(rng,films)
+            for c in range(6):recs[0][look_at(c)]=11
+            recs[0][look_at(1)]=FIRST+k;recs[4][look_at(2)]=FIRST+k
+            for r in recs[1:]:
+                for c in range(3,6):r[look_at(c)]=11
+            fieldvals=[recs[0][STD_FIELD[j][1]] for j in range(9)];bleach=[recs[0][FIELD[j][1]] for j in range(NP)]
+            stored4=[recs[4][STD_FIELD[j][2]] for j in range(9)]
+            n.records(recs);n.writes=[];assert n.boot();calls+=1
+            if case=='twice':
+                n.fail_keys={12};n.failed=[];n.power_off();calls+=1
+                assert n.failed==[12,12] and n.store[12]==old_record(version,ov,oh,old_prints)
+                n.fail_keys=set();kept=[bytes(n.rec(i)) for i in range(8)]
+                assert n.boot();calls+=1
+                assert [bytes(n.rec(i)) for i in range(8)]==kept,'converted records converted again'
+            want=[fieldvals[j] for j in range(7)]+[halation(oh[k][1],version)]+fieldvals[7:9]
+            # The set's film: its values (from Standard's fields) in Bleach Bypass's; Standard's own back.
+            assert n.fields(1)==want,(version,case,n.fields(1),want)
+            assert [n.rec()[STD_FIELD[j][1]] for j in range(9)]==ov[0][1]
+            assert [n.rec(4)[STD_FIELD[j][2]] for j in range(9)]==ov[0][2]
+            assert n.fields(2,4)==[stored4[j] for j in range(7)]+[halation(oh[k][2],version)]+stored4[7:9]
+            # The other films: the old table's values, Halation as Toning (neutral when the preset changed).
+            n.select(0,FIRST+k2);calls+=1
+            other=[ov[k2+1][0][j] for j in range(7)]+[halation(oh[k2][0],version)]+[ov[k2+1][0][7],ov[k2+1][0][8]]
+            assert n.fields(0)==(NEUTRAL if case=='changed' else other),(version,case)
+            # Bleach Bypass its own (after a second takeover its values in the converted set are not known: neutral).
+            n.select(1,BLEACH);calls+=1;assert n.fields(1)==(NEUTRAL if case=='twice' else bleach),(version,case)
+            n.select(4,FIRST+k2);assert n.fields(4)==[NEUTRAL[j] for j in range(NP) if FIELD[j][4]];calls+=1
+            # The table is written at power off; the next start uses it.
+            n.writes=[];n.power_off();calls+=1;assert table_of([d for kk,d in n.writes if kk==12][-1])
+            rep['taken_over_v%d_%s'%(version,case)]=True
     # 6. Damaged records are not used; no memory, no store: the module stays out of the way.
     vals0=[[[rng.randrange(9) for j in range(NP)] for c in range(6)] for o in range(OWNERS)]
     good=make_record(vals0,[0]+prints+[0]*(20-films))

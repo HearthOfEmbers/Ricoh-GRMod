@@ -426,8 +426,19 @@ static void neutral_owner(State *s, uint8_t *ud, uint32_t o) {
     neutral_fields(ud, o);
 }
 
+/* A record's photo set on film o that this has converted already: Standard's fields hold Standard's
+ * values of the old table and Bleach Bypass's Toning the film's Halation. (The old table stays in
+ * the store until the first save of this round's table: when that write did not happen after the
+ * camera saved the converted records, the next start takes the old table over again.) */
+static int converted(const volatile uint8_t *r, uint32_t set, uint32_t o, uint8_t ot[OWNERS][OLD_SETS][OLD_NP], const State *s) {
+    for (uint32_t j = 0; j < OLD_NP; j++) if (r[STD_FIELD[j][set]] != ot[0][set][j]) return 0;
+    return r[FIELD[TONING][set]] == s->t[o][set][TONING];
+}
+
 /* Rounds 6..9 kept a photo set's film in Standard's fields: those go to Bleach Bypass's fields
- * (Toning: the film's Halation), Standard's come back from the old table. */
+ * (Toning: the film's Halation), Standard's come back from the old table. A set converted already
+ * keeps its fields: the film's values are those in Bleach Bypass's fields (Bleach Bypass's own
+ * values of that set, which they replaced, are not known any more: neutral). */
 static void take_over(State *s, uint8_t *ud, uint8_t ot[OWNERS][OLD_SETS][OLD_NP], uint8_t oh[MAXFILMS][OLD_SETS], int got) {
     uint8_t *rec = record_of(ud, 0);
     for (uint32_t k = 0; k < MAXFILMS; k++)
@@ -449,6 +460,13 @@ static void take_over(State *s, uint8_t *ud, uint8_t ot[OWNERS][OLD_SETS][OLD_NP
             if (look < FIRST || look >= FIRST + MAXFILMS) continue;
             uint32_t o = look - FIRST + 1u;
             if (got == 1 && o >= OLD_V1_OWNERS) continue;
+            if (converted(r, set, o, ot, s)) {
+                if (i == 0u) for (uint32_t j = 0; j < NP; j++) {
+                    s->t[o][set][j] = r[FIELD[j][set]];
+                    s->t[0][set][j] = NEUTRAL[j];
+                }
+                continue;
+            }
             for (uint32_t j = 0; j < OLD_NP; j++) {
                 uint8_t v = r[STD_FIELD[j][set]];
                 if (i == 0u) s->t[o][set][OLD_TO_NEW[j]] = v;
@@ -472,7 +490,11 @@ uint32_t sp_load(uint8_t *ud) {
     int found = read_record(s);
     if (!found) {
         int got = read_old(s, s->ot, s->oh);
-        if (got) take_over(s, ud, s->ot, s->oh, got);
+        if (got) {
+            take_over(s, ud, s->ot, s->oh, got);
+            /* Version 3 has the presets' fingerprints: a film whose preset changed starts neutral. */
+            if (got == 3) for (uint32_t o = 1; o <= SLOT_COUNT; o++) if (s->rec[3u + o - 1u] != print_of(o)) neutral_owner(s, ud, o);
+        }
         else {
             /* Bleach Bypass keeps its values; the films start neutral, also where one is selected. */
             for (uint32_t c = 0; c < COMBOS; c++)
@@ -526,6 +548,9 @@ uint32_t sp_load(uint8_t *ud) {
 uint32_t sp_save(uint8_t *ud) {
     uint32_t r = prior_native_save(ud);
     State *s = state();
-    if (s && s->loaded && s->dirty) write_record(s);
+    if (s && s->loaded && s->dirty) {
+        write_record(s);
+        if (s->last_write != 1u) write_record(s);   /* once more: until it is written, the next start takes the old table over again */
+    }
     return r;
 }

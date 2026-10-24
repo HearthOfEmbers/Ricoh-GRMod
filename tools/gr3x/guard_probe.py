@@ -33,8 +33,11 @@ def guarded(rec,films,max_ratio,hidden=(),soft_r10=False):
     if out[RATIO]>max_ratio:out[RATIO]=0
     # Round 10: soft focus on (1..3) and on no slot as 0x09: the slots that hold 0x13 (rounds 6..9) get 0x09.
     if soft_r10 and 1<=out[SOFT]<=3 and not any(out[f]==9 for f in ADJ_SLOTS):
+        moved=False
         for f in ADJ_SLOTS:
-            if out[f]==0x13:out[f]=9
+            if out[f]==0x13:out[f]=9;moved=True
+        # On no slot at all: soft focus off (it could not be seen or changed).
+        if not moved:out[SOFT]=0
     return bytes(out)
 
 class GuardProbe(AdjProbe):
@@ -104,6 +107,19 @@ def verify(data,manifest,seed=1107,rounds=400):
         assert p.call(g['fix'],RECS) is not None;calls+=1
         got=bytes(cpu.mem_read(RECS,SIZE));assert got==want(rec,films,max_ratio),v
         fixed+=got!=bytes(rec)
+    if soft_r10:
+        # Round 9 -> 10: soft focus on (each level) with 0x13 on some, all or none of the slots, or 0x09 already.
+        for level in (1,2,3):
+            for slots in ((0x13,0,0,0,0),(0,0,0,0,0x13),(0x13,)*5,(0,4,0x14,0,0),(9,0x13,0,0,0),(0,0,0,0,0)):
+                rec=bytearray(rng.randrange(256) for _ in range(SIZE))
+                for off in LOOKS:rec[off]=11
+                rec[RATIO]=0;rec[SOFT]=level
+                for f,v in zip(ADJ_SLOTS,slots):rec[f]=v
+                cpu.mem_write(RECS,bytes(rec));p.call(g['fix'],RECS);calls+=1
+                got=bytes(cpu.mem_read(RECS,SIZE));assert got==want(rec,films,max_ratio),(level,slots)
+                if 9 in slots:assert got[SOFT]==level and [got[f] for f in ADJ_SLOTS]==list(slots)
+                elif 0x13 in slots:assert got[SOFT]==level and [got[f] for f in ADJ_SLOTS]==[9 if v==0x13 else v for v in slots]
+                else:assert got[SOFT]==0 and [got[f] for f in ADJ_SLOTS]==list(slots)
     assert p.call(g['fix'],0)==0;calls+=1
     for _ in range(rounds):
         recs,ud=p.records(rng,pointers=rng.random()<0.7)
