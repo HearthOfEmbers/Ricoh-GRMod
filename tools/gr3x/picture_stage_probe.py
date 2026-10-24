@@ -87,7 +87,23 @@ def verify(data,manifest,reference=None):
     n=StageProbe(data,manifest)
     round6=manifest.get('filmCount');round7=manifest.get('round7')
     # 1. Stash: every look the builder sees leaves its id, its level and the valid bit.
-    if round7:
+    if manifest.get('round10'):
+        # Round 10 (GR IV's way): the development step reads the level from the film's Toning byte
+        # (+0x786 of the picture's parameters, GR IV's states 0..11: 1 / 3 / 2 weak / medium / strong
+        # red, 4..6 white, 0 and 7..11 off); a film 64 + k is left as 32 + k.
+        cases=0
+        def level(state):
+            if state>=7:return 0,0
+            if state>=4:return state-3,1
+            return {3:2,2:3}.get(state,state),0
+        for tone in NATIVE+list(range(64,84))+[0,63,84,255]:
+            for state in list(range(13))+[0x7f,0xff]:
+                n.uc.mem_write(STASH,b'\xa5'*4);n.descriptor(tone,state);calls+=1;cases+=1
+                v,w=level(state) if 64<=tone<64+round6 else (0,0)
+                look=tone-32 if tone>=64 else tone
+                assert u32(n.uc,STASH)==look|v<<8|(0x20000 if w else 0)|0x10000,(tone,state,hex(u32(n.uc,STASH)))
+        report['stash_states']=cases
+    elif round7:
         # Round 7: slots3.c's settings (strength | white << 2) per film and photo set (State 'TLS3',
         # settings at +587); a film 64 + k is left as 32 + k, the strength at bits 8..15, white at bit 17.
         state=0x55880000;n.uc.mem_write(state,bytes(0x400))

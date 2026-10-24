@@ -79,7 +79,9 @@ def main():
         results[name]=dict(passed=True,calls=count,report=path.name,sha256=hashlib.sha256(path.read_bytes()).hexdigest())
         print(name+': passed',flush=True)
     if manifest['kind']=='gr3x-image-control-patchset' and want('image-controls'):
-        from image_controls_verify import verify as look_verify
+        # Round 10: the films as looks of their own (films_r10_verify.py).
+        if manifest.get('round10'):from films_r10_verify import verify as look_verify
+        else:from image_controls_verify import verify as look_verify
         assert a.base_look_manifest is not None
         report=look_verify(data,json.loads(a.base_look_manifest.read_text()),manifest)
         report['candidate_sha256']=sha
@@ -105,7 +107,8 @@ def main():
             results['picture-stage']=dict(passed=True,calls=report['calls'],report=path.name,sha256=hashlib.sha256(path.read_bytes()).hexdigest())
             print('picture-stage: passed',flush=True)
         if manifest.get('ownParameters') and want('own-film-parameters'):
-            from slots_probe import verify as slots_verify
+            if manifest.get('round10'):from films_probe import verify as slots_verify
+            else:from slots_probe import verify as slots_verify
             report=slots_verify(data,manifest)
             report['candidate_sha256']=sha
             path=a.output/'own-film-parameters.json'

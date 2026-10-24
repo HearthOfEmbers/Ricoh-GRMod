@@ -82,12 +82,13 @@ class LookProbe(AdjProbe):
             self.uc.mem_write(pointer + 0x77c, b'\x0b')
         self.queue = []
 
-    def descriptor(self, tone):
+    def descriptor(self, tone, toning=None):
         self.uc.mem_write(OBJECT, bytes(0x300))
         self.uc.mem_write(CONTEXT, bytes(0x9000))
         self.uc.mem_write(COMMON, bytes(0x2000))
         self.uc.mem_write(COMMON + 0x77c, bytes([tone]))
         self.uc.mem_write(COMMON + 0x77d, bytes([4]) * 6)
+        if toning is not None: self.uc.mem_write(COMMON + 0x786, bytes([toning]))
         put(self.uc, CONTEXT + 0x82d0, COMMON)
         self.uc.mem_write(OUTPUT, b'\xa5' * 0x120)
         for pointer in GAMMA_BUFFERS:

@@ -49,7 +49,27 @@ films. Round 9 (the default; `gr3Round: 8` builds round 8): the live view's chan
 (0x536dc860) reads the look itself at 0x536dc998 instead of a film's native base, so changing from one
 film to another (or Standard to a film) computes the matrix, second matrix and curves again; up to
 round 8 the live view kept the previous film's colour until a parameter changed
-(`tools/gr3x/live_refresh_probe.py` runs it). Black-and-white and toned black-and-white presets
+(`tools/gr3x/live_refresh_probe.py` runs it).
+Round 10 (experimental, `gr3Round: 10`; the default stays round 9; recipe `round: 10`, revision T10)
+does GR Mod's additions the GR IV way wherever GR III has the same structures; colour fitting and the
+Image Control order / hidden looks keep GR III's implementation (`core/src/fw/gr3x/round10.ts`,
+`films-r10.ts`, `native/films.c`). The films are looks of their own: the tone, multi-axis and YCbCr
+descriptor tables grow to 84 entries and film k is look 64 + k everywhere (four rendering decisions
+and the shooting-mode restriction still take it as Standard). They borrow Bleach Bypass's parameters
+(Standard's nine and Toning, in every photo and movie set) and keep their Halation in that Toning
+byte as GR IV's twelve states; the values of the looks not in use wait in HTData record 12 ('GR3A',
+version 10; rounds 6..9's tables are taken over at the first start). The films are in the movie list
+too; RAW development, the maker note (ImageTone 0x8110 + k, Toning 0x100 + state) and playback know
+them. ADJ soft focus is function 0x09 (after Image Control, as GR IV's 0x0A; rounds 6..9's 0x13 in
+the ADJ slots becomes 0x09 at start). The start-up zero fill clears 76 bytes up to the heap's first
+block (0x558043c0): one RAM word per addition, as GR IV. The settings load and save go through GR IV's
+scaffold (the guard, the films and the End Screen hook it); the End Screen choice is its own HTData
+record (13). What stays different: RAW development shows Standard's parameter lines for a film (its
+Halation is applied as shot), the playback parameter page shows Standard's, the date imprint's
+setting byte stays in the record, the curves and the second matrix stay hooks (GR III applies
+saturation before the curves). Probes: `films_r10_verify.py`, `films_probe.py`, and round 10 branches
+of the soft focus, guard, End Screen, layout, halation rows, picture stage and date imprint probes.
+Black-and-white and toned black-and-white presets
 (output colour a function of brightness only) are fitted with equal matrix rows and a curve per
 channel, no second matrix (`isTonedMonochrome`, `fitTonedMonochrome` in `core/src/color/gr3x-import.ts`):
 they stay neutral (or toned) at any saturation setting. Round 8 probes: `look_layout_probe.py`, `datestamp8_probe.py` (orientation, names, RAW

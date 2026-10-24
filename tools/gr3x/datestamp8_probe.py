@@ -45,6 +45,9 @@ BEFORE=0x534322d8
 SINGLETON=0x553458b0
 STASH,MODE,ORIENT_BYTE,FRAME=0x55804378,0x5580437c,0x5580437d,0x5580437e
 DEVELOP=0x536db7f8
+# Round 10 (core/src/fw/gr3x/round10.ts, GR IV's words): ORIENT_WORD (direction | 0x100) and FRAME_LOOK
+# (the stash's word as it is), one word each; the End Screen mode word untouched.
+ORIENT_WORD,FRAME_WORD=0x55804380,0x55804384
 EXECUTE=0x535047d4
 CACHE,INVALIDATE,CLEAN,PLATFORM,GET_TIME=0x536bbc30,0x536bbcc0,0x536bbcac,0x536bd838,0x536b6510
 
@@ -168,8 +171,10 @@ def exposure(p,manifest):
     c=p.uc;e=manifest['entries'];calls=0;cases={}
     assert u32(c,BEFORE)==(0xea000000|(((e['exposureOrientation']-(BEFORE+8))>>2)&0xffffff))
     OBJ,HOLD,REC=0x62060000,0x62061000,0x62062000
+    r10=bool(manifest.get('round10'))
     def run(stash,chain,direction,mode=0x5a):
         c.mem_write(STASH,struct.pack('<I',stash));c.mem_write(MODE,struct.pack('<I',0xa5a5a500|mode))
+        c.mem_write(ORIENT_WORD,b'\xa5'*8)
         c.mem_write(OBJ,bytes(0x600));c.mem_write(HOLD,bytes(8));c.mem_write(REC,bytes(0x100));c.mem_write(REC+0xc8,bytes([direction]))
         s,o,h=chain
         c.mem_write(SINGLETON,struct.pack('<I',s));c.mem_write(OBJ+0x518,struct.pack('<I',o));c.mem_write(HOLD,struct.pack('<I',h))
@@ -182,8 +187,22 @@ def exposure(p,manifest):
         assert out==regs[:12] and c.reg_read(reg.UC_ARM_REG_SP)==STACK and c.reg_read(reg.UC_ARM_REG_R12)==STACK and c.reg_read(reg.UC_ARM_REG_LR)==STOP
         w=bytes(c.mem_read(MODE,4))
         assert w[0]==mode and u32(c,STASH)==stash
+        if r10:
+            assert w==bytes([mode])+b'\xa5'*3
+            return u32(c,ORIENT_WORD),u32(c,FRAME_WORD)
+        assert u32(c,ORIENT_WORD)==u32(c,FRAME_WORD)==0xa5a5a5a5
         return w[1],struct.unpack_from('<H',w,2)[0]
     good=(OBJ,HOLD,REC)
+    if r10:
+        for direction in list(range(8))+[0x80,0xff]:
+            for stash in (0,11,0x10000|11,0x10000|32|(3<<8)|0x20000,0x10000|51,0x10000|255,0xffff,0xa5a5a5a5):
+                ow,fw=run(stash,good,direction);calls+=1
+                assert ow==(direction if direction<=3 else 0)|0x100 and fw==stash,(direction,hex(stash),hex(ow),hex(fw))
+        bad=[(0,HOLD,REC),(0x3ffffffc,HOLD,REC),(0xc0000000,HOLD,REC),(OBJ+2,HOLD,REC),(OBJ,0,REC),(OBJ,HOLD+1,REC),(OBJ,0xfffffff0,REC),(OBJ,HOLD,0),(OBJ,HOLD,REC+3),(OBJ,HOLD,0x20000000)]
+        for chain in bad:
+            ow,fw=run(0x10000|12,chain,1);calls+=1
+            assert (ow,fw)==(0xa5a5a5a5,0x10000|12),(chain,hex(ow),hex(fw))
+        return calls,{'directions':10,'bad_chains':len(bad),'words':'GR IV (orientation | 0x100, frame look = stash word)'}
     for direction in list(range(8))+[0x80,0xff]:
         for stash in (0,11,0x10000|11,0x10000|32|(3<<8)|0x20000,0x10000|51,0x10000|255,0xffff):
             ob,fh=run(stash,good,direction);calls+=1
@@ -201,21 +220,42 @@ def raw_words(p,manifest,films):
     c=p.uc;calls=0
     ARG,REC=0x62064000,0x62070000
     c.mem_write(ARG,bytes(0x9000))
-    def run(flag,look,e83,e84,dirb,frame0=0x1234,orient0=0x56):
-        c.mem_write(ARG+0x82ac,bytes([flag]));c.mem_write(REC+0x77c,bytes([look]))
+    r10=bool(manifest.get('round10'))
+    def run(flag,look,e83,e84,dirb,frame0=0x1234,orient0=0x56,toning=0):
+        c.mem_write(ARG+0x82ac,bytes([flag]));c.mem_write(REC+0x77c,bytes([look]));c.mem_write(REC+0x786,bytes([toning]))
         c.mem_write(REC+0x71e03,bytes([e83,e84]));c.mem_write(REC+0xc8,bytes([dirb]))
         c.mem_write(STASH,b'\xa5'*4);c.mem_write(MODE,bytes([0x3c,orient0])+struct.pack('<H',frame0))
         regs=[0x6000+i for i in range(13)];regs[1]=ARG+0x8000;regs[3]=REC
         for i,v in enumerate(regs):c.reg_write(getattr(reg,'UC_ARM_REG_R'+str(i)),v)
         for flags in (0,0xf):
             for i,v in enumerate(regs):c.reg_write(getattr(reg,'UC_ARM_REG_R'+str(i)),v)
-            c.mem_write(MODE,bytes([0x3c,orient0])+struct.pack('<H',frame0))
+            c.mem_write(MODE,bytes([0x3c,orient0])+struct.pack('<H',frame0));c.mem_write(ORIENT_WORD,struct.pack('<2I',0x5600|orient0,0x12340000|frame0))
             c.reg_write(reg.UC_ARM_REG_SP,STACK);c.reg_write(reg.UC_ARM_REG_LR,STOP);c.reg_write(reg.UC_ARM_REG_CPSR,0x13|flags<<28)
             c.emu_start(DEVELOP,DEVELOP+4,count=400)
             out=[c.reg_read(getattr(reg,'UC_ARM_REG_R'+str(i))) for i in range(13)]
             assert c.reg_read(reg.UC_ARM_REG_PC)==DEVELOP+4 and c.reg_read(reg.UC_ARM_REG_SP)==STACK and c.reg_read(reg.UC_ARM_REG_LR)==STOP
             assert out[:2]==regs[:2] and out[3:]==regs[3:] and c.reg_read(reg.UC_ARM_REG_CPSR)>>28==flags
-        w=bytes(c.mem_read(MODE,4));return out[2],u32(c,STASH),w[0],w[1],struct.unpack_from('<H',w,2)[0]
+        w=bytes(c.mem_read(MODE,4))
+        if r10:
+            assert w==bytes([0x3c,orient0])+struct.pack('<H',frame0)
+            return out[2],u32(c,STASH),w[0],u32(c,ORIENT_WORD),u32(c,FRAME_WORD)
+        assert (u32(c,ORIENT_WORD),u32(c,FRAME_WORD))==(0x5600|orient0,0x12340000|frame0)
+        return out[2],u32(c,STASH),w[0],w[1],struct.unpack_from('<H',w,2)[0]
+    if r10:
+        for flag in (0,1,2):
+            for look in [11,12,22,21,64,64+max(films-1,0),83,0,255]:
+                for toning in (0,2,5):
+                    for e83,e84,dirb in ((0,0,1),(0,9,3),(1,2,0),(1,3,1),(1,7,2),(0,0,5),(1,0,2)):
+                        r2,stash,mode,ow,fw=run(flag,look,e83,e84,dirb,toning=toning);calls+=2
+                        film=films and 64<=look<64+films
+                        want_look=look-32 if films and look>=64 else look
+                        level={0:0,2:3<<8,5:2<<8|0x20000}[toning] if film else 0
+                        assert r2==(11 if 64<=look<84 else look) and stash==want_look|level|0x10000 and mode==0x3c,(flag,look,r2,hex(stash))
+                        if flag==0:
+                            v=e84 if e83 else dirb
+                            assert ow==(v if v<=3 else 0)|0x100 and fw==stash,(flag,look,e83,e84,dirb,hex(ow),hex(fw))
+                        else:assert (ow,fw)==(0x5656,0x12341234)
+        return calls,{'cases':3*9*3*7,'words':'GR IV'}
     for flag in (0,1,2):
         for look in [11,12,22,21,64,64+max(films-1,0),83,0,255]:
             for e83,e84,dirb in ((0,0,1),(0,9,3),(1,2,0),(1,3,1),(1,7,2),(0,0,5),(1,0,2)):
@@ -277,7 +317,8 @@ def pictures8(p,manifest,pics,clock,low,REC,PTR,OFFSET,CFG,ARG,DESC,PLAT):
     """The module through its stage stub, against GR IV's 0.8.4 module."""
     e=manifest['entries'];c=p.uc;calls=0
     ctx=e['dateContext'];words=struct.unpack('<13I',bytes(c.mem_read(ctx,52)))
-    assert words[5:8]==(PTR,OFFSET,STASH) and words[10:12]==(ORIENT_BYTE,FRAME)
+    r10=bool(manifest.get('round10'))
+    assert words[5:8]==(PTR,OFFSET,STASH) and words[10:12]==((ORIENT_WORD,FRAME_WORD) if r10 else (ORIENT_BYTE,FRAME))
     mono=bytes(c.mem_read(words[8],64));assert p.call(words[9])==0;calls+=1
     # The name table: per look a run of glyphs, as GR IV's lookNameGlyphs makes them from the names.
     names={}
@@ -296,7 +337,11 @@ def pictures8(p,manifest,pics,clock,low,REC,PTR,OFFSET,CFG,ARG,DESC,PLAT):
         cfg=bytearray(0x60);struct.pack_into('<4I',cfg,0x3c,*(DESC+i*0x20 for i in range(4)));u.mem_write(CFG,bytes(cfg))
         u.mem_write(ARG,struct.pack('<3I',0,0,CFG));u.mem_write(PLAT,struct.pack('<2I',0,PLAT+0x80))
         u.mem_write(REC,bytes(0xb28));u.mem_write(REC+OFFSET,bytes([setting]));u.mem_write(PTR,struct.pack('<I',REC))
-        u.mem_write(STASH,struct.pack('<I',stash));u.mem_write(MODE,bytes([1,ob])+struct.pack('<H',fh))
+        orient=((ob&3)|0x100) if ob&0x80 else ob
+        frame=((fh&0xff)|0x10000) if fh&0x8000 else fh
+        u.mem_write(STASH,struct.pack('<I',stash))
+        if r10:u.mem_write(MODE,b'\x01\xa5\xa5\xa5');u.mem_write(ORIENT_WORD,struct.pack('<2I',orient,frame))
+        else:u.mem_write(MODE,bytes([1,ob])+struct.pack('<H',fh))
         regs=[0x62e00000+i*0x100 for i in range(13)];regs[1]=ARG
         for i,v in enumerate(regs):u.reg_write(getattr(reg,'UC_ARM_REG_R'+str(i)),v)
         u.reg_write(reg.UC_ARM_REG_SP,STACK);u.reg_write(reg.UC_ARM_REG_LR,STOP);u.reg_write(reg.UC_ARM_REG_CPSR,0x13)
@@ -304,8 +349,6 @@ def pictures8(p,manifest,pics,clock,low,REC,PTR,OFFSET,CFG,ARG,DESC,PLAT):
         assert u.reg_read(reg.UC_ARM_REG_PC)==EXECUTE+4 and [u.reg_read(getattr(reg,'UC_ARM_REG_R'+str(i))) for i in range(12)]==regs[:12]
         assert u.reg_read(reg.UC_ARM_REG_SP)==STACK and u.reg_read(reg.UC_ARM_REG_R12)==STACK
         got=[bytes(u.mem_read(a,len(b))) for a,b in pics['memory']]
-        orient=((ob&3)|0x100) if ob&0x80 else ob
-        frame=((fh&0xff)|0x10000) if fh&0x8000 else fh
         ref=gr4_reference8(clock,low,setting,pics,(stash,mono),orient,frame,names)
         assert got==ref,(setting,hex(ob),hex(stash),hex(fh))
         changed=[sum(a!=b for a,b in zip(x,y)) for x,y in zip(got,base)]

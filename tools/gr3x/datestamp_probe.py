@@ -350,7 +350,7 @@ def verify(data,manifest):
         n,report['pictures8']=d8.pictures8(p,manifest,pics,CLOCK,LOW,REC,PTR,OFFSET,CFG,ARG,DESC,PLAT);calls+=n
         n,report['exposure']=d8.exposure(p,manifest);calls+=n
         n,report['raw_development']=d8.raw_words(p,manifest,manifest.get('filmCount') or 0);calls+=n
-        c.mem_write(0x55804378,bytes(8))
+        c.mem_write(0x55804378,bytes(16))
     for stored,pointer in (((1,False),) if r8 else ((0,True),(1,True),(2,True),(3,True),(7,True),(1,False))):
         p.setting(stored,pointer);got=execute(p,pics);calls+=1
         ref=gr4_reference(stored if pointer else 0,pics)
