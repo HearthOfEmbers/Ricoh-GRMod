@@ -144,6 +144,8 @@ export interface TestOptions {
   dateStampFixed?: number;
   /** Also print the encoder configuration on the 720x480 picture. */
   dateStampDiag?: boolean;
+  /** Direct Flash diagnostics: the planner records what it saw, the date imprint prints it on the 720x480 picture. */
+  directFlashDiag?: boolean;
 }
 
 export interface AspectResult {
@@ -1028,13 +1030,13 @@ export function installExtensions(rtos: Uint8Array, iconbin: Uint8Array, ratios:
   }
   if (features.adjSoftFocus) icons = installAdjSoftFocus(patch, icons);
   // Before the date imprint's menu, which copies the list table with Flash Mode's records.
-  if (features.directFlash) icons = installDirectFlash(patch, icons);
+  if (features.directFlash) icons = installDirectFlash(patch, icons, !!test.directFlashDiag);
   if (features.monoUnlock) installMonoUnlock(patch);
   if (features.dateStamp) {
     const fixed = test.dateStampFixed;
     // From 0.8.2 (builds with the guard) the imprint goes by the picture's look.
     const look = features.guard ? { stash: LOOK_STASH, monoLooks: monoTable(patch, slots.map((x) => monoLook(x.matrixQ13, x.curves, x.postQ9)), FIRST_ADDED_LOOK), names: lookNames(patch, slots.map((x) => x.name)) } : undefined;
-    installDateStamp(patch, fixed ? patch.append([fixed, 0, 0, 0], 4) : DATESTAMP_BYTE, !!test.dateStampDiag, look);
+    installDateStamp(patch, fixed ? patch.append([fixed, 0, 0, 0], 4) : DATESTAMP_BYTE, test.directFlashDiag && features.directFlash ? 'df' : !!test.dateStampDiag, look);
     if (!fixed) icons = installDateStampMenu(patch, icons);
     if (look && slots.length === 0) installLookStash(patch);
   }

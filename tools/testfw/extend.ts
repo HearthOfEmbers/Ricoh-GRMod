@@ -3,7 +3,7 @@
  * Rebuild a verified test firmware of this program with more additions (development tool, not part
  * of the program).
  *
- *   npx vite-node tools/testfw/extend.ts OFFICIAL.bin IN.bin OUT.bin '{"directFlash":{"gn":3}}'
+ *   npx vite-node tools/testfw/extend.ts OFFICIAL.bin IN.bin OUT.bin '{"directFlash":true}' ['{"directFlashDiag":true}']
  *
  * Everything IN.bin holds (presets, slots, ratios, menus, ...) is kept; the additions given as JSON
  * (`ExtensionFeatures`) are added. Writes OUT.bin and OUT.bin.rtos (decoded RTOS) and prints the
@@ -12,9 +12,9 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { Engine, fw } from '../../core/src';
 
-const [official, input, out, add = '{}'] = process.argv.slice(2);
+const [official, input, out, add = '{}', test = '{}'] = process.argv.slice(2);
 const eng = await Engine.open(new Uint8Array(readFileSync(official)));
-const file = await eng.extendVerified(new Uint8Array(readFileSync(input)), JSON.parse(add));
+const file = await eng.extendVerified(new Uint8Array(readFileSync(input)), JSON.parse(add), JSON.parse(test));
 writeFileSync(out, file);
 const d = new fw.Firmware(file).decoded;
 const r = fw.sectionsOf(d).find((x) => x.name === 'RTOS')!;

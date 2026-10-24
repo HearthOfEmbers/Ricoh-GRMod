@@ -43,7 +43,8 @@
 import { FirmwareError } from '../types';
 import { assembleWords } from './arm';
 import { BASE, Patch, expectWord, u16le, u32le } from './build';
-import { DATESTAMP_CODE, DATESTAMP_CODE_LENGTH, DATESTAMP_DIAG_CODE } from './datestamp-code';
+import { DATESTAMP_CODE, DATESTAMP_CODE_LENGTH, DATESTAMP_DFDIAG_CODE, DATESTAMP_DIAG_CODE } from './datestamp-code';
+import { DIRECT_FLASH_DIAG_SLOT } from './directflash';
 import { FRAME_LOOK, LOOK_STASH, MONO_MODEL, ORIENT_VALID, ORIENT_WORD } from './lookstash';
 import { NAME_TABLE_RTOS_OFFSETS } from '../names';
 
@@ -180,8 +181,9 @@ function hi(v: number): number {
   return v >>> 16;
 }
 
-export function datestampModule(diag = false): Uint8Array {
-  const raw = Uint8Array.from(atob(diag ? DATESTAMP_DIAG_CODE : DATESTAMP_CODE), (c) => c.charCodeAt(0));
+/** `diag`: test builds only; true prints the encoder configuration, 'df' the Direct Flash planner's diagnostics. */
+export function datestampModule(diag: boolean | 'df' = false): Uint8Array {
+  const raw = Uint8Array.from(atob(diag === 'df' ? DATESTAMP_DFDIAG_CODE : diag ? DATESTAMP_DIAG_CODE : DATESTAMP_CODE), (c) => c.charCodeAt(0));
   if ((!diag && raw.length !== DATESTAMP_CODE_LENGTH) || raw.length % 4 !== 0) fail('internal', 'date imprint module length');
   return raw;
 }
@@ -192,7 +194,7 @@ export function datestampModule(diag = false): Uint8Array {
  * imprint is then light only exactly for those looks (and on the GR IV Monochrome) instead of
  * for pictures whose colours look neutral. Returns the module address.
  */
-export function installDateStamp(patch: Patch, setting: number, diag = false, look?: { stash: number; monoLooks: Uint8Array; names?: Readonly<Record<number, string>> }): number {
+export function installDateStamp(patch: Patch, setting: number, diag: boolean | 'df' = false, look?: { stash: number; monoLooks: Uint8Array; names?: Readonly<Record<number, string>> }): number {
   expectWord(patch, JPEG_EXECUTE, 0xe1a0c00d); // mov ip, sp
   expectWord(patch, JPEG_EXECUTE + 4, 0xe92ddff0); // push {r4-r12, lr, pc}
   expectWord(patch, JPEG_EXECUTE + 0x18, 0xe5914008); // ldr r4, [r1, #8]  (the configuration)
@@ -204,7 +206,7 @@ export function installDateStamp(patch: Patch, setting: number, diag = false, lo
   const table = look ? patch.append(look.monoLooks, 4) : 0;
   const names = look && look.names ? lookNameTable(patch, look.names) : 0;
   const ctx = patch.append(u32le([CACHE, CACHE_FLUSH_FOR_READ, CACHE_CLEAN, PLATFORM, GET_TIME, setting, look ? look.stash : 0, table, look ? MONO_MODEL : 0, look ? ORIENT_WORD : 0,
-    look ? FRAME_LOOK : 0, names]), 16);
+    look ? FRAME_LOOK : 0, names, ...(diag === 'df' ? [DIRECT_FLASH_DIAG_SLOT] : [])]), 16);
   if (look) installExposureOrientation(patch);
   const code = patch.append(datestampModule(diag), 16);
   const stub = patch.append((at) => assembleWords(

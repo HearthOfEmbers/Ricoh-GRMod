@@ -27,6 +27,7 @@
 typedef unsigned char u8;
 typedef unsigned short u16;
 typedef unsigned int u32;
+typedef int s32;
 
 struct ctx {
   const volatile u8 *direct;        /* setting byte: 1 = Direct Flash chosen (with Flash On) */
@@ -37,6 +38,13 @@ struct ctx {
                                      * camera-menu choice of the guide number */
   const float *gn_table;            /* per choice: 2 log2(GN), GN at ISO 100 in metres, full power */
   u32 gn_count;                     /* entries in gn_table (at least 1); a choice beyond is 0 */
+#ifdef DIAG
+  /* Test builds only: a RAM word (zero at start) that holds a buffer, allocated with `alloc` on the
+   * first call, where every call leaves what it saw and decided (see `diag_record`); the date
+   * imprint's diagnostic build prints it on the 720x480 picture. */
+  u32 *volatile diag_slot;
+  void *(*alloc)(u32 size);
+#endif
 };
 
 #define F(o) (*(volatile float *)(info + (o)))
@@ -110,6 +118,44 @@ static float worst(const struct plan *p)
   return p->amb_err > a ? p->amb_err : a;
 }
 
+#ifdef DIAG
+/* Buffer: word 0 the number of calls, then two records of DIAG_WORDS words (the last call's at
+ * index calls & 1). Fields (x100 for APEX values): see `D_*`. */
+#define DIAG_WORDS 32
+#define DIAG_BYTES (4 + 2 * DIAG_WORDS * 4)
+enum { D_CALL, D_REASON, D_PROGRAM, D_MODE, D_KIND, D_ND_MODE, D_ISO_AUTO, D_OUTPUT, D_MM, D_EV, D_F70, D_F74, D_SYNC,
+       D_TV_HI, D_TV_LO, D_OFF_TV, D_OFF_AV, D_OFF_SV, D_TV, D_AV, D_SV, D_ND, D_AMB_ERR, D_FLASH_ERR, D_SV_LO, D_SV_HI,
+       D_AV_LO, D_AV_HI, D_F10, D_F14, D_FA0, D_FA4 };
+static s32 x100(float v)
+{
+  float r = v * 100.0f;
+  return (s32)(r < 0 ? r - 0.5f : r + 0.5f);
+}
+static s32 *diag_record(const struct ctx *k)
+{
+  u32 *buf = (u32 *)*k->diag_slot, n, i;
+  if (!buf) {
+    if (!k->alloc) return 0;
+    buf = (u32 *)k->alloc(DIAG_BYTES);
+    if (!buf) return 0;
+    for (i = 0; i < DIAG_BYTES / 4; i++) buf[i] = 0;
+    *k->diag_slot = (u32)buf;
+  }
+  n = ++buf[0];
+  {
+    s32 *r = (s32 *)(buf + 1 + (n & 1) * DIAG_WORDS);
+    for (i = 0; i < DIAG_WORDS; i++) r[i] = 0;
+    r[D_CALL] = (s32)n;
+    return r;
+  }
+}
+#define REC(field, value) do { if (rec) rec[field] = (s32)(value); } while (0)
+#define RECF(field, value) do { if (rec) rec[field] = x100(value); } while (0)
+#else
+#define REC(field, value) do { } while (0)
+#define RECF(field, value) do { } while (0)
+#endif
+
 void df_plan(u8 *ae, const struct ctx *k)
 {
   u8 *info;
@@ -119,17 +165,43 @@ void df_plan(u8 *ae, const struct ctx *k)
   u32 mm, kind, nd_mode, i;
   float f0, a, b;
   int nd;
+#ifdef DIAG
+  s32 *rec = diag_record(k);
+#endif
 
+  REC(D_REASON, 1);
   if (*k->direct != 1 || *k->flash_mode != 0) return;
+  REC(D_REASON, 2);
   info = *(u8 **)(ae + 0x28);
   if (!info || !*(u8 **)(ae + 4)) return;
   apex = *(void **)(*(u8 **)(ae + 4) + 4);
   if (!apex) return;
+  REC(D_PROGRAM, B(0x39));
+  REC(D_MODE, H(0x40));
+  REC(D_KIND, H(0x3e));
+  REC(D_ND_MODE, B(0x55d));
+  REC(D_ISO_AUTO, B(0x9c));
+  REC(D_OUTPUT, *k->flash_output);
+  REC(D_MM, W(0x584));
+  RECF(D_EV, F(0x64));
+  RECF(D_F70, F(0x70));
+  RECF(D_F74, F(0x74));
+  RECF(D_OFF_TV, F(0xd0));
+  RECF(D_OFF_AV, F(0xd4));
+  RECF(D_OFF_SV, F(0xd8));
+  RECF(D_F10, F(0x10));
+  RECF(D_F14, F(0x14));
+  RECF(D_FA0, F(0xa0));
+  RECF(D_FA4, F(0xa4));
+  REC(D_REASON, 3);
   if (B(0x39) > 4) return;          /* bulb, time */
+  REC(D_REASON, 4);
   if (H(0x40) == 7) return;         /* Snap Distance Priority */
   kind = H(0x3e);
+  REC(D_REASON, 5);
   if (kind >= 1 && kind <= 4) return; /* a P-TTL flash: Flash On as it is */
   mm = W(0x584);
+  REC(D_REASON, 6);
   if (mm == 0) return;              /* no distance */
   if (mm < 100) mm = 100;
   if (mm > 8000) mm = 8000;          /* as the camera's own use of it */
@@ -180,4 +252,23 @@ void df_plan(u8 *ae, const struct ctx *k)
   F(0xd4) = p.av;
   F(0xd8) = p.sv;
   B(0x560) = (u8)nd;
+  REC(D_REASON, 0);
+  RECF(D_TV, p.tv);
+  RECF(D_AV, p.av);
+  RECF(D_SV, p.sv);
+  REC(D_ND, nd);
+  RECF(D_AMB_ERR, p.amb_err);
+  RECF(D_FLASH_ERR, p.flash_err);
+  RECF(D_SV_LO, l.sv_lo);
+  RECF(D_SV_HI, l.sv_hi);
+  RECF(D_AV_LO, l.av_lo);
+  RECF(D_AV_HI, l.av_hi);
+  RECF(D_TV_LO, l.tv_lo);
+#ifdef DIAG
+  {
+    float sy = k->sync_tv(apex, 1, p.av);
+    RECF(D_SYNC, sy);
+    RECF(D_TV_HI, sy < l.tv_hi ? sy : l.tv_hi);
+  }
+#endif
 }

@@ -366,6 +366,7 @@ export class Engine {
 
   /** Set by `extendVerified` while it inspects a file: the additions to build on top of it. */
   private extendWith: Partial<ExtensionFeatures> | null = null;
+  private extendTest: aspect.TestOptions = {};
   private extended: Uint8Array | null = null;
 
   /**
@@ -373,8 +374,9 @@ export class Engine {
    * program rebuilt with more additions (e.g. Direct Flash on top of a test firmware), everything
    * else the same, through the same self-check as any build. Throws when the file is not verified.
    */
-  async extendVerified(raw: Uint8Array, add: Partial<ExtensionFeatures>): Promise<Uint8Array> {
+  async extendVerified(raw: Uint8Array, add: Partial<ExtensionFeatures>, test: aspect.TestOptions = {}): Promise<Uint8Array> {
     this.extendWith = add;
+    this.extendTest = test;
     this.extended = null;
     try {
       const s = await this.inspect(raw);
@@ -546,7 +548,7 @@ export class Engine {
       const ok = Object.values(checks).every((v) => v === true);
       if (ok && this.extendWith) {
         const more = { ...features, ...this.extendWith };
-        const built2 = aspect.installExtensions(aligned.slice(RTOS_OFFSET, rtosEnd), aligned.slice(ICONBIN_OFFSET, iconEnd), plan, more, 3);
+        const built2 = aspect.installExtensions(aligned.slice(RTOS_OFFSET, rtosEnd), aligned.slice(ICONBIN_OFFSET, iconEnd), plan, more, 3, this.extendTest);
         const grown2 = growPayload(aligned, built2, specs);
         const ranges2: Range[] = editable.map((r) => (r.offset >= ICONBIN_OFFSET ? { ...r, offset: r.offset + grown2.rtosGrowth + (r.offset >= ICONBIN_OFFSET + ICONBIN_LENGTH ? grown2.iconGrowth : 0) } : r));
         ranges2.push(...grownRanges(grown2, built2));

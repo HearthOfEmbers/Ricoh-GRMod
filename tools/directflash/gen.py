@@ -42,9 +42,9 @@ def run(cmd):
     return r.stdout
 
 
-def build(cc, ld, objcopy, tmp, origin):
+def build(cc, ld, objcopy, tmp, origin, extra=()):
     obj = tmp / 'df.o'
-    run(cc + FLAGS + ['-c', SRC, '-o', obj])
+    run(cc + FLAGS + list(extra) + ['-c', SRC, '-o', obj])
     undefined = [l for l in run(['readelf', '-s', '-W', obj]).splitlines() if ' UND ' in l and l.split()[-1] != 'UND' and not l.strip().endswith(': 0')]
     names = [l.split()[-1] for l in undefined if len(l.split()) >= 8]
     if names:
@@ -70,10 +70,14 @@ def main():
         tmp = Path(t)
         a, ea = build(cc, ld, objcopy, tmp, 0x10000)
         b, eb = build(cc, ld, objcopy, tmp, 0x543f0000)
-    if a != b or ea != eb:
+        da, dea = build(cc, ld, objcopy, tmp, 0x10000, ['-DDIAG'])
+        db, deb = build(cc, ld, objcopy, tmp, 0x543f0000, ['-DDIAG'])
+    if a != b or ea != eb or da != db or dea != deb:
         sys.exit('module is not position independent')
     while len(a) % 4:
         a += b'\0'
+    while len(da) % 4:
+        da += b'\0'
     version = run(cc + ['--version']).splitlines()[0]
     src_hash = hashlib.sha256(SRC.read_bytes()).hexdigest()
     OUT.write_text(
@@ -85,6 +89,9 @@ def main():
         f"export const DIRECTFLASH_CODE = '{base64.b64encode(a).decode()}';\n"
         f'export const DIRECTFLASH_CODE_LENGTH = {len(a)};\n'
         f'export const DIRECTFLASH_ENTRY = {ea};\n'
+        '/** Test builds only (-DDIAG): also leaves what each call saw in a buffer (see directflash.c). */\n'
+        f"export const DIRECTFLASH_DIAG_CODE = '{base64.b64encode(da).decode()}';\n"
+        f'export const DIRECTFLASH_DIAG_ENTRY = {dea};\n'
         f"export const DIRECTFLASH_SOURCE_SHA256 = '{src_hash}';\n")
     print(f'{OUT}: {len(a)} bytes, entry at {ea}')
 

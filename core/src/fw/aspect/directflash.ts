@@ -63,7 +63,7 @@
 import { FirmwareError } from '../types';
 import { assembleWords, branchWord, movImmediate, movWord } from './arm';
 import { ICON_CATALOG, LANGUAGES, LOOKUP_BOUNDS, NATIVE_TEXT_ROOTS, Patch, TEXT_CATALOG, concat, expectWord, u16le, u32le, utf16z } from './build';
-import { DIRECTFLASH_CODE, DIRECTFLASH_ENTRY } from './directflash-code';
+import { DIRECTFLASH_CODE, DIRECTFLASH_DIAG_CODE, DIRECTFLASH_DIAG_ENTRY, DIRECTFLASH_ENTRY } from './directflash-code';
 
 export const DIRECT_FLASH_TEXT_ID = 882;
 export const DIRECT_FLASH_ICON_ID = 733;
@@ -71,6 +71,14 @@ export const DIRECT_FLASH_ICON_ID = 733;
 export const DIRECT_FLASH_BYTE = 0x55084dd8 + 4 + 0x99b;
 /** The guide number choice: index into DIRECT_FLASH_GUIDE_NUMBERS; 0 on every camera. */
 export const DIRECT_FLASH_GN_BYTE = 0x55084dd8 + 4 + 0x99a;
+/**
+ * Test builds only: the RAM word that holds the planner's diagnostic buffer (allocated by the module
+ * on its first call), the last of the 44 bytes before the heap that the start-up zero fill clears
+ * once it is extended (see slots.ts / lookstash.ts). The date imprint's diagnostic build prints it.
+ */
+export const DIRECT_FLASH_DIAG_SLOT = 0x558372fc;
+const HEAP_ALLOC = 0x538e09b0;
+const ZERO_FILL_END = 0x53000460;
 /** Guide numbers (ISO 100, metres) by choice; entry 0 is the GF-2's (9.8 ft / 3 m). */
 export const DIRECT_FLASH_GUIDE_NUMBERS: readonly number[] = [3];
 
@@ -310,8 +318,12 @@ function branchTo(at: number, target: number, link: boolean): number {
   return branchWord(at, target, 14, link);
 }
 
-/** Install Direct Flash. Returns the new ICONBIN data. */
-export function installDirectFlash(patch: Patch, iconbin: Uint8Array): Uint8Array {
+/** Install Direct Flash. Returns the new ICONBIN data. `diag`: test builds only (see DIRECT_FLASH_DIAG_SLOT). */
+export function installDirectFlash(patch: Patch, iconbin: Uint8Array, diag = false): Uint8Array {
+  if (diag && patch.word(ZERO_FILL_END) !== 0x55837300) {
+    expectWord(patch, ZERO_FILL_END, 0x558372d4);
+    patch.setWord(ZERO_FILL_END, 0x55837300, 'start-up zero fill also clears the 44 unused bytes before the heap');
+  }
 
   // --- Checks of the official code this relies on.
   checkSlots(patch, ADJ_RECORD, ADJ);
@@ -345,10 +357,11 @@ export function installDirectFlash(patch: Patch, iconbin: Uint8Array): Uint8Arra
   if (patch.word(ICON_CATALOG + DIRECT_FLASH_ICON_ID * 4) !== 0) fail('unexpected-layout', 'icon number already in use');
 
   // --- Exposure: the module and its context, the wrapper of the flash program.
-  const code = decodeBase64(DIRECTFLASH_CODE);
+  const code = decodeBase64(diag ? DIRECTFLASH_DIAG_CODE : DIRECTFLASH_CODE);
+  const entry = diag ? DIRECTFLASH_DIAG_ENTRY : DIRECTFLASH_ENTRY;
   const module = patch.append(code, 16);
   const table = patch.append(u32le(DIRECT_FLASH_GUIDE_NUMBERS.map(guideNumberWord)), 16);
-  const ctx = patch.append(u32le([DIRECT_FLASH_BYTE, LIVE_FLASH_MODE, FLASH_OUTPUT, SYNC_TV, DIRECT_FLASH_GN_BYTE, table, DIRECT_FLASH_GUIDE_NUMBERS.length]), 16);
+  const ctx = patch.append(u32le([DIRECT_FLASH_BYTE, LIVE_FLASH_MODE, FLASH_OUTPUT, SYNC_TV, DIRECT_FLASH_GN_BYTE, table, DIRECT_FLASH_GUIDE_NUMBERS.length, ...(diag ? [DIRECT_FLASH_DIAG_SLOT, HEAP_ALLOC] : [])]), 16);
   const wrapper = patch.append((at) => assembleWords(
     `push {r4, lr}
      mov r4, r0
@@ -356,7 +369,7 @@ export function installDirectFlash(patch: Patch, iconbin: Uint8Array): Uint8Arra
      mov r0, r4
      movw r1, #${lo(ctx)}; movt r1, #${hi(ctx)}
      pop {r4, lr}
-     b #${module + DIRECTFLASH_ENTRY}`, at), 16);
+     b #${module + entry}`, at), 16);
   patch.setWord(FLASH_PROGRAM_CALL, branchTo(FLASH_PROGRAM_CALL, wrapper, true), 'Direct Flash: exposure after the flash program');
 
   // --- Menu lists (records 11 and 12), in place.
