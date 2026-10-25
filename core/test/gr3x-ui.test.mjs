@@ -41,9 +41,17 @@ beforeEach(async () => {
 afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe('GR IIIx UI family isolation', () => {
-  it('selects IIIx and the ratio page when opening its firmware', async () => {
+  it('selects IIIx when opening its firmware; the page and the (empty) ratio list stay as they are', async () => {
     expect(await store.adoptFirmware('arbitrary.bin', '1.60', new Uint8Array([1]))).toBe(true);
-    expect(store.getState()).toMatchObject({ model: 'GR3X_HDF', page: 'ratio', fwName: 'fwdc243b.bin' });
+    expect(store.getState()).toMatchObject({ model: 'GR3X_HDF', page: 'ic', fwName: 'fwdc243b.bin', ratios: [] });
+  });
+  it('adds no ratios by default and asks for one before building', async () => {
+    await store.adoptFirmware('fwdc243b.bin', '1.60', new Uint8Array([1]));
+    await vi.advanceTimersByTimeAsync(1);
+    store.setSoft(true);
+    await store.outputFirmware({ kind: 'folder' });
+    expect(mocks.engine.build).not.toHaveBeenCalled();
+    expect(mocks.host.write).not.toHaveBeenCalled();
   });
   it('blocks all unported output actions before a destination can be selected', async () => {
     await store.adoptFirmware('fwdc243b.bin', '1.60', new Uint8Array([1]));
@@ -54,8 +62,9 @@ describe('GR IIIx UI family isolation', () => {
     expect(store.getState().bridgeOpen).toBe(false);
     for (const fn of [mocks.host.pickDirectory, mocks.host.write, mocks.engine.build, mocks.engine.bridge, mocks.engine.script]) expect(fn).not.toHaveBeenCalled();
   });
-  it('exports exactly the fixed ADJ9 recipe through the real build action', async () => {
+  it('exports exactly the ratios added through the real build action', async () => {
     await store.adoptFirmware('fwdc243b.bin', '1.60', new Uint8Array([1]));
+    for (const r of ['4:3', '16:9', '65:24', '17:6', '3:4', '7:6', '5:4']) store.addRatio(r);
     await vi.advanceTimersByTimeAsync(1);
     expect(store.getState().ratios.map(r => r.ratio)).toEqual(['4:3', '16:9', '65:24', '17:6', '3:4', '7:6', '5:4']);
     await store.outputFirmware({ kind: 'folder' });
@@ -64,6 +73,7 @@ describe('GR IIIx UI family isolation', () => {
   });
   it('exports IIIx negative-clarity soft focus while preserving the ADJ function list', async () => {
     await store.adoptFirmware('fwdc243b.bin', '1.60', new Uint8Array([1]));
+    store.addRatio('4:3');
     store.setSoft(true);
     store.setDateStamp(true); store.setMonoUnlock(true);
     await vi.advanceTimersByTimeAsync(1);
@@ -92,6 +102,7 @@ describe('GR IIIx UI family isolation', () => {
     const preset = { matrixQ13: new Int16Array(9), curves: [new Uint16Array(256),new Uint16Array(256),new Uint16Array(256)] };
     store.getState().slots.CY.preset = { fileName: 'demo.cube', kind: 'cube', text: '', result: preset };
     store.setSoft(true); store.setMonoUnlock(true);
+    for (const r of ['4:3', '16:9', '65:24', '17:6', '3:4', '7:6', '5:4']) store.addRatio(r);
     await store.adoptFirmware('fwdc243b.bin', '1.60', new Uint8Array([1]));
     expect(store.getState()).toMatchObject({ soft: true, monoUnlock: true });
     await vi.advanceTimersByTimeAsync(1);
@@ -112,7 +123,7 @@ describe('GR IIIx UI family isolation', () => {
       names: Object.fromEntries(LANGS.map(l => [l, { text: `Film ${i+1}`, capacity: 24 }])) }));
     mocks.engine.open.mockResolvedValue(current);
     await store.adoptFirmware('fwdc243b.bin', '1.60', new Uint8Array([1]));
-    store.setName('F9', 'zh-CN', 'CineStill 800T'); store.setMonoUnlock(true);
+    store.setName('F9', 'zh-CN', 'CineStill 800T'); store.setMonoUnlock(true); store.addRatio('4:3');
     const preset = { matrixQ13: new Int16Array(9), curves: [new Uint16Array(256),new Uint16Array(256),new Uint16Array(256)] };
     store.getState().slots.F9.preset = { fileName: 'CineStill-800T.cube', kind: 'cube', text: '', result: preset };
     store.setActiveSlot('F9');
@@ -168,9 +179,13 @@ describe('GR IIIx UI family isolation', () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(restarted.getState()).toMatchObject({ model: 'GR3_HDF' });
     expect(restarted.getState().slots.CY).toMatchObject({ names: { en: 'Film III' }, preset: { fileName: 'iii.cube', text: 'LUT_3D_SIZE 2 three' } });
+    // GR IV's official file was kept: it opens again by itself (no download).
+    mocks.engine.open.mockResolvedValue(gr4);
     restarted.setModel('HDF');
     await vi.advanceTimersByTimeAsync(1);
     expect(restarted.getState().slots.CY).toMatchObject({ names: { en: 'Warm IV' }, preset: { fileName: 'iv.cube', text: 'LUT_3D_SIZE 2 four' } });
+    expect(restarted.getState()).toMatchObject({ model: 'HDF', fwName: 'fwdc248b.bin' });
+    expect(files.has('firmware-gr4.bin')).toBe(true);
   });
   it('takes over a GR III project of the test builds kept in project.json, presets included', async () => {
     mocks.host.available = true;
@@ -240,10 +255,10 @@ describe('GR IIIx UI family isolation', () => {
   it('opens GR III 2.10 as its own model in the same family and writes fwdc239b.bin', async () => {
     mocks.engine.open.mockResolvedValue({ ...info(), version: '2.10', filename: 'fwdc239b.bin', models: ['GR3_HDF'], });
     expect(await store.adoptFirmware('fwdc239b.bin', '2.10', new Uint8Array([1]))).toBe(true);
-    expect(store.getState()).toMatchObject({ model: 'GR3_HDF', page: 'ratio', fwName: 'fwdc239b.bin' });
-    expect(store.isGr3('GR3_HDF') && store.isGr3('GR3X_HDF') && !store.isGr3('HDF')).toBe(true);
+    expect(store.getState()).toMatchObject({ model: 'GR3_HDF', page: 'ic', fwName: 'fwdc239b.bin' });
+    expect(store.isGr3('GR3_HDF') && store.isGr3('GR3X_HDF') && store.isGr3('GR3') && store.isGr3('GR3X') && !store.isGr3('HDF')).toBe(true);
+    store.addRatio('4:3');
     await vi.advanceTimersByTimeAsync(1);
-    expect(store.getState().ratios.map(r => r.ratio)).toEqual(['4:3', '16:9', '65:24', '17:6', '3:4', '7:6', '5:4']);
     store.setSoft(true);
     await store.outputFirmware({ kind: 'folder' });
     expect(mocks.engine.build.mock.calls.at(-1).slice(2)).toEqual([
@@ -263,7 +278,7 @@ describe('GR IIIx UI family isolation', () => {
     await store.outputFirmware({ kind: 'folder' });
     expect(mocks.host.write).not.toHaveBeenCalled();
   });
-  it('does not reopen stale cached firmware after a persisted family switch', async () => {
+  it('does not open another camera\'s kept firmware; a 0.8.x kept file moves to its camera\'s place', async () => {
     await store.init(); // no host: mark the project ready without side effects
     mocks.host.available = true;
     let saved;
@@ -274,11 +289,22 @@ describe('GR IIIx UI family isolation', () => {
     expect(JSON.parse(saved)).toMatchObject({ model: 'HDF' });
     expect(JSON.parse(saved).fwName).toBeUndefined();
     vi.resetModules(); mocks.engine.open.mockClear();
-    mocks.host.storeGet.mockImplementation(async key => key === 'project.json' ? new TextEncoder().encode(saved) : key === 'firmware.bin' || key === 'preview.jpg' ? new Uint8Array([1]) : null);
+    // 0.8.x kept the one file open last (here GR IIIx's, told apart by its size) as firmware.bin.
+    const files = new Map([['project.json', new TextEncoder().encode(saved)], ['firmware.bin', new Uint8Array(30391788)], ['preview.jpg', new Uint8Array([1])]]);
+    mocks.host.storeGet.mockImplementation(async key => files.get(key) ?? null);
+    mocks.host.storeSet.mockImplementation(async (key, value) => { files.set(key, value); });
+    mocks.host.storeDel = vi.fn(async key => { files.delete(key); });
     const restarted = await import('../../ui/src/store');
     await restarted.init();
     expect(restarted.getState().model).toBe('HDF');
     expect(restarted.getState().info).toBeUndefined();
     expect(mocks.engine.open).not.toHaveBeenCalled();
+    expect(files.has('firmware.bin')).toBe(false);
+    expect(files.get('firmware-gr3x.bin')?.length).toBe(30391788);
+    // Back on GR IIIx: its kept file opens again without a download.
+    restarted.setModel('GR3X_HDF');
+    await vi.advanceTimersByTimeAsync(1);
+    expect(mocks.engine.open).toHaveBeenCalledOnce();
+    expect(restarted.getState()).toMatchObject({ model: 'GR3X_HDF', fwName: 'fwdc243b.bin' });
   });
 });

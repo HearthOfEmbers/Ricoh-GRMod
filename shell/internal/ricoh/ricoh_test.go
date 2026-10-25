@@ -151,7 +151,7 @@ func TestLatest(t *testing.T) {
 	if _, err := c.Latest(context.Background(), "MONO"); !errors.Is(err, ErrNoRelease) {
 		t.Errorf("MONO: %v", err)
 	}
-	if _, err := c.Latest(context.Background(), "GR3"); !errors.Is(err, ErrUnknownModel) {
+	if _, err := c.Latest(context.Background(), "GR2"); !errors.Is(err, ErrUnknownModel) {
 		t.Errorf("unknown model: %v", err)
 	}
 	if s.hits.Load() != 0 {

@@ -125,7 +125,7 @@ func TestFirmwareLatest(t *testing.T) {
 		}
 	}
 	wantStatus(t, e.do("GET", "/api/firmware/latest?model=MONO", nil), 404, codeNotFound)
-	wantStatus(t, e.do("GET", "/api/firmware/latest?model=GR3", nil), 400, codeInvalid)
+	wantStatus(t, e.do("GET", "/api/firmware/latest?model=GR2", nil), 400, codeInvalid)
 	wantStatus(t, e.do("GET", "/api/firmware/latest", nil), 400, codeInvalid)
 	wantStatus(t, e.do("POST", "/api/firmware/latest?model=HDF", nil), 405, codeInvalid)
 	wantStatus(t, e.do("GET", "/api/firmware/latest?model=HDF", nil, noToken), 403, codeForbidden)
@@ -322,4 +322,49 @@ func TestFirmwareUnlisted(t *testing.T) {
 		t.Errorf("download: %d %s", rec.Code, rec.Body)
 	}
 	wantStatus(t, e.do("GET", "/api/firmware/latest?model=MONO", nil), 404, codeNotFound)
+}
+
+// GR III / IIIx are built on pinned releases: a newer release the site lists is shown with the
+// pinned one as the fallback (as GR IV's 1.20 with 1.11); without one, the pinned release alone.
+func TestFirmwareLatestPinnedNewer(t *testing.T) {
+	for _, listed := range []bool{true, false} {
+		mux := http.NewServeMux()
+		mux.HandleFunc("/english/support/download_digital.html", func(w http.ResponseWriter, r *http.Request) {
+			if listed {
+				fmt.Fprint(w, `<table><tr><td>GR III</td><td><a href="digital/gr3_s.html">Windows / Mac OS</a></td><td>2.20</td></tr></table>`)
+				return
+			}
+			fmt.Fprint(w, `<table></table>`)
+		})
+		mux.HandleFunc("/english/support/digital/gr3_s.html", func(w http.ResponseWriter, r *http.Request) {
+			fmt.Fprint(w, `<table><tr><th>Applied product</th><td>RICOH GR III / RICOH GR III HDF</td></tr><tr><th>Release date</th><td>2026/10/21</td></tr></table>
+				<a href="/resources/FIRMWARE/gr3_v220.zip">Download</a>`)
+		})
+		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { w.Header().Set("Content-Length", "1000") })
+		srv := httptest.NewServer(mux)
+		e := newEnv(t, func(o *Options) { o.FirmwareSite = srv.URL })
+		for _, model := range []string{"GR3", "GR3_HDF"} {
+			rec := e.do("GET", "/api/firmware/latest?model="+model, nil)
+			if rec.Code != 200 {
+				t.Fatalf("%s: status %d %s", model, rec.Code, rec.Body)
+			}
+			var got struct {
+				Version  string `json:"version"`
+				Fallback *struct {
+					Version string `json:"version"`
+					File    string `json:"file"`
+				} `json:"fallback"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+				t.Fatal(err)
+			}
+			if listed && (got.Version != "2.20" || got.Fallback == nil || got.Fallback.Version != "2.10" || got.Fallback.File != "gr3_v210.zip") {
+				t.Errorf("%s listed: %s", model, rec.Body)
+			}
+			if !listed && (got.Version != "2.10" || got.Fallback != nil) {
+				t.Errorf("%s unlisted: %s", model, rec.Body)
+			}
+		}
+		srv.Close()
+	}
 }

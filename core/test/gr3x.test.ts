@@ -70,7 +70,7 @@ describe.skipIf(!input)('GR IIIx official 1.60 integration', () => {
   it('verifies the container, decoded payload, RTOS and startup copy against independent hashes', async () => {
     const { fw } = await openGr3xOfficial(raw);
     expect(fw.frames).toHaveLength(2430);
-    expect(engine.info).toMatchObject({ family: 'gr3x', version: '1.60', filename: 'fwdc243b.bin', models: ['GR3X_HDF'], factoryRatios: ['3:2', '1:1'] });
+    expect(engine.info).toMatchObject({ family: 'gr3x', version: '1.60', filename: 'fwdc243b.bin', models: ['GR3X_HDF', 'GR3X'], factoryRatios: ['3:2', '1:1'] });
     expect(engine.info.slots.map(s => s.defaultName)).toEqual(Array.from({ length: 20 }, (_, i) => `Film ${i + 1}`));
     // Power-off images and the factory entry needed a start-up script on the card; GR Mod 0.8 dropped that route.
     expect(engine.info.capabilities).toEqual({ build: true, presets: true, wallpaper: false, factoryEntry: false, bridge: false, menuPictures: true, lookLayout: true });
