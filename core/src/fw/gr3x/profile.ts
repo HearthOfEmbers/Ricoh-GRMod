@@ -9,6 +9,8 @@ import { Firmware, FirmwareError, sectionsOf, sha256Hex } from '../container';
 
 export interface Gr3Profile {
   readonly id: string; readonly model: 'GR3X_HDF' | 'GR3_HDF'; readonly camera: string; readonly tag: string;
+  /** The standard camera's model key: the same official file (Ricoh's archive applies to every edition). */
+  readonly standardModel: 'GR3X' | 'GR3';
   readonly version: string; readonly internalVersion: string; readonly versionWord: number;
   readonly filename: string; readonly size: number; readonly decodedSize: number;
   readonly sha256: string; readonly decodedSha256: string; readonly rtosSha256: string;
@@ -24,7 +26,7 @@ export interface Gr3Profile {
 }
 
 export const GR3X_160 = {
-  id: 'gr3x-hdf-1.60', model: 'GR3X_HDF', camera: 'GR IIIx', tag: 'GR3X-HDF-160',
+  id: 'gr3x-hdf-1.60', model: 'GR3X_HDF', standardModel: 'GR3X', camera: 'GR IIIx', tag: 'GR3X-HDF-160',
   version: '1.60', internalVersion: '1.60.11.17', versionWord: 0x013c0b11,
   filename: 'fwdc243b.bin', size: 30391788, decodedSize: 59718388,
   sha256: '708e79f3b7b96a7e1581b4acf4c412233050a1832718ef7f06c8397db1b431c7',
@@ -40,7 +42,7 @@ export const GR3X_160 = {
  * the tests, and every address in this directory relies on it. */
 export const GR3_210 = {
   ...GR3X_160,
-  id: 'gr3-hdf-2.10', model: 'GR3_HDF', camera: 'GR III', tag: 'GR3-HDF-210',
+  id: 'gr3-hdf-2.10', model: 'GR3_HDF', standardModel: 'GR3', camera: 'GR III', tag: 'GR3-HDF-210',
   version: '2.10', internalVersion: '2.10.21.27', versionWord: 0x020a151b,
   filename: 'fwdc239b.bin', size: 30391780,
   sha256: 'd6a3c9c288d784080e7b283222ecdd8752adfeed6faa36dab44f73115354bfd4',

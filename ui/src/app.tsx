@@ -21,12 +21,13 @@ function Sidebar() {
   const model = useStore((s) => s.model);
   const lang = useStore((s) => s.lang);
   const menuPics = useStore((s) => !!s.info?.capabilities.menuPictures);
+  const info = useStore((s) => !!s.info);
   return (
     <aside className="sidebar">
       <nav>
         <button className={`nav ${page === 'ic' ? 'on' : ''}`} data-tour="nav-ic" onClick={() => setPage('ic')}>{Ico.aperture}<span>{t('navIC')}</span></button>
         <button className={`nav ${page === 'ratio' ? 'on' : ''}`} data-tour="nav-ratio" onClick={() => setPage('ratio')}>{Ico.ratio}<span>{t('navRatio')}</span></button>
-        {(!isGr3(model) || menuPics) && <button className={`nav ${page === 'wall' ? 'on' : ''}`} data-tour="nav-wall" onClick={() => setPage('wall')}>{Ico.image}<span>{t('navWall')}</span></button>}
+        {(!isGr3(model) || menuPics || !info) && <button className={`nav ${page === 'wall' ? 'on' : ''}`} data-tour="nav-wall" onClick={() => setPage('wall')}>{Ico.image}<span>{t('navWall')}</span></button>}
       </nav>
       <div className="grow" />
       <button className={`nav low ${page === 'copies' ? 'on' : ''}`} data-tour="nav-copies" onClick={() => setPage('copies')}>{Ico.archive}<span>{t('navCopies')}</span></button>
@@ -86,7 +87,7 @@ function OutputBar() {
       <span className="out-ico">{Ico.card}</span>
       <Hint label={t('cardReqTitle')}>
         <b>{t('cardReqTitle')}</b>
-        {s.info?.family === 'gr3x' && isIC ? <span>{t('gr3xCard', { f: s.info.filename })}</span> : <span>{t('cardReq1')}</span>}
+        <span>{t('cardReq1')}</span>
       </Hint>
       <Select<string>
         variant="box" label={t('card')} value={vol?.id} placeholder={t('noCard')} onChange={selectVolume}

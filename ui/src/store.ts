@@ -88,7 +88,7 @@ export interface State {
 
 const SLOT_IDS: readonly SlotId[] = GR3X_FILM_IDS;
 /** GR IIIx 1.60 and GR III 2.10: one program, one code path in GR Mod. */
-export const isGr3 = (m?: CameraModel): boolean => m === 'GR3X_HDF' || m === 'GR3_HDF';
+export const isGr3 = (m?: CameraModel): boolean => m === 'GR3X_HDF' || m === 'GR3_HDF' || m === 'GR3X' || m === 'GR3';
 /** The film count can be chosen (GR III / IIIx: 1..20, each film with Halation in the camera). */
 export const filmCountChoosable = (s: State = state): boolean => s.info?.family === 'gr3x' && (s.info.features.maxFilms ?? 9) > 9;
 /** The slots of the open firmware the page shows: on GR III / IIIx the first `filmCount`. */
@@ -98,7 +98,7 @@ const emptySlot = (): SlotState => ({ names: {}, icon: { mode: 'keep', text: '',
 const emptySlots = (): Record<SlotId, SlotState> => Object.fromEntries(SLOT_IDS.map(id => [id, emptySlot()])) as Record<SlotId, SlotState>;
 let state: State = {
   ready: false, page: 'ic', fwBusy: false, model: 'HDF', lang: 'zh-CN',
-  slots: emptySlots(), extras: [], lookOrder: [], lookHidden: [], lookOrder3: [], lookHidden3: [], wall: [], ratios: [], ratioBackdrop: 'photo', soft: false, dateStamp: false, monoUnlock: false, directFlash: false, filmCount: 9, previewMode: 'photo', photoRev: 0, activeSlot: 'CY', volumes: [], bridgeOpen: false,
+  slots: emptySlots(), extras: [], lookOrder: [], lookHidden: [], lookOrder3: [], lookHidden3: [], wall: [], ratios: [], ratioBackdrop: 'photo', soft: false, dateStamp: false, monoUnlock: false, directFlash: false, filmCount: 0, previewMode: 'photo', photoRev: 0, activeSlot: 'CY', volumes: [], bridgeOpen: false,
   copySource: 'card', parked: [], backups: [], copySel: [], copyInfo: {}, builds: [], showAll: false, toasts: [], onlineOpen: false, toursSeen: [],
 };
 const listeners = new Set<() => void>();
@@ -165,6 +165,27 @@ function fail(e: unknown): void {
 type Family = 'gr4' | 'gr3';
 const familyOf = (m: CameraModel): Family => (isGr3(m) ? 'gr3' : 'gr4');
 const GR3_PROJECT = 'project-gr3.json';
+/** The official file each camera takes (GR IV, GR III, GR IIIx: one file for all of each one's models),
+ * kept once downloaded or opened: switching to another camera opens its file again without a download. */
+type FwGroup = 'gr4' | 'gr3' | 'gr3x';
+const fwGroupOf = (m: CameraModel): FwGroup => (m === 'GR3' || m === 'GR3_HDF' ? 'gr3' : m === 'GR3X' || m === 'GR3X_HDF' ? 'gr3x' : 'gr4');
+const fwKey = (g: FwGroup): string => `firmware-${g}.bin`;
+/** Up to 0.8.x one file was kept for whichever camera was open. */
+const LEGACY_FW_KEY = 'firmware.bin';
+const LEGACY_FW_GROUP: Record<string, FwGroup> = { 'fwdc248b.bin': 'gr4', 'fwdc239b.bin': 'gr3', 'fwdc243b.bin': 'gr3x' };
+const LEGACY_FW_GROUP_NAME: Record<FwGroup, string> = { gr4: 'fwdc248b.bin', gr3: 'fwdc239b.bin', gr3x: 'fwdc243b.bin' };
+/** The kept file of a camera, or null. A file kept by 0.8.x moves to its camera's place first. */
+async function keptFirmware(g: FwGroup, legacyName?: string): Promise<Uint8Array | null> {
+  const own = await host.storeGet(fwKey(g)).catch(() => null);
+  if (own) return own;
+  const legacy = await host.storeGet(LEGACY_FW_KEY).catch(() => null);
+  if (!legacy) return null;
+  // Its camera: by the name it was opened with, else by its size (the two GR III files differ in size, GR IV's is larger).
+  const lg = (legacyName ? LEGACY_FW_GROUP[legacyName.toLowerCase()] : undefined) ?? (legacy.length === 30391780 ? 'gr3' : legacy.length === 30391788 ? 'gr3x' : 'gr4');
+  await host.storeSet(fwKey(lg), legacy).catch(() => undefined);
+  await host.storeDel(LEGACY_FW_KEY).catch(() => undefined);
+  return lg === g ? legacy : null;
+}
 const presetKey = (id: SlotKey, fam: Family = familyOf(state.model)): string => (fam === 'gr3' ? 'gr3-preset-' : 'preset-') + id.toLowerCase();
 type FamilyDoc = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
 /** Each family's saved work as last loaded or saved; the open family's is taken from the state when saved. */
@@ -217,7 +238,7 @@ function parseFamily(doc: FamilyDoc | null): Partial<State> {
     lookOrder3: gr3SavedKeys(doc?.lookOrder3), lookHidden3: gr3SavedKeys(doc?.lookHidden3).filter((k) => k !== 'g11'),
     soft: doc?.soft === true || (!!doc?.softFocus && typeof doc.softFocus === 'object' && Object.keys(doc.softFocus).length > 0),
     dateStamp: doc?.dateStamp === true, monoUnlock: doc?.monoUnlock === true, directFlash: doc?.directFlash === true,
-    filmCount: Number.isInteger(doc?.filmCount) && doc!.filmCount >= 0 && doc!.filmCount <= GR3X_FILM_IDS.length ? doc!.filmCount : 9,
+    filmCount: Number.isInteger(doc?.filmCount) && doc!.filmCount >= 0 && doc!.filmCount <= GR3X_FILM_IDS.length ? doc!.filmCount : 0,
   };
 }
 
@@ -320,7 +341,7 @@ export async function init(): Promise<void> {
     const raw = await host.storeGet('project.json');
     const doc = raw ? JSON.parse(new TextDecoder().decode(raw)) : null;
     if (doc && doc.v === 1) {
-      const model: CameraModel = ['GR3_HDF', 'GR3X_HDF', 'HDF', 'STANDARD', 'MONO'].includes(doc.model) ? doc.model : 'HDF';
+      const model: CameraModel = ['GR3', 'GR3_HDF', 'GR3X', 'GR3X_HDF', 'HDF', 'STANDARD', 'MONO'].includes(doc.model) ? doc.model : 'HDF';
       const gr3Raw = await host.storeGet(GR3_PROJECT).catch(() => null);
       const gr3Doc = gr3Raw ? JSON.parse(new TextDecoder().decode(gr3Raw)) : null;
       if (gr3Doc && gr3Doc.v === 1) { familyDocs.gr4 = doc; familyDocs.gr3 = gr3Doc; }
@@ -333,10 +354,13 @@ export async function init(): Promise<void> {
         previewMode: doc.previewMode === 'swatch' ? 'swatch' : 'photo', ratioBackdrop: doc.ratioBackdrop === 'gray' ? 'gray' : 'photo',
         // GR Mod 0.8 changed the power-off page: its tour (which now says where the pictures are chosen) shows once more
         toursSeen: TOUR_IDS.filter((id) => Array.isArray(doc.tours) && doc.tours.includes(id) && (id !== 'wall' || doc.toursV >= 2)) });
-      const fwRaw = await host.storeGet('firmware.bin');
-      // A family switch clears fwName. Do not reopen the previous family's cached file.
-      if (fwRaw && doc.fwName) await openFirmware(fwRaw, doc.fwName, false);
+      // The kept file of the camera that was open (a 0.8.x data folder: its one file moves to its camera's place).
+      const fwRaw = await keptFirmware(fwGroupOf(model), doc.fwName);
+      if (fwRaw) await openFirmware(fwRaw, LEGACY_FW_GROUP_NAME[fwGroupOf(model)], false);
       await loadFamilyFiles(work, fam, familyGen);
+    } else {
+      const fwRaw = await keptFirmware(fwGroupOf(state.model));
+      if (fwRaw) await openFirmware(fwRaw, LEGACY_FW_GROUP_NAME[fwGroupOf(state.model)], false);
     }
   } catch (e) { console.warn('restore failed', e); }
   set({ ready: true });
@@ -373,7 +397,7 @@ export function endTour(): void {
 
 // ------------------------------------------------------------------ settings
 export function setPage(page: Page): void {
-  if (page === 'wall' && isGr3(state.model) && !state.info?.capabilities.menuPictures) return; // power-off pictures: GR III / IIIx with the End Screen menu
+  if (page === 'wall' && isGr3(state.model) && state.info && !state.info.capabilities.menuPictures) return; // power-off pictures: GR III / IIIx with the End Screen menu
   set({ page }); scheduleSave(); if (page === 'copies') void refreshCopies();
 }
 export function setLang(lang: LangCode): void { set({ lang }); scheduleSave(); }
@@ -383,17 +407,25 @@ export function setModel(model: CameraModel): void {
   ++ratioGen;
   clearTimeout(ratioTimer);
   if (differentFamily) leaveFamily();
-  if (state.info && !state.info.models.includes(model)) {
+  const otherFile = !!state.info && !state.info.models.includes(model);
+  if (otherFile) {
     void engine.reset();
     set({ info: undefined, raw: undefined, fwName: undefined, bridgeOpen: false, bridgeAfter: undefined,
-      soft: false, dateStamp: false, monoUnlock: false,
       copyInfo: {}, copySel: [], ratios: state.ratios.map(({ preview, ...r }) => r) });
   }
-  set({ model, ...(isGr3(model) ? { page: 'ratio' as const, bridgeOpen: false, bridgeAfter: undefined } : {}) });
+  set({ model, ...(isGr3(model) ? { bridgeOpen: false, bridgeAfter: undefined } : {}) });
   // The other camera's work comes back (its pictures are encoded again once read).
   if (differentFamily) enterFamily(familyOf(model));
   else for (const w of state.wall) void encodeWall(w.id);
   scheduleSave();
+  // That camera's official file, when it was downloaded or opened before, opens again.
+  if (otherFile || !state.info) void reopenKept(model);
+}
+async function reopenKept(model: CameraModel): Promise<void> {
+  if (!host.available) return;
+  const raw = await keptFirmware(fwGroupOf(model));
+  if (!raw || state.model !== model || state.info) return;
+  await openFirmware(raw, LEGACY_FW_GROUP_NAME[fwGroupOf(model)], false);
 }
 
 // ------------------------------------------------------------------ firmware
@@ -409,15 +441,13 @@ async function openFirmware(raw: Uint8Array, name: string, persist: boolean): Pr
     const sameFamily = familyOf(state.model) === familyOf(model);
     if (!sameFamily) leaveFamily();
     set({ info, raw, model, fwName: info.filename, fwBusy: false, copyInfo: {}, copySel: [],
-      ...(info.family === 'gr3x' ? { page: sameFamily ? state.page : 'ratio' as const, bridgeOpen: false, bridgeAfter: undefined } : {}) });
+      ...(info.family === 'gr3x' ? { bridgeOpen: false, bridgeAfter: undefined } : {}) });
     // Opening the other camera's firmware brings back that camera's work.
     if (!sameFamily) enterFamily(familyOf(model));
-    if (info.family === 'gr3x') set((s) => ({ dateStamp: s.dateStamp && info.features.dateStamp, monoUnlock: s.monoUnlock && info.features.monoUnlock,
-      // Nothing saved for GR III / IIIx yet: the seven ratios tested first.
-      ...(s.ratios.length ? {} : { ratios: t4Ratios() }) }));
+    if (info.family === 'gr3x') set((s) => ({ dateStamp: s.dateStamp && info.features.dateStamp, monoUnlock: s.monoUnlock && info.features.monoUnlock }));
     if (info.family === 'gr3x') ratiosChanged(true);
     if (info.bridge && persist) toast(t('bridgeOpened'), 'info');
-    if (persist) { await host.storeSet('firmware.bin', raw); scheduleSave(); }
+    if (persist) { await host.storeSet(fwKey(fwGroupOf(model)), raw); scheduleSave(); }
     for (const id of info.capabilities.presets ? allSlotKeys() : []) {
       void renderIcon(id);
       const p = slotOf(id)?.preset;
@@ -931,14 +961,8 @@ const RATIO_PROBLEMS: Record<NonNullable<RatioPreview['problem']>, Key> = {
   'ratio-metering': 'ratioMetering', 'ratio-conflict': 'ratioConflict', 'ratio-duplicate': 'ratioDup',
 };
 const NAME_PROBLEMS: Record<string, Key> = { 'too-long': 'ratioNameLong', 'bad-char': 'ratioNameBad', empty: 'ratioNameBad' };
-const t4Ratios = (): RatioItem[] => GR3X_T4_CUSTOM.map((r, i) => ({ id: `gr3x-${i}`, ratio: r.ratio, name: r.name ?? r.ratio }));
 /** How many ratios the open firmware takes. */
 export const maxRatios = (s: State = state): number => (s.info?.family === 'gr3x' || (!s.info && isGr3(s.model)) ? GR3X_MAX_CUSTOM_RATIOS : MAX_CUSTOM_RATIOS);
-/** GR III / IIIx: back to the seven ratios of the tested T4 build. */
-export function resetGr3xRatios(): void {
-  set({ ratios: t4Ratios(), activeRatio: 'gr3x-0' });
-  ratiosChanged(true);
-}
 /** Why a row cannot be built (shown in the row), or null. A row without a ratio is simply not built. */
 export function ratioProblem(r: RatioItem): string | null {
   if (!r.ratio.trim()) return null;

@@ -112,6 +112,14 @@ func (f *firmwareSource) release(ctx context.Context, model string, now time.Tim
 	if fallback, err = f.client.Fallback(model, rel); err != nil {
 		return nil, nil, err
 	}
+	// GR III / IIIx: the release this program builds on is fetched by name; when the site
+	// lists a newer one, that is shown (not supported) with the pinned one as the fallback,
+	// as for GR IV. A failed look at the pages leaves the pinned release alone.
+	if rel != nil && ricoh.IsPinned(model) {
+		if cur, cerr := f.client.Current(ctx, model); cerr == nil && cur != nil && cur.Version != rel.Version {
+			rel, fallback = cur, rel
+		}
+	}
 	if rel == nil && fallback == nil {
 		return nil, nil, ricoh.ErrNoRelease
 	}

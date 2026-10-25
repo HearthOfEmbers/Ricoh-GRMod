@@ -7,8 +7,8 @@
 // goto/labels, exit and plain assignments.
 
 export type WallpaperModel = 'STANDARD' | 'HDF' | 'MONO' | 'GR3X_HDF';
-/** GR III HDF (2.10, experimental) has no power-off image script. */
-export type CameraModel = WallpaperModel | 'GR3_HDF';
+/** GR III / GR IIIx (standard and HDF; one firmware file each) have no power-off image script. */
+export type CameraModel = WallpaperModel | 'GR3_HDF' | 'GR3' | 'GR3X';
 
 export const MODEL_INFO: Record<WallpaperModel, { productBytes: [number, number, number, number]; target: string; resourceName: string }> = {
   STANDARD: { productBytes: [0xe0, 0x32, 0x01, 0x00], target: 'A:\\Resource\\Jpeg\\GoodBye.jpg', resourceName: 'GoodBye.jpg' },
@@ -59,7 +59,7 @@ export function imageFileName(i: number): string {
  * ASCII only, LF line endings, 4-space indentation, ends with a newline.
  */
 export function rotationScript(opts: { model: CameraModel; size: number; count: number }): string {
-  const info = opts.model === 'GR3_HDF' ? undefined : MODEL_INFO[opts.model];
+  const info = Object.prototype.hasOwnProperty.call(MODEL_INFO, opts.model) ? MODEL_INFO[opts.model as WallpaperModel] : undefined;
   if (!info) throw new RangeError(`unknown camera model "${String(opts.model)}"`);
   const { size, count } = opts;
   if (!Number.isInteger(count) || count < 1 || count > MAX_IMAGES) throw new RangeError(`count must be 1..${MAX_IMAGES}, got ${count}`);

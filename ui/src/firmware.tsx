@@ -10,7 +10,7 @@ import { t } from './i18n';
 import type { Key } from './i18n';
 import { adoptFirmware, askForOfficial, fmtSize, isGr3, loadFirmwareFile, outputBridge, setBridgeOpen, setModel, setOnlineOpen, toast, useStore } from './store';
 
-export const MODELS: readonly CameraModel[] = ['GR3_HDF', 'GR3X_HDF', 'HDF', 'STANDARD', 'MONO'];
+export const MODELS: readonly CameraModel[] = ['GR3', 'GR3_HDF', 'GR3X', 'GR3X_HDF', 'HDF', 'STANDARD', 'MONO'];
 export const modelLabel = (m: CameraModel): string => t(('model' + m) as Key);
 
 /** The sidebar's firmware row: a menu with the two ways to get a firmware file. */
@@ -87,7 +87,7 @@ function OnlineDialog() {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const latest = look.state === 'ready' ? look.rel : null;
-  const wanted = model === 'GR3_HDF' ? GR3_210.version : model === 'GR3X_HDF' ? GR3X_160.version : FIRMWARE_VERSION;
+  const wanted = model === 'GR3_HDF' || model === 'GR3' ? GR3_210.version : model === 'GR3X_HDF' || model === 'GR3X' ? GR3X_160.version : FIRMWARE_VERSION;
   // When Ricoh's page offers a newer release, the one this program builds on is still on the site (GR IV).
   const fallback = latest && latest.version !== wanted && latest.fallback?.version === wanted ? latest.fallback : null;
   const rel = fallback ?? latest;

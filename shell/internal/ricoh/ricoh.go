@@ -42,7 +42,9 @@ const (
 
 // Models maps the model keys of the interface to the names Ricoh uses.
 var Models = map[string]string{
+	"GR3":      "GR III",
 	"GR3_HDF":  "GR III HDF",
+	"GR3X":     "GR IIIx",
 	"GR3X_HDF": "GR IIIx HDF",
 	"STANDARD": "GR IV",
 	"HDF":      "GR IV HDF",
@@ -51,10 +53,10 @@ var Models = map[string]string{
 
 // baseModel is the row that covers several variants of the camera.
 func baseModelFor(model string) string {
-	if model == "GR3X_HDF" {
+	if model == "GR3X_HDF" || model == "GR3X" {
 		return "GR IIIx"
 	}
-	if model == "GR3_HDF" {
+	if model == "GR3_HDF" || model == "GR3" {
 		return "GR III"
 	}
 	return "GR IV"
@@ -71,6 +73,12 @@ var pinned = map[string]Release{
 	"GR3X_HDF": {Name: "GR IIIx", Applies: "RICOH GR IIIx / GR IIIx Urban Edition / GR IIIx HDF",
 		Version: "1.60", Date: "2025/10/23", File: "gr3x_v160.zip",
 		Page: "/english/support/digital/gr3x_s.html", URL: "/resources/japan/support/download/digital/FIRMWARE/gr3x_v160.zip"},
+}
+
+func init() {
+	// The standard cameras take the same archive as the HDF ones (Ricoh's archive applies to every edition).
+	pinned["GR3"] = pinned["GR3_HDF"]
+	pinned["GR3X"] = pinned["GR3X_HDF"]
 }
 
 // ErrNoRelease means the site lists no firmware for the model.
@@ -355,6 +363,30 @@ func (c *Client) Latest(ctx context.Context, model string) (*Release, error) {
 		rel.Size = c.size(ctx, base, fileURL)
 		return &rel, nil
 	}
+	return c.current(ctx, base, model, name)
+}
+
+// IsPinned reports whether a model's supported release is fetched by name (GR III / IIIx).
+func IsPinned(model string) bool {
+	_, ok := pinned[model]
+	return ok
+}
+
+// Current reads the release the site's pages list for a model now, also for a pinned model
+// (whose newer release is shown, as GR IV's, with a warning but never downloaded).
+func (c *Client) Current(ctx context.Context, model string) (*Release, error) {
+	name, ok := Models[model]
+	if !ok {
+		return nil, ErrUnknownModel
+	}
+	base, err := c.base()
+	if err != nil {
+		return nil, err
+	}
+	return c.current(ctx, base, model, name)
+}
+
+func (c *Client) current(ctx context.Context, base *url.URL, model, name string) (*Release, error) {
 	indexURL := base.ResolveReference(&url.URL{Path: indexPath})
 	index, err := c.page(ctx, base, indexURL)
 	if err != nil {

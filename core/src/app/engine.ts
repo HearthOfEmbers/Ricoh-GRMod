@@ -401,7 +401,8 @@ export class Engine {
         throw new FirmwareError('unexpected-layout', 'IIIx shutdown JPEG format changed');
       }
       const info: FirmwareInfo = {
-        family: 'gr3x', filename: profile.filename, models: [profile.model],
+        // The standard camera and the HDF one (and the other editions) take the same official file.
+        family: 'gr3x', filename: profile.filename, models: [profile.model, profile.standardModel],
         factoryRatios: [...profile.factoryRatios],
         // Power-off images and the factory-menu entry reached the camera through a start-up script.
         // GR Mod 0.8 dropped that route, and it was never tested on these cameras: not offered.
@@ -414,7 +415,7 @@ export class Engine {
           names: Object.fromEntries(LANGS.map(l => [l, { text: GR3X_FILM_NAMES[i], capacity: 24 }])) as SlotInfoView['names'],
         })), tiles: lookResources.tiles, contentArea: CONTENT_AREA,
         allowed: Object.fromEntries(LANGS.map(l => [l, gr3xAllowedChars(decoded, l)])) as Record<LangCode, string>,
-        shutdown: { [profile.model]: { size: resource.length, sampling: samplingOf(data), data } }, factoryEntry: readGr3xFactoryEntry(decoded, profile),
+        shutdown: Object.fromEntries([profile.model, profile.standardModel].map(m => [m, { size: resource.length, sampling: samplingOf(data), data }])), factoryEntry: readGr3xFactoryEntry(decoded, profile),
       };
       return new Engine(input.slice(), decoded, info, lookResources.matrix, null);
     }
@@ -915,10 +916,11 @@ export class Engine {
       // for round 7's files (camera-tested T7).
       const round7 = options.guard !== false && !options.monoUnlock && (this.info.features.maxFilms ?? 9) >= GR3X_MAX_FILMS && (!looks || looks.filmCount !== undefined);
       const round8 = round7 && options.gr3Round !== 7;
-      // Round 9 (the default): round 8 with the live view refreshed between films; `gr3Round: 8` builds round 8's files.
+      // Round 9: round 8 with the live view refreshed between films; `gr3Round: 8` builds round 8's files.
       const round9 = round8 && options.gr3Round !== 8;
-      // Round 10 (experimental, `gr3Round: 10`): GR IV's ways throughout (films as looks of their own, ...).
-      const round10 = round9 && options.gr3Round === 10;
+      // Round 10 (the default from 0.9.0, camera-tested): GR IV's ways throughout (films as looks of their
+      // own, ...); `gr3Round: 9` builds round 9's files.
+      const round10 = round9 && options.gr3Round !== 9;
       if (options.lookLayout && !round8) throw new FirmwareError('bad-look-layout', 'the Image Control order needs a round 8 build');
       const lookLayout = options.lookLayout && !isGr3xFactoryLayout(options.lookLayout, filmCount ?? 0) ? options.lookLayout : undefined;
       if (options.lookLayout) validateGr3xLookLayout(options.lookLayout, filmCount ?? 0);

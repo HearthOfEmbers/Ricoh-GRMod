@@ -17,7 +17,7 @@ type Side = 'right' | 'left' | 'top' | 'bottom';
 interface Step { target?: string | string[]; title: Key; body: Key; side?: Side }
 /** GR III / IIIx have their own text where the GR IV one would be wrong (key + 'G3'). */
 const bodyFor = (key: Key, gr3: boolean): Key => (gr3 && (`${key}G3` as Key) in GR3_BODIES ? (`${key}G3` as Key) : key);
-const GR3_BODIES: Record<string, true> = { tOvWelcomeBG3: true, tOvFirmwareBG3: true, tOvIcBG3: true, tOvRatioBG3: true, tIcSlotBG3: true, tIcExtraBG3: true, tIcNameBG3: true, tRatioFactoryBG3: true, tWallMenuBG3: true };
+const GR3_BODIES: Record<string, true> = { tOvFirmwareBG3: true, tOvIcBG3: true, tOvRatioBG3: true, tIcSlotBG3: true, tIcExtraBG3: true, tIcNameBG3: true, tRatioFactoryBG3: true, tWallMenuBG3: true };
 const step = (target: string | string[] | undefined, name: string, side?: Side): Step => ({ target, title: `t${name}T` as Key, body: `t${name}B` as Key, side });
 const names = (target: Step['target']): string[] => (target === undefined ? [] : Array.isArray(target) ? target : [target]);
 

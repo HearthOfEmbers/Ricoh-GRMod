@@ -11,7 +11,7 @@ import { onUiScale, uiScale } from './fit';
 import { applySlot } from './preview';
 import {
   addRatio, addWallFiles, askForOfficial, bridgeLoaded, loadFirmwareFile, loadIconImage, loadPresetFile, loadPreviewFile, moveWall, nameProblem, openCrop, outputFirmware, previewPhoto, removePreset, removeWall,
-  maxRatios, ratioName, ratioProblem, removeRatio, resetGr3xRatios, setActiveRatio, setActiveSlot, setCrop, setIcon, setName, setPreviewMode, setRatio, setRatioBackdrop, useStore, wallBitmap,
+  maxRatios, ratioName, ratioProblem, removeRatio, setActiveRatio, setActiveSlot, setCrop, setIcon, setName, setPreviewMode, setRatio, setRatioBackdrop, useStore, wallBitmap,
   setSoft,
   setDateStamp,
   setMonoUnlock,
@@ -145,7 +145,10 @@ function PreviewPane({ below, belowH = 0 }: { below?: ReactNode; belowH?: number
   const params = useStore((s) => slotOf(s.activeSlot, s)?.preset?.result?.params);
   const extras = useStore((s) => s.extras);
   const extraLabels = useStore((s) => s.extras.map((x) => extraName(x, s)).join('\u0000'));
-  const tabs = [{ value: 'CY', label: t('slotCY') }, { value: 'CG', label: t('slotCG') }, ...extras.map((x, i) => ({ value: x.key, label: extraLabels.split('\u0000')[i] }))];
+  const lang = useStore((s) => s.lang);
+  // GR III / IIIx: every slot is an added film (named as in the camera's menu, else its default name).
+  const tabs = gr3x ? slotOptions.map((x) => ({ value: x.id, label: slots[x.id].names[lang] || x.names[lang]?.text || x.defaultName }))
+    : [{ value: 'CY', label: t('slotCY') }, { value: 'CG', label: t('slotCG') }, ...extras.map((x, i) => ({ value: x.key, label: extraLabels.split('\u0000')[i] }))];
   const tabsRef = useRef<HTMLDivElement>(null);
   useEffect(() => { tabsRef.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }, [active]);
   // With many added slots in a narrow window the tabs do not all fit: arrows step through them.
@@ -166,9 +169,9 @@ function PreviewPane({ below, belowH = 0 }: { below?: ReactNode; belowH?: number
   return (
     <DropZone className="pane" accept={isImage} onFiles={(f) => { void loadPreviewFile(f[0]); }}>
       <div className="pane-head">
-        {gr3x ? <select data-tour="ic-tabs" aria-label={t('navIC')} value={active} onChange={e => setActiveSlot(e.target.value as SlotId)}>{slotOptions.map(s => <option key={s.id} value={s.id}>{slots[s.id].names.en || s.defaultName}</option>)}</select> : <>
+        {tabs.length > 0 && <>
         {overflow && <button className="btn ghost icon-only seg-arrow" title={t('prevSlot')} aria-label={t('prevSlot')} disabled={at === 0} onClick={() => step(-1)}>{Ico.left}</button>}
-        <div className="seg-scroll" ref={tabsRef} onWheel={wheel}><Segmented tour="ic-tabs" value={tabs.some((x) => x.value === active) ? active : 'CY'} onChange={setActiveSlot} options={tabs} /></div>
+        <div className="seg-scroll" ref={tabsRef} onWheel={wheel}><Segmented tour="ic-tabs" value={tabs.some((x) => x.value === active) ? active : tabs[0].value} onChange={setActiveSlot} options={tabs} /></div>
         {overflow && <button className="btn ghost icon-only seg-arrow" title={t('nextSlot')} aria-label={t('nextSlot')} disabled={at === tabs.length - 1} onClick={() => step(1)}>{Ico.right}</button>}
         </>}
         <span className="grow" />
@@ -642,7 +645,7 @@ function HalationProp({ k }: { k: SlotKey }) {
             {preview > 0 && !fixed && <Segmented value={colour} onChange={(v) => setHalation(k, { colour: v as 'red' | 'white' })} options={[{ value: 'red', label: t('haloRed') }, { value: 'white', label: t('haloWhite') }]} />}
           </div>
         )}
-        <span className="muted small halo-note">{t(cinema ? 'halationCinemaSub' : fixed ? 'gr3xHalationSub' : gr3x ? 'gr3xHalationRowsSub' : 'halationSub')}</span>
+        <span className="muted small halo-note">{t(cinema ? 'halationCinemaSub' : fixed ? 'gr3xHalationSub' : 'halationSub')}</span>
       </div>
     </Prop>
   );
@@ -691,7 +694,6 @@ function FeatureSwitches({ mono, boxRef, from }: { mono: boolean; boxRef?: (el: 
     <div className="card extras" data-tour="ic-soft" ref={(el) => { own.current = el; boxRef?.(el); }}>
       <FeatureRow icon={Ico.soft} title={t('navSoft')} sub={t(gr3x ? 'gr3xSoftSub' : 'softAdjSub')} on={soft} onChange={setSoft} />
       {(!gr3x || dateOk) && <FeatureRow icon={Ico.date} title={t('navDate')} sub={t('dateSub')} on={date} onChange={setDateStamp} />}
-      {gr3x && <p className="small muted">{t('gr3xFilmHint')}<br />{t('gr3xFixedLooks')}</p>}
       {!mono && !gr3x && <FeatureRow icon={Ico.mono} title={t(gr3x ? 'gr3xReplicaTitle' : 'navMono')} sub={t(gr3x ? 'gr3xReplicaSub' : 'monoSub')} on={looks} onChange={setMonoUnlock} />}
       {flashOk && <FeatureRow icon={Ico.flash} title={t('navFlash')} sub={t('flashSub')} on={flash} onChange={setDirectFlash} />}
     </div>
@@ -953,7 +955,6 @@ function RatioPane({ r }: { r?: RatioItem }) {
         </div>
         <div className={`chips ratio-out ${p?.sizes ? 'sizes' : ''}`}>
           {p?.sizes && p.sizes.map((s, i) => <span key={i} className="chip"><b>{labels[i]}</b>{size(s)}</span>)}
-          {p?.status === 'planning-only' && <span className="chip warn">{t('gr3xError')} {p.errorPercent?.toFixed(4)}%</span>}
           {p?.problem && p.problem !== 'ratio-portrait' && <span className="chip bad">{r ? ratioProblem(r) : ''}</span>}
           {p?.problem && r && (p.nearest || []).map((n) => <button key={n} className="btn small" onClick={() => setRatio(r.id, { ratio: n })}>{n}</button>)}
         </div>
@@ -978,12 +979,6 @@ export function RatioPage() {
         {info && <div className="head-right"><span className="chip">{`${ratios.filter(r => r.ratio.trim()).length}/${max}`}</span></div>}
       </header>
       {!info && <FirmwareHero />}
-      {info?.family === 'gr3x' && <div className="gr3x-notice" role="status">
-        <b>{t('gr3xPreview')}</b><p>{t('gr3xIntro')}</p><p>{t('gr3xOperation')}</p>
-        <button className="btn small" onClick={() => { void outputFirmware({ kind: 'folder' }, true); }}>{t('exportStock')}</button>
-        <button className="btn small" onClick={() => { void outputFirmware({ kind: 'card' }, true); }}>{t('writeStock')}</button>
-        <button className="btn small" onClick={() => resetGr3xRatios()}>{t('gr3xRatioReset')}</button>
-      </div>}
       {info && (
         <div className="ratio" data-tour-page="ratio">
           <div className="ratio-list">
@@ -991,6 +986,7 @@ export function RatioPage() {
               <span className="muted small">{t('ratioFactory')}</span>
               {(info.factoryRatios || FACTORY_RATIOS).map((f) => <span key={f} className="chip muted">{f}</span>)}
             </div>
+            {info.family === 'gr3x' && <p className="muted small">{t('gr3xRatioAdj')}</p>}
             {ratios.map((r, i) => <RatioRow key={r.id} r={r} active={r.id === active?.id} tour={i === 0 ? 'ratio-row' : undefined} />)}
             {!full && (
               <div className="ratio-add">
@@ -1093,7 +1089,6 @@ export function WallpaperPage() {
         )}
       </header>
       {!info && <FirmwareHero />}
-      {info?.family === 'gr3x' && <p className="muted small wall-hint">{t('gr3WallHint')}</p>}
       {info && (
         <div className="wall-fit" ref={ref} data-tour-page="wall">
           {fit.tile > 0 && (
