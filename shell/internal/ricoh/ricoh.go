@@ -372,6 +372,12 @@ func IsPinned(model string) bool {
 	return ok
 }
 
+// PinnedVersion is the version of a pinned model's release (the only one downloaded for it).
+func PinnedVersion(model string) (string, bool) {
+	p, ok := pinned[model]
+	return p.Version, ok
+}
+
 // Current reads the release the site's pages list for a model now, also for a pinned model
 // (whose newer release is shown, as GR IV's, with a warning but never downloaded).
 func (c *Client) Current(ctx context.Context, model string) (*Release, error) {

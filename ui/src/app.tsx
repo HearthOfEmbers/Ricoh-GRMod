@@ -130,6 +130,7 @@ export function App() {
   const page = useStore((s) => s.page);
   const gr3 = useStore((s) => isGr3(s.model));
   const menuPicsReady = useStore((s) => !!s.info?.capabilities.menuPictures);
+  const fwOpen = useStore((s) => !!s.info);
   const ready = useStore((s) => s.ready);
   if (!host.available) return <div className="nohost">{t('hostMissing')}</div>;
   return (
@@ -137,7 +138,7 @@ export function App() {
       <Sidebar />
       <main className="main">
         <BridgeBanner />
-        <div className="stage">{ready ? (page === 'ratio' ? <RatioPage /> : page === 'wall' && (!gr3 || menuPicsReady) ? <WallpaperPage /> : page === 'copies' ? <CopiesPage /> : <ImageControlPage />) : <div className="page"><span className="spinner" /></div>}</div>
+        <div className="stage">{ready ? (page === 'ratio' ? <RatioPage /> : page === 'wall' && (!gr3 || menuPicsReady || !fwOpen) ? <WallpaperPage /> : page === 'copies' ? <CopiesPage /> : <ImageControlPage />) : <div className="page"><span className="spinner" /></div>}</div>
         <OutputBar />
       </main>
       <CropEditor />

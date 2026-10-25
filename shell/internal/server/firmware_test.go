@@ -340,9 +340,31 @@ func TestFirmwareLatestPinnedNewer(t *testing.T) {
 			fmt.Fprint(w, `<table><tr><th>Applied product</th><td>RICOH GR III / RICOH GR III HDF</td></tr><tr><th>Release date</th><td>2026/10/21</td></tr></table>
 				<a href="/resources/FIRMWARE/gr3_v220.zip">Download</a>`)
 		})
-		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { w.Header().Set("Content-Length", "1000") })
+		var mu sync.Mutex
+		var got []string
+		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodGet {
+				mu.Lock()
+				got = append(got, r.URL.Path)
+				mu.Unlock()
+			}
+			w.Header().Set("Content-Length", "1000")
+		})
 		srv := httptest.NewServer(mux)
 		e := newEnv(t, func(o *Options) { o.FirmwareSite = srv.URL })
+		// Only the release this program builds on is downloaded, whatever the page asks for.
+		wantStatus(t, e.do("POST", "/api/firmware/download", map[string]string{"model": "GR3", "version": "2.20"}), 404, codeNotFound)
+		e.do("POST", "/api/firmware/download", map[string]string{"model": "GR3"})
+		mu.Lock()
+		for _, p := range got {
+			if strings.Contains(p, "v220") {
+				t.Errorf("listed=%v: the unsupported release was downloaded: %v", listed, got)
+			}
+		}
+		if len(got) == 0 || !strings.HasSuffix(got[len(got)-1], "gr3_v210.zip") {
+			t.Errorf("listed=%v: the pinned release was not downloaded: %v", listed, got)
+		}
+		mu.Unlock()
 		for _, model := range []string{"GR3", "GR3_HDF"} {
 			rec := e.do("GET", "/api/firmware/latest?model="+model, nil)
 			if rec.Code != 200 {

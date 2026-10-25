@@ -182,8 +182,8 @@ async function keptFirmware(g: FwGroup, legacyName?: string): Promise<Uint8Array
   if (!legacy) return null;
   // Its camera: by the name it was opened with, else by its size (the two GR III files differ in size, GR IV's is larger).
   const lg = (legacyName ? LEGACY_FW_GROUP[legacyName.toLowerCase()] : undefined) ?? (legacy.length === 30391780 ? 'gr3' : legacy.length === 30391788 ? 'gr3x' : 'gr4');
-  await host.storeSet(fwKey(lg), legacy).catch(() => undefined);
-  await host.storeDel(LEGACY_FW_KEY).catch(() => undefined);
+  // The old file is removed only once it is kept in its new place (else it is moved next time).
+  if (await host.storeSet(fwKey(lg), legacy).then(() => true, () => false)) await host.storeDel(LEGACY_FW_KEY).catch(() => undefined);
   return lg === g ? legacy : null;
 }
 const presetKey = (id: SlotKey, fam: Family = familyOf(state.model)): string => (fam === 'gr3' ? 'gr3-preset-' : 'preset-') + id.toLowerCase();
@@ -238,7 +238,7 @@ function parseFamily(doc: FamilyDoc | null): Partial<State> {
     lookOrder3: gr3SavedKeys(doc?.lookOrder3), lookHidden3: gr3SavedKeys(doc?.lookHidden3).filter((k) => k !== 'g11'),
     soft: doc?.soft === true || (!!doc?.softFocus && typeof doc.softFocus === 'object' && Object.keys(doc.softFocus).length > 0),
     dateStamp: doc?.dateStamp === true, monoUnlock: doc?.monoUnlock === true, directFlash: doc?.directFlash === true,
-    filmCount: Number.isInteger(doc?.filmCount) && doc!.filmCount >= 0 && doc!.filmCount <= GR3X_FILM_IDS.length ? doc!.filmCount : 0,
+    filmCount: Number.isInteger(doc?.filmCount) && doc!.filmCount >= 0 && doc!.filmCount <= GR3X_FILM_IDS.length ? doc!.filmCount : doc && doc.filmCount === undefined && doc.slots ? 9 : 0,
   };
 }
 
@@ -421,16 +421,24 @@ export function setModel(model: CameraModel): void {
   // That camera's official file, when it was downloaded or opened before, opens again.
   if (otherFile || !state.info) void reopenKept(model);
 }
-async function reopenKept(model: CameraModel): Promise<void> {
-  if (!host.available) return;
-  const raw = await keptFirmware(fwGroupOf(model));
-  if (!raw || state.model !== model || state.info) return;
-  await openFirmware(raw, LEGACY_FW_GROUP_NAME[fwGroupOf(model)], false);
+/** The kept file being opened again in the background: a file the user opens meanwhile waits for it. */
+let keptOpening: Promise<void> | null = null;
+function reopenKept(model: CameraModel): Promise<void> {
+  const p = (async () => {
+    if (!host.available) return;
+    const raw = await keptFirmware(fwGroupOf(model));
+    if (!raw || state.model !== model || state.info) return;
+    await openFirmware(raw, LEGACY_FW_GROUP_NAME[fwGroupOf(model)], false);
+  })().catch(() => undefined);
+  keptOpening = p;
+  void p.finally(() => { if (keptOpening === p) keptOpening = null; });
+  return p;
 }
 
 // ------------------------------------------------------------------ firmware
 /** Opens a firmware file; false (with a message shown) when it is not the supported official file. */
 async function openFirmware(raw: Uint8Array, name: string, persist: boolean): Promise<boolean> {
+  if (persist) while (keptOpening) await keptOpening;
   if (state.busy || state.fwBusy) return false;
   ++ratioGen;
   clearTimeout(ratioTimer);
@@ -1176,7 +1184,7 @@ const firmwareFilename = (): card.FirmwareFilename => {
 
 export async function outputFirmware(dest: Dest, stock = false): Promise<void> {
   if (!state.info?.models.includes(state.model)) return;
-  if (!stock && !state.info.capabilities.build) { toast(t('gr3xPending'), 'info'); return; }
+  if (!stock && !state.info.capabilities.build) { toast(t('fwCannotBuild'), 'info'); return; }
   if (state.busy || state.fwBusy || !state.info || !state.raw) return;
   if (bridgeLoaded()) { askForOfficial(); return; }
   const sourceInfo = state.info, sourceRaw = state.raw, sourceModel = state.model;

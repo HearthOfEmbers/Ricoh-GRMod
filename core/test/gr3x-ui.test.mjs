@@ -307,4 +307,44 @@ describe('GR IIIx UI family isolation', () => {
     expect(mocks.engine.open).toHaveBeenCalledOnce();
     expect(restarted.getState()).toMatchObject({ model: 'GR3X_HDF', fwName: 'fwdc243b.bin' });
   });
+  it('keeps 0.8.x\'s firmware.bin when it cannot be copied to its new place', async () => {
+    mocks.host.available = true;
+    const files = new Map([['project.json', new TextEncoder().encode(JSON.stringify({ v: 1, model: 'HDF' }))], ['firmware.bin', new Uint8Array(30391788)]]);
+    mocks.host.storeGet.mockImplementation(async key => files.get(key) ?? null);
+    mocks.host.storeSet.mockImplementation(async (key, value) => { if (key.startsWith('firmware-')) throw new Error('disk full'); files.set(key, value); });
+    mocks.host.storeDel = vi.fn(async key => { files.delete(key); });
+    await store.init();
+    store.setModel('GR3X_HDF');
+    await vi.advanceTimersByTimeAsync(1);
+    expect(mocks.host.storeDel).not.toHaveBeenCalled();
+    expect(files.get('firmware.bin')?.length).toBe(30391788);
+  });
+  it('brings back the nine films of GR III work saved before the film count was saved', async () => {
+    mocks.host.available = true;
+    const files = new Map([['project.json', new TextEncoder().encode(JSON.stringify({ v: 1, model: 'HDF' }))],
+      ['project-gr3.json', new TextEncoder().encode(JSON.stringify({ v: 1, model: 'GR3_HDF', slots: { CY: { names: { en: 'Old III' } } } }))]]);
+    mocks.host.storeGet.mockImplementation(async key => files.get(key) ?? null);
+    mocks.host.storeSet.mockImplementation(async (key, value) => { files.set(key, value); });
+    await store.init();
+    store.setModel('GR3_HDF');
+    await vi.advanceTimersByTimeAsync(401);
+    expect(store.getState()).toMatchObject({ model: 'GR3_HDF', filmCount: 9, slots: { CY: { names: { en: 'Old III' } } } });
+  });
+  it('opens a file the user drops while the kept one is still opening', async () => {
+    await store.init();
+    mocks.host.available = true;
+    const files = new Map([['firmware-gr3x.bin', new Uint8Array([7])]]);
+    mocks.host.storeGet.mockImplementation(async key => files.get(key) ?? null);
+    mocks.host.storeSet.mockImplementation(async (key, value) => { files.set(key, value); });
+    let finish;
+    mocks.engine.open.mockImplementationOnce(() => new Promise(r => { finish = () => r(info()); }));
+    store.setModel('GR3X_HDF');
+    await vi.advanceTimersByTimeAsync(1);
+    expect(mocks.engine.open).toHaveBeenCalledOnce();
+    const dropped = store.adoptFirmware('fwdc243b.bin', '1.60', new Uint8Array([8]));
+    finish();
+    expect(await dropped).toBe(true);
+    expect(mocks.engine.open).toHaveBeenCalledTimes(2);
+    expect(mocks.engine.open.mock.calls[1][0]).toEqual(new Uint8Array([8]));
+  });
 });

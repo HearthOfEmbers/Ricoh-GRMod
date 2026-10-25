@@ -242,6 +242,18 @@ func (s *Server) handleFirmwareDownload(w http.ResponseWriter, r *http.Request) 
 		return firmwareError(r, err)
 	}
 	rel := chosen(latest, fallback, req.Version)
+	// GR III / IIIx: only the release this program builds on is downloaded; the site's newer one
+	// is only shown, whichever version the page asks for.
+	if v, ok := ricoh.PinnedVersion(req.Model); ok {
+		switch {
+		case latest != nil && latest.Version == v:
+			rel = latest
+		case fallback != nil && fallback.Version == v:
+			rel = fallback
+		default:
+			return errNotFound("version %s is not offered for this model", v)
+		}
+	}
 	if req.Version != "" && rel.Version != req.Version {
 		return errNotFound("version %s is not offered for this model", req.Version)
 	}
