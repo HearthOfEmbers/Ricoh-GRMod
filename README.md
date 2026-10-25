@@ -3,7 +3,7 @@
 A small desktop tool for the Ricoh GR IV / GR IV HDF / GR IV Monochrome (firmware 1.11), the GR III /
 GR III HDF (firmware 2.10) and the GR IIIx / GR IIIx HDF (firmware 1.60). Not a Ricoh product.
 
-0.9.0: one program for GR IV and GR III / IIIx. GR IV gets Direct Flash (a fifth Flash Mode: fixed
+0.8.5: one program for GR IV and GR III / IIIx. GR IV gets Direct Flash (a fifth Flash Mode: fixed
 power, exposure from the focus distance and the guide number; GN, background, minimum shutter speed
 and exposure priority in the camera's Flash menu, `core/src/fw/aspect/directflash*.ts`,
 `tools/directflash`; camera-tested as test firmware 057). GR III / IIIx builds are round 10 by

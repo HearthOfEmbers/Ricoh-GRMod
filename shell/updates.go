@@ -27,11 +27,10 @@ var updateSources = []string{
 	"https://github.com/Maxwooow/Ricoh-GRMod/releases/latest/download/",
 }
 
-// updateBelow ends this line: GR Mod 0.9.x (GR IV and GR III / IIIx in one program) is for GR IV
-// camera firmware 1.11; 1.0 and later are for 1.20 (a camera updated to 1.20 cannot go back), so
-// they are never installed over this copy, only reported. (0.8.x copies end their line at 0.9:
-// they report 0.9.0 and do not install it.)
-const updateBelow = "1.0"
+// updateBelow ends this line: GR Mod 0.8.x is for GR IV camera firmware 1.11 (and, from 0.8.5,
+// GR III 2.10 / GR IIIx 1.60); 0.9 and later are for GR IV 1.20 (a camera updated to 1.20 cannot go
+// back), so they are never installed over this copy, only reported.
+const updateBelow = "0.9"
 
 // releaseNotesAPI lists the published releases with their text (what's new).
 const releaseNotesAPI = "https://api.github.com/repos/Maxwooow/Ricoh-GRMod/releases?per_page=30"

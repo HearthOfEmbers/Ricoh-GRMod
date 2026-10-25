@@ -918,7 +918,7 @@ export class Engine {
       const round8 = round7 && options.gr3Round !== 7;
       // Round 9: round 8 with the live view refreshed between films; `gr3Round: 8` builds round 8's files.
       const round9 = round8 && options.gr3Round !== 8;
-      // Round 10 (the default from 0.9.0, camera-tested): GR IV's ways throughout (films as looks of their
+      // Round 10 (the default from 0.8.5, camera-tested): GR IV's ways throughout (films as looks of their
       // own, ...); `gr3Round: 9` builds round 9's files.
       const round10 = round9 && options.gr3Round !== 9;
       if (options.lookLayout && !round8) throw new FirmwareError('bad-look-layout', 'the Image Control order needs a round 8 build');
