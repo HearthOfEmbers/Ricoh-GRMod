@@ -343,7 +343,64 @@ function installIcons(patch: Patch, iconbin: Uint8Array): Uint8Array {
 // --------------------------------------------------------------------------------------------
 // Shared with other camera-menu additions (`shutdown.ts`)
 
-export { FACTORY as CONTROLLER_FACTORY, D_RANGE_ID as SUBMENU_CONTROLLER_ID };
+export { FACTORY as CONTROLLER_FACTORY, D_RANGE_ID as SUBMENU_CONTROLLER_ID, HORIZON_ID as LIST_CONTROLLER_ID };
+export { SUB_SET_ICON, LIST_SET_ITEM, SUB_RECORD };
+
+/** Where the submenu table (SubMenuController records, 0x64 bytes) is now: the official one or its latest copy. */
+export function submenuTable(patch: Patch): number {
+  const at = SUB_SITES.map(([low, high, r]) => {
+    const a = patch.word(low), b = patch.word(high);
+    if (a !== movWord(r, movImmediate(a)) || b !== movWord(r, movImmediate(b), true)) fail('unexpected-layout', 'submenu table site is not a MOVW/MOVT pair');
+    return (movImmediate(a) | (movImmediate(b) << 16)) >>> 0;
+  });
+  if (at.some((t) => t !== at[0]) || (at[0] === SUB_TABLE) !== (patch.submenuRecords === 0)) fail('unexpected-layout', 'submenu table is not where it was expected');
+  return at[0];
+}
+
+/** A list record (SelectMenuController, 0x4C bytes) to start from: Horizon Correction's. */
+export function listTemplate(patch: Patch): Uint8Array {
+  const r = patch.read(SELECT_TABLE + HORIZON_RECORD * SELECT_RECORD, SELECT_RECORD);
+  const v = new DataView(r.buffer);
+  if (v.getUint32(0, true) !== 0x00010000 || v.getUint16(4, true) !== 388 || v.getUint32(0x0c, true) !== 0x531cf2f0 || v.getUint32(0x24, true) !== 0x531d319c || v.getUint32(0x2c, true) !== 0x531d4aec) {
+    fail('unexpected-layout', 'Horizon Correction list record is not as expected');
+  }
+  return r;
+}
+
+/**
+ * Add list records (SelectMenuController, 0x4C bytes each), record i shown for controller id
+ * `entries[i].id`: the list table is copied (once more) with the records at its end, the
+ * constructor's scan still ends after the 124 official records, and SetCurrentMenu maps each id
+ * to its record (before what was there: the official code, or an earlier addition's mapping). The
+ * controller factory must hand out the list controller for the ids (`hookControllerFactory`).
+ * Returns the record numbers.
+ */
+export function addListRecords(patch: Patch, entries: readonly { id: number; record: Uint8Array }[], what: string): number[] {
+  if (entries.some((x) => x.record.length !== SELECT_RECORD)) fail('internal', 'list record size');
+  const at = SELECT_SITES.map(([low, high, r]) => {
+    const a = patch.word(low), b = patch.word(high);
+    if (a !== movWord(r, movImmediate(a)) || b !== movWord(r, movImmediate(b), true)) fail('unexpected-layout', 'list table site is not a MOVW/MOVT pair');
+    return (movImmediate(a) | (movImmediate(b) << 16)) >>> 0;
+  });
+  const table = at[0];
+  if (at.some((t) => t !== table) || (table === SELECT_TABLE) !== (patch.listRecords === 0)) fail('unexpected-layout', 'list table is not where it was expected');
+  expectWord(patch, SELECT_TABLE_END_LOAD, 0xe59f704c); // ldr r7, [pc, #0x4c]
+  expectWord(patch, SELECT_TABLE_END_LITERAL, table + SELECT_RECORDS * SELECT_RECORD);
+  const copy = patch.listRecords || SELECT_RECORDS + 1;
+  if (copy + entries.length > 0xff) fail('internal', 'too many list records');
+  const moved = relocateTable(patch, table, SELECT_RECORD, copy, entries.map((x) => x.record), SELECT_SITES, `${what}: list records`);
+  patch.setWord(SELECT_TABLE_END_LITERAL, moved + SELECT_RECORDS * SELECT_RECORD, `${what}: end of the official list records`);
+  const first = patch.word(SELECT_SET_CURRENT);
+  const prior = first === 0xe28134fe
+    ? patch.append((a) => assembleWords(`add r3, r1, #0xfe000000; b #${SELECT_SET_CURRENT + 4}`, a), 16)
+    : first >>> 24 === 0xea ? branchTarget(SELECT_SET_CURRENT, first) : fail('unexpected-layout', 'list SetCurrentMenu is not as expected');
+  const cases = entries.map((x, k) => `movw ip, #${lo(x.id)}; movt ip, #${hi(x.id)}; cmp r1, ip
+     moveq r3, #${copy + k}; strbeq r3, [r0, #0x1a4]; bxeq lr`).join('\n');
+  const current = patch.append((a) => assembleWords(`${cases}\n b #${prior}`, a), 16);
+  patch.setWord(SELECT_SET_CURRENT, branchWord(SELECT_SET_CURRENT, current), `${what}: list records`);
+  patch.listRecords = copy + entries.length;
+  return entries.map((_, k) => copy + k);
+}
 
 /** A submenu record (0x64 bytes) to start from: Reset (Setup), two lines without values. */
 export function submenuTemplate(patch: Patch): Uint8Array {
@@ -611,6 +668,7 @@ export function installDateStampMenu(patch: Patch, iconbin: Uint8Array): Uint8Ar
   // The constructor's scan for the longest list stops at the end of the official records (the
   // new lists have 2 and 4 values, fewer than many official ones).
   patch.setWord(SELECT_TABLE_END_LITERAL, lists + SELECT_RECORDS * SELECT_RECORD, 'date imprint: end of the official list records');
+  patch.listRecords = ORIENT_RECORD_NUMBER + 1;
 
   const subRecord = subTemplate.slice();
   {

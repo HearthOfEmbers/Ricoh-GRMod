@@ -63,6 +63,11 @@ struct ctx {
    * (0..63) its name as glyphs: {count, glyph...} (u16), or 0. */
   const volatile u32 *frame_look;
   const u16 *const *names;
+#ifdef DFDIAG
+  /* Test builds only: the RAM word holding the Direct Flash planner's diagnostic buffer (see
+   * tools/directflash/directflash.c, DIAG), printed on the 720x480 picture. */
+  const volatile u32 *df_slot;
+#endif
 };
 
 /* The setting byte (see `datestamp.ts`): anything above 15 counts as off. */
@@ -585,6 +590,112 @@ static void diag(const struct ctx *k, void *cache, u32 *config) {
 }
 #endif
 
+
+#ifdef DFDIAG
+/* Direct Flash diagnostics (test builds only): the planner's two latest records, as labelled rows
+ * of numbers (APEX values with two decimals), top left of the 720x480 picture on a black box. */
+#define L_A 247u
+#define L_C 57u
+#define L_D 4623u
+#define L_E 249u
+#define L_F 241u
+#define L_I 4617u
+#define L_K 9328u
+#define L_L 56u
+#define L_M 1334u
+#define L_N 8502u
+#define L_O 63u
+#define L_R 8435u
+#define L_S 237u
+#define L_T 4609u
+#define L_V 3120u
+#define G_MINUS (G_LETTER | 0xc0u)
+#define DF_WORDS 32
+static u32 dec_digit(u32 *v, u32 pw, glyph *out, u32 n, u32 *started) {
+  u32 d = 0;
+  while (*v >= pw) { *v -= pw; d++; }
+  if (d || *started || pw == 1u) { out[n++] = (glyph)d; *started = 1; }
+  return n;
+}
+static u32 dec_u(u32 v, glyph *out) {
+  u32 n = 0, started = 0;
+  if (v > 9999999u) v = 9999999u;
+  n = dec_digit(&v, 1000000u, out, n, &started);
+  n = dec_digit(&v, 100000u, out, n, &started);
+  n = dec_digit(&v, 10000u, out, n, &started);
+  n = dec_digit(&v, 1000u, out, n, &started);
+  n = dec_digit(&v, 100u, out, n, &started);
+  n = dec_digit(&v, 10u, out, n, &started);
+  return dec_digit(&v, 1u, out, n, &started);
+}
+static u32 dec_s(s32 v, glyph *out) {
+  u32 n = 0;
+  if (v < 0) { out[n++] = G_MINUS; v = -v; }
+  return n + dec_u((u32)v, out + n);
+}
+/* v / 100 with two decimals. */
+static u32 dec_x100(s32 v, glyph *out) {
+  u32 n = 0, u, ip = 0;
+  if (v < 0) { out[n++] = G_MINUS; v = -v; }
+  u = (u32)v;
+  while (u >= 100u) { u -= 100u; ip++; }
+  n += dec_u(ip, out + n);
+  out[n++] = G_DOT;
+  out[n++] = 0;
+  while (u >= 10u) { u -= 10u; out[n - 1]++; }
+  out[n++] = (glyph)u;
+  return n;
+}
+/* `fields`: up to 6 field numbers, 5 bits each, the first in the low bits. */
+static void df_row(struct picture *p, s32 row, u32 l1, u32 l2, const s32 *r, u32 fields, u32 count, u32 x100mask) {
+  glyph line[MAXGLYPH];
+  u32 n = 0, i;
+  struct colour white = { 235, 128, 128 };
+  line[n++] = (glyph)(G_LETTER | l1);
+  if (l2) line[n++] = (glyph)(G_LETTER | l2);
+  for (i = 0; i < count && n < MAXGLYPH - 12; i++) {
+    line[n++] = G_SPACE; line[n++] = G_SPACE;
+    u32 f = (fields >> (5 * i)) & 31u;
+    n += (x100mask >> i) & 1 ? dec_x100(r[f], line + n) : dec_s(r[f], line + n);
+  }
+  text_at(p, line, n, 6, 6 + row * 22, 16, white, 1, O_NONE);
+}
+static void df_diag(const struct ctx *k, void *cache, u32 *config) {
+#define F5(a, b, c, d, e, f) ((u32)(a) | (u32)(b) << 5 | (u32)(c) << 10 | (u32)(d) << 15 | (u32)(e) << 20 | (u32)(f) << 25)
+  const u32 *buf;
+  u32 s, j, calls;
+  if (!k->df_slot) return;
+  buf = (const u32 *)*k->df_slot;
+  for (s = 0; s < 4; s++) {
+    struct picture *p = (struct picture *)config[(0x3c >> 2) + s];
+    s32 row = 0; /* rows 0..6: the last call; 8..14: the one before */
+    glyph line[MAXGLYPH];
+    struct colour white = { 235, 128, 128 };
+    if (!ram(p) || p->width != 720 || p->height < 400 || p->stride < p->width || !ram(p->y) || !ram(p->c)) continue;
+    sync(k, cache, p, 0, 360, 0);
+    if (!ram(buf)) {
+      line[0] = (glyph)(G_LETTER | L_D); line[1] = (glyph)(G_LETTER | L_F); line[2] = G_SPACE; line[3] = 0;
+      text_at(p, line, 4, 6, 6, 16, white, 1, O_NONE);
+      sync(k, cache, p, 0, 360, 1);
+      continue;
+    }
+    calls = buf[0];
+    for (j = 0; j < 2; j++) {
+      const s32 *r = (const s32 *)(buf + 1 + ((calls - j) & 1) * DF_WORDS);
+      df_row(p, row++, L_N, 0, r, F5(0, 1, 2, 3, 4, 0), 5, 0);       /* call reason program mode kind */
+      df_row(p, row++, L_M, 0, r, F5(5, 6, 7, 8, 0, 0), 4, 0);       /* ND-setting ISO-auto output distance(mm) */
+      df_row(p, row++, L_E, L_V, r, F5(9, 10, 11, 12, 13, 14), 6, 0x3f); /* Ev F70 F74 sync Tv-hi Tv-lo */
+      df_row(p, row++, L_O, L_F, r, F5(15, 16, 17, 0, 0, 0), 3, 0x7);  /* the camera's own Tv Av Sv */
+      df_row(p, row++, L_D, L_F, r, F5(18, 19, 20, 21, 22, 23), 6, 0x37); /* Tv Av Sv ND ambient-err flash-err */
+      df_row(p, row++, L_S, L_V, r, F5(24, 25, 28, 29, 30, 31), 6, 0x3f); /* Sv-lo Sv-hi F10 F14 Fa0 Fa4 */
+      df_row(p, row++, L_A, L_V, r, F5(26, 27, 0, 0, 0, 0), 2, 0x3);  /* Av-lo Av-hi */
+      row = 8;
+    }
+    sync(k, cache, p, 0, 360, 1);
+  }
+}
+#endif
+
 static u32 two_digits(u32 v, glyph *out) {
   u32 t = 0;
   while (v >= 100) v -= 100;
@@ -608,6 +719,9 @@ void datestamp(const struct ctx *k, u32 *config) {
   }
 #else
   setting = *k->setting;
+#endif
+#ifdef DFDIAG
+  if (ram(config)) df_diag(k, k->cache(), config);
 #endif
   if (setting > SETTING_MAX || !(setting & SETTING_ON) || !ram(config)) return;
 #ifdef DIAG

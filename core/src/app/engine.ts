@@ -43,6 +43,7 @@ import {
   sectionsOf,
   selfCheck,
   selfCheckGrown,
+  buildGrown,
   sha256Hex,
   tileTemplate,
   validateName,
@@ -52,7 +53,7 @@ import {
   SOFT_FOCUS_STRENGTHS,
   clarityChanges,
 } from '../fw';
-import type { BuildResult, BuiltRatio, ClarityChange, ClarityEdit, ExtraSlotSpec, LookLayout, ShutdownPictureSpec, SoftFocusLevel, SoftFocusStrength, FactoryEntry, LangCode, Layout, NameValidation, Range, RatioSpec, SlotEdit, SlotId as NativeSlotId } from '../fw';
+import type { BuildResult, BuiltRatio, ClarityChange, ClarityEdit, ExtensionFeatures, ExtraSlotSpec, LookLayout, ShutdownPictureSpec, SoftFocusLevel, SoftFocusStrength, FactoryEntry, LangCode, Layout, NameValidation, Range, RatioSpec, SlotEdit, SlotId as NativeSlotId } from '../fw';
 import { grownRanges, growPayload } from '../fw/aspect/package';
 import { BRIDGE_SHA256, BRIDGE_SIZE, isBridgeFirmware, makeBridgeFirmware, officialFromBridge } from '../fw/bridge';
 import { convertCube, convertXmp, quantizeSlot } from '../color';
@@ -111,6 +112,8 @@ export interface FirmwareInfo {
     /** The Image Control menu order and hidden looks (GR IV; GR III 2.10 from round 8). */
     lookLayout?: boolean };
   features: { softFocus: 'clarity' | 'adj'; dateStamp: boolean; monoUnlock: boolean;
+    /** Direct Flash, a fifth Flash Mode (GR IV; GR III / IIIx have the GF-2 mode of their own). */
+    directFlash?: boolean;
     /** GR III / IIIx: the most films a build can have (9; 20 on GR III 2.10, where
      * the number is chosen with BuildOptions.filmCount and Halation is set in the camera). */
     maxFilms?: number };
@@ -228,6 +231,8 @@ export interface FirmwareSummary {
   shutdownPictures?: ShutdownPictureSpec[];
   /** Image Control menu order and hidden looks (0.8.4), as recorded in the file. */
   lookLayout?: LookLayout;
+  /** True when the file adds Direct Flash, a fifth Flash Mode (0.8.4). */
+  directFlash?: boolean;
 }
 
 /** Additions besides the slots and the ratios. */
@@ -247,6 +252,8 @@ export interface BuildOptions {
   gr3Round?: 7 | 8 | 9 | 10;
   /** Power-off pictures (1 to 8) chosen in the camera's End Screen menu; see `encodeShutdownPicture`. */
   shutdownPictures?: ShutdownPictureSpec[];
+  /** Direct Flash, a fifth Flash Mode (0.8.4); its guide number is chosen in the camera. */
+  directFlash?: boolean;
   /**
    * The settings guard and what comes with it from 0.8.2 (see `aspect/guard.ts`); default true.
    * False only to build files as GR Mod 0.8.1 and earlier did (regression tests).
@@ -449,7 +456,7 @@ export class Engine {
       family: 'gr4', filename: 'fwdc248b.bin', models: ['STANDARD', 'HDF', 'MONO'],
       factoryRatios: ['3:2', '4:3', '16:9', '1:1'],
       capabilities: { build: true, presets: true, wallpaper: true, factoryEntry: true, bridge: !bridge, menuPictures: true, lookLayout: true },
-      features: { softFocus: 'adj', dateStamp: true, monoUnlock: true },
+      features: { softFocus: 'adj', dateStamp: true, monoUnlock: true, directFlash: true },
       version: FIRMWARE_VERSION,
       sha256: await sha256Hex(raw),
       slots,
@@ -461,6 +468,29 @@ export class Engine {
       bridge,
     };
     return new Engine(raw, decoded, info, mStd, layout);
+  }
+
+  /** Set by `extendVerified` while it inspects a file: the additions to build on top of it. */
+  private extendWith: Partial<ExtensionFeatures> | null = null;
+  private extendTest: aspect.TestOptions = {};
+  private extended: Uint8Array | null = null;
+
+  /**
+   * Development tool (tools/testfw/extend.ts), not used by the program: a verified file of this
+   * program rebuilt with more additions (e.g. Direct Flash on top of a test firmware), everything
+   * else the same, through the same self-check as any build. Throws when the file is not verified.
+   */
+  async extendVerified(raw: Uint8Array, add: Partial<ExtensionFeatures>, test: aspect.TestOptions = {}): Promise<Uint8Array> {
+    this.extendWith = add;
+    this.extendTest = test;
+    this.extended = null;
+    try {
+      const s = await this.inspect(raw);
+      if (!s.verified || !this.extended) throw new FirmwareError('selfcheck-failed', 'the file is not a verified file of this program');
+      return this.extended;
+    } finally {
+      this.extendWith = null;
+    }
   }
 
   /** The 1.12 bridge firmware, made from the official file this engine holds (see `fw/bridge.ts`). */
@@ -642,6 +672,7 @@ export class Engine {
       extraSlots: (features.extraSlots ?? []).map((x) => ({ name: x.name, icon: x.icon })),
       ...(features.shutdown ? { shutdownPictures: [...features.shutdown.pictures] } : {}),
       ...(features.lookLayout ? { lookLayout: features.lookLayout } : {}),
+      ...(features.directFlash ? { directFlash: true } : {}),
     });
     if (!specs) return modified(false, [], aligned);
     let ratios: BuiltRatio[] = [];
@@ -677,7 +708,18 @@ export class Engine {
       const ranges: Range[] = editable.map((r) => (r.offset >= ICONBIN_OFFSET ? { ...r, offset: r.offset + grown.rtosGrowth + (r.offset >= ICONBIN_OFFSET + ICONBIN_LENGTH ? grown.iconGrowth : 0) } : r));
       ranges.push(...grownRanges(grown, built));
       const checks = selfCheckGrown(this.raw, raw, ranges, grown.decoded);
-      return modified(Object.values(checks).every((v) => v === true), ratios, aligned);
+      const ok = Object.values(checks).every((v) => v === true);
+      if (ok && this.extendWith) {
+        const more = { ...features, ...this.extendWith };
+        const built2 = aspect.installExtensions(aligned.slice(RTOS_OFFSET, rtosEnd), aligned.slice(ICONBIN_OFFSET, iconEnd), plan, more, 3, this.extendTest);
+        const grown2 = growPayload(aligned, built2, specs);
+        const ranges2: Range[] = editable.map((r) => (r.offset >= ICONBIN_OFFSET ? { ...r, offset: r.offset + grown2.rtosGrowth + (r.offset >= ICONBIN_OFFSET + ICONBIN_LENGTH ? grown2.iconGrowth : 0) } : r));
+        ranges2.push(...grownRanges(grown2, built2));
+        const out = buildGrown(new Firmware(this.raw), grown2.decoded, grown2.insertions).out;
+        const checks2 = selfCheckGrown(this.raw, out, ranges2, grown2.decoded);
+        if (Object.values(checks2).every((v) => v === true)) this.extended = out;
+      }
+      return modified(ok, ratios, aligned);
     } catch {
       return modified(false, ratios, aligned);
     }
@@ -913,13 +955,15 @@ export class Engine {
     const extraSlots = options && options.extraSlots ? options.extraSlots : [];
     const pictures = options && options.shutdownPictures ? options.shutdownPictures : [];
     const lookLayout = options && options.lookLayout ? options.lookLayout : undefined;
+    const directFlash = !!(options && options.directFlash);
+    if (directFlash && clarity.length > 0) throw new FirmwareError('bad-clarity', 'Direct Flash cannot be combined with the clarity-table soft focus of 0.4.x');
     if (pictures.length > 0 && clarity.length > 0) throw new FirmwareError('bad-clarity', 'power-off pictures cannot be combined with the clarity-table soft focus of 0.4.x');
     if (adjSoftFocus && clarity.length > 0) throw new FirmwareError('bad-clarity', 'soft focus on the ADJ lever and on the clarity table cannot be combined');
     if (dateStamp && clarity.length > 0) throw new FirmwareError('bad-clarity', 'the date imprint cannot be combined with the clarity-table soft focus of 0.4.x');
     if (extraSlots.length > 0 && clarity.length > 0) throw new FirmwareError('bad-clarity', 'added slots cannot be combined with the clarity-table soft focus of 0.4.x');
-    if (edits.length === 0 && ratios.length === 0 && clarity.length === 0 && !adjSoftFocus && !dateStamp && !monoUnlock && extraSlots.length === 0 && pictures.length === 0 && !lookLayout) throw new FirmwareError('bad-edit', 'nothing to change');
+    if (edits.length === 0 && ratios.length === 0 && clarity.length === 0 && !adjSoftFocus && !dateStamp && !monoUnlock && extraSlots.length === 0 && pictures.length === 0 && !lookLayout && !directFlash) throw new FirmwareError('bad-edit', 'nothing to change');
     if (Object.keys(cinemaHalation).length > 0 && clarity.length > 0) throw new FirmwareError('bad-clarity', 'halation cannot be combined with the clarity-table soft focus of 0.4.x');
-    const features = { adjSoftFocus, guard: clarity.length === 0 && options.guard !== false, ...(Object.keys(cinemaHalation).length > 0 ? { cinemaHalation } : {}), ...(dateStamp ? { dateStamp } : {}), ...(monoUnlock ? { monoUnlock } : {}), ...(extraSlots.length > 0 ? { extraSlots } : {}), ...(pictures.length > 0 ? { shutdown: { pictures, factory: aspect.factoryShutdownJpegs(this.decoded) } } : {}), ...(lookLayout ? { lookLayout } : {}) };
+    const features = { adjSoftFocus, guard: clarity.length === 0 && options.guard !== false, ...(Object.keys(cinemaHalation).length > 0 ? { cinemaHalation } : {}), ...(dateStamp ? { dateStamp } : {}), ...(monoUnlock ? { monoUnlock } : {}), ...(extraSlots.length > 0 ? { extraSlots } : {}), ...(pictures.length > 0 ? { shutdown: { pictures, factory: aspect.factoryShutdownJpegs(this.decoded) } } : {}), ...(lookLayout ? { lookLayout } : {}), ...(directFlash ? { directFlash } : {}) };
     const test = {
       ...(options && options.dateStampFixed ? { dateStampFixed: options.dateStampFixed, dateStampDiag: !!options.dateStampDiag } : {}),
     };
