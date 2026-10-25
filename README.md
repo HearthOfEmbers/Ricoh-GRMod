@@ -1,7 +1,19 @@
 # GR Mod
 
-A small desktop tool for the Ricoh GR IV / GR IV HDF / GR IV Monochrome (firmware 1.11), the GR III
-HDF (firmware 2.10) and the GR IIIx HDF (firmware 1.60). Not a Ricoh product.
+A small desktop tool for the Ricoh GR IV / GR IV HDF / GR IV Monochrome (firmware 1.11), the GR III /
+GR III HDF (firmware 2.10) and the GR IIIx / GR IIIx HDF (firmware 1.60). Not a Ricoh product.
+
+0.9.0: one program for GR IV and GR III / IIIx. GR IV gets Direct Flash (a fifth Flash Mode: fixed
+power, exposure from the focus distance and the guide number; GN, background, minimum shutter speed
+and exposure priority in the camera's Flash menu, `core/src/fw/aspect/directflash*.ts`,
+`tools/directflash`; camera-tested as test firmware 057). GR III / IIIx builds are round 10 by
+default (GR IV's ways, below; camera-tested); `gr3Round: 9` rebuilds round 9's files. The standard
+GR III / GR IIIx are models of their own beside the HDF ones (the same official files: Ricoh's 2.10
+/ 1.60 archives apply to every edition). Each camera's official file is kept once downloaded or
+opened (`firmware-gr4.bin`, `firmware-gr3.bin`, `firmware-gr3x.bin` in the data folder; 0.8.x's
+single `firmware.bin` moves to its camera's place), so switching cameras opens it again without a
+download. GR III / IIIx pages and texts are GR IV's but for what the cameras do differently; no
+ratios or films are added until the user adds them.
 
 ## GR III and GR IIIx
 
